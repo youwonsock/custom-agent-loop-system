@@ -1,5 +1,3 @@
-import * as path from "node:path";
-import * as fs from "node:fs";
 import * as vscode from "vscode";
 import { PlanChoice, PlanReviewStatePayload, PlanReviewSessionInfo, LoopState, readExtensionConfig } from "./types";
 import { StateStore } from "./stateStore";
@@ -9,6 +7,7 @@ import { LoopWebviewPanel } from "./webviewPanel";
 export class PlanReviewViewProvider implements vscode.WebviewViewProvider {
   private view: vscode.WebviewView | undefined;
   private selectedSessionId: string | null = null;
+  private lastAutoOpenedDocumentKey: string | null = null;
 
   constructor(
     private readonly context: vscode.ExtensionContext,
@@ -76,13 +75,14 @@ export class PlanReviewViewProvider implements vscode.WebviewViewProvider {
         goal: m.goal,
         phase: st?.phase ?? null,
         awaitingPlanApproval: st?.awaitingPlanApproval ?? false,
+        interruptStageId: st?.pipeline?.interruptStageId ?? "INTERRUPT",
       });
     }
 
     const needsAttention = (sid: string): boolean => {
       const st = stateCache.get(sid);
       if (!st) return false;
-      return st.awaitingPlanApproval || st.phase === "INTERRUPT";
+      return st.awaitingPlanApproval || st.phase === (st.pipeline?.interruptStageId ?? "INTERRUPT");
     };
 
     const isValid = (sid: string | null): boolean =>
@@ -104,7 +104,9 @@ export class PlanReviewViewProvider implements vscode.WebviewViewProvider {
       if (attention) {
         this.selectedSessionId = attention.sessionId;
       } else if (!this.selectedSessionId) {
-        const paused = sessions.find((s) => s.status === "PAUSED");
+        const paused = sessions.find((s) =>
+          ["PAUSED", "WAITING_USER", "STOPPED", "BLOCKED"].includes(s.status)
+        );
         const running = sessions.find((s) => s.status === "RUNNING");
         this.selectedSessionId = paused?.sessionId ?? running?.sessionId ?? sessions[0].sessionId;
       }
@@ -133,18 +135,27 @@ export class PlanReviewViewProvider implements vscode.WebviewViewProvider {
       planApproved: state?.planApproved ?? false,
       choices,
       planMd,
-      isPaused: state?.status === "PAUSED",
+      isPaused: Boolean(
+        state && ["PAUSED", "WAITING_USER", "STOPPED", "BLOCKED"].includes(state.status)
+      ),
       phase: state?.phase ?? null,
       interruptBriefing: state?.interruptBriefing ?? null,
       planRevisionPending: state?.planRevisionPending ?? false,
+      interruptStageId: state?.pipeline?.interruptStageId ?? "INTERRUPT",
+      selectedPlanChoiceId: state?.selectedPlanChoiceId ?? null,
       sessions,
     };
 
     this.postMessage({ command: "stateUpdate", payload });
+    if (state?.awaitingPlanApproval && state.status === "WAITING_USER") {
+      await this.autoOpenPlanOverview(sessionId);
+    } else {
+      this.lastAutoOpenedDocumentKey = null;
+    }
   }
 
   private emptyPayload(sessions: PlanReviewSessionInfo[] = []): PlanReviewStatePayload {
-    return { sessionId: "", awaitingPlanApproval: false, planApproved: false, choices: null, planMd: null, isPaused: false, phase: null, interruptBriefing: null, planRevisionPending: false, sessions };
+    return { sessionId: "", awaitingPlanApproval: false, planApproved: false, choices: null, planMd: null, isPaused: false, phase: null, interruptBriefing: null, planRevisionPending: false, interruptStageId: "INTERRUPT", selectedPlanChoiceId: null, sessions };
   }
 
   private postMessage(msg: unknown): void {
@@ -153,6 +164,37 @@ export class PlanReviewViewProvider implements vscode.WebviewViewProvider {
         () => {},
         (err) => console.error("[PlanReviewView] postMessage failed:", err)
       );
+    }
+  }
+
+  private async openPlanDocument(
+    sessionId: string,
+    kind: "overview" | "selected",
+    preserveFocus = false
+  ): Promise<void> {
+    const documentPath =
+      kind === "overview"
+        ? await this.store.getPlanOverviewPath(sessionId)
+        : await this.store.getPlanMdPath(sessionId);
+    const documentUri = vscode.Uri.file(documentPath);
+    const document = await vscode.workspace.openTextDocument(documentUri);
+    await vscode.window.showTextDocument(document, {
+      viewColumn: vscode.ViewColumn.One,
+      preview: true,
+      preserveFocus,
+    });
+    await vscode.commands.executeCommand("markdown.showPreview", documentUri);
+  }
+
+  private async autoOpenPlanOverview(sessionId: string): Promise<void> {
+    try {
+      const overviewPath = await this.store.getPlanOverviewPath(sessionId);
+      const key = `${sessionId}:${overviewPath}`;
+      if (this.lastAutoOpenedDocumentKey === key) return;
+      await this.openPlanDocument(sessionId, "overview", true);
+      this.lastAutoOpenedDocumentKey = key;
+    } catch {
+      // The overview can be observed between state commit and file visibility.
     }
   }
 
@@ -171,22 +213,19 @@ export class PlanReviewViewProvider implements vscode.WebviewViewProvider {
         if (!sessionId) return;
         if (msg.choiceId === -1) {
           try {
-            const planPath = await this.store.getPlanMdPath(sessionId);
-            await fs.promises.unlink(planPath);
-          } catch { /* plan.md may not exist */ }
+            await this.store.clearPlanChoice(sessionId);
+            await this.openPlanDocument(sessionId, "overview");
+          } catch (err) {
+            const errMsg = err instanceof Error ? err.message : String(err);
+            vscode.window.showErrorMessage(`Failed to return to plan options: ${errMsg}`);
+          }
           await this.pushState();
           break;
         }
-        const choicesPath = await this.store.getPlanChoicesPath(sessionId);
         try {
-          const raw = await fs.promises.readFile(choicesPath, "utf8");
-          const choices: PlanChoice[] = JSON.parse(raw);
-          const choice = choices.find((c: PlanChoice) => c.id === msg.choiceId);
-          if (choice) {
-            const planPath = await this.store.getPlanMdPath(sessionId);
-            await fs.promises.writeFile(planPath, choice.body, "utf8");
-            vscode.window.showInformationMessage(`Plan option "${choice.title}" selected. Markdown plan written.`);
-          }
+          const selected = await this.store.selectPlanChoice(sessionId, msg.choiceId);
+          await this.openPlanDocument(sessionId, "selected");
+          vscode.window.showInformationMessage(`Plan option "${selected.choice.title}" selected.`);
         } catch (err) {
           const errMsg = err instanceof Error ? err.message : String(err);
           vscode.window.showErrorMessage(`Failed to select plan option: ${errMsg}`);
@@ -194,29 +233,52 @@ export class PlanReviewViewProvider implements vscode.WebviewViewProvider {
         await this.pushState();
         break;
       }
+      case "openPlanOverview": {
+        if (!msg.sessionId) return;
+        try {
+          await this.openPlanDocument(msg.sessionId, "overview");
+        } catch (err) {
+          const errMsg = err instanceof Error ? err.message : String(err);
+          vscode.window.showErrorMessage(`Failed to open plan options: ${errMsg}`);
+        }
+        break;
+      }
+      case "openSelectedPlan": {
+        if (!msg.sessionId) return;
+        try {
+          await this.openPlanDocument(msg.sessionId, "selected");
+        } catch (err) {
+          const errMsg = err instanceof Error ? err.message : String(err);
+          vscode.window.showErrorMessage(`Failed to open plan document: ${errMsg}`);
+        }
+        break;
+      }
       case "revisePlan": {
         const sessionId = msg.sessionId;
         if (!sessionId || !msg.message) return;
-        vscode.window.showInformationMessage(`Revising plan for ${sessionId}...`);
-        const result = await this.client.revisePlan(sessionId, msg.message);
-        if (result.exitCode === 0) {
-          vscode.window.showInformationMessage(`Plan revised for ${sessionId}.`);
-        } else {
-          vscode.window.showWarningMessage(`Plan revision completed with exit code ${result.exitCode}.`);
+        try {
+          vscode.window.showInformationMessage(`Revising plan for ${sessionId}...`);
+          const result = await this.client.revisePlan(sessionId, msg.message);
+          if (result.exitCode === 0) {
+            vscode.window.showInformationMessage(`Plan revised for ${sessionId}.`);
+            await this.openPlanDocument(sessionId, "selected", true).catch(() => {});
+          } else {
+            vscode.window.showWarningMessage(`Plan revision completed with exit code ${result.exitCode}.`);
+          }
+          await this.pushState();
+        } finally {
+          void this.view?.webview.postMessage({
+            command: "operationComplete",
+            operation: "revisePlan",
+          });
         }
-        await this.pushState();
         break;
       }
       case "approvePlan": {
         const sessionId = msg.sessionId;
         if (!sessionId) return;
-        const sessionDir = await this.store.getSessionDir(sessionId);
-        const statePath = path.join(sessionDir, "loop_state.json");
         try {
-          const raw = await fs.promises.readFile(statePath, "utf8");
-          const state: LoopState = JSON.parse(raw);
-          state.planApproved = true;
-          await fs.promises.writeFile(statePath, JSON.stringify(state, null, 2), "utf8");
+          await this.store.approvePlan(sessionId);
           vscode.window.showInformationMessage(`Plan approved for ${sessionId}. Resuming session...`);
           await this.client.resumeSession(sessionId);
           this.registerMainPanelListeners(sessionId);
@@ -239,13 +301,9 @@ export class PlanReviewViewProvider implements vscode.WebviewViewProvider {
       case "interruptSession": {
         const sessionId = msg.sessionId;
         if (!sessionId || !msg.message) return;
-        const sessionDir = await this.store.getSessionDir(sessionId);
-        const cfg = await this.store.getPathsConfig();
-        const interruptPath = path.join(sessionDir, cfg.sessionFileNames.interruptMessage);
         try {
-          await fs.promises.writeFile(interruptPath, msg.message, "utf8");
+          await this.client.interruptSession(sessionId, msg.message);
           vscode.window.showInformationMessage(`Message sent to ${sessionId}. Resuming...`);
-          await this.client.resumeSession(sessionId);
           this.registerMainPanelListeners(sessionId);
         } catch (err) {
           const errMsg = err instanceof Error ? err.message : String(err);
@@ -277,18 +335,29 @@ export class PlanReviewViewProvider implements vscode.WebviewViewProvider {
     }
     .choice-card:hover { background: var(--vscode-list-hoverBackground); }
     .choice-card.selected { border-color: var(--vscode-focusBorder); }
-    .choice-title { font-weight: 600; margin-bottom: 4px; }
-    .choice-preview { font-size: 11px; color: var(--vscode-descriptionForeground); max-height: 80px; overflow: hidden; }
-    .plan-preview {
+    .choice-card.selected { background: var(--vscode-list-activeSelectionBackground); color: var(--vscode-list-activeSelectionForeground); }
+    .choice-title { font-weight: 600; }
+    .choice-marker { float: right; color: var(--vscode-testing-iconPassed, #4caf50); }
+    .document-hint {
       border: 1px solid var(--vscode-panel-border);
       border-radius: 4px;
       padding: 8px;
       margin-bottom: 8px;
-      max-height: 300px;
-      overflow-y: auto;
-      white-space: pre-wrap;
       font-size: 11px;
+      color: var(--vscode-descriptionForeground);
+      line-height: 1.4;
+    }
+    .selected-plan {
+      border-left: 3px solid var(--vscode-focusBorder);
+      padding: 6px 8px;
+      margin-bottom: 8px;
       background: var(--vscode-editor-background);
+    }
+    .selected-plan-label {
+      display: block;
+      color: var(--vscode-descriptionForeground);
+      font-size: 10px;
+      margin-bottom: 2px;
     }
     .chat-area {
       border-top: 1px solid var(--vscode-panel-border);
@@ -378,7 +447,7 @@ export class PlanReviewViewProvider implements vscode.WebviewViewProvider {
   </div>
   <script nonce="${nonce}">
     const vscode = acquireVsCodeApi();
-    let state = ${JSON.stringify({ sessionId: null, awaitingPlanApproval: false, planApproved: false, choices: null, planMd: null, isPaused: false, phase: null, interruptBriefing: null, planRevisionPending: false, sessions: [] })};
+    let state = ${JSON.stringify({ sessionId: null, awaitingPlanApproval: false, planApproved: false, choices: null, planMd: null, isPaused: false, phase: null, interruptBriefing: null, planRevisionPending: false, interruptStageId: "INTERRUPT", selectedPlanChoiceId: null, sessions: [] })};
     let reviseBusy = false;
     let chatDraft = "";
     let interruptDraft = "";
@@ -401,7 +470,9 @@ export class PlanReviewViewProvider implements vscode.WebviewViewProvider {
         planHead: (s.planMd || "").slice(0, 200),
         interruptLen: (s.interruptBriefing || "").length,
         planRevisionPending: s.planRevisionPending,
+        selectedPlanChoiceId: s.selectedPlanChoiceId,
         choicesLen: (s.choices || []).length,
+        choiceTitles: (s.choices || []).map(function(x) { return [x.id, x.title]; }),
         sessions: (s.sessions || []).map(function(x) {
           return [x.sessionId, x.status, x.awaitingPlanApproval, x.phase];
         }),
@@ -470,7 +541,7 @@ export class PlanReviewViewProvider implements vscode.WebviewViewProvider {
           reviseBusy = false;
           requestRender();
         }
-      }, 120000);
+      }, 900000);
     }
 
     window.addEventListener("message", function(event) {
@@ -483,11 +554,11 @@ export class PlanReviewViewProvider implements vscode.WebviewViewProvider {
         }
         lastSessionId = payload.sessionId || null;
         var newSig = stateSignature(payload);
-        if (reviseBusy && newSig !== lastStateSig) {
-          reviseBusy = false;
-          clearReviseBusyTimer();
-        }
         state = payload;
+        requestRender();
+      } else if (msg.command === "operationComplete" && msg.operation === "revisePlan") {
+        reviseBusy = false;
+        clearReviseBusyTimer();
         requestRender();
       }
     });
@@ -500,9 +571,13 @@ export class PlanReviewViewProvider implements vscode.WebviewViewProvider {
     function sessionLabel(s) {
       const id = s.sessionId.length > 12 ? s.sessionId.slice(0, 12) + "…" : s.sessionId;
       let badge = "";
-      const attention = s.awaitingPlanApproval || s.phase === "INTERRUPT";
+      const attention = s.awaitingPlanApproval || s.phase === s.interruptStageId;
       if (attention) badge = '<span class="badge attention">!</span>';
       else if (s.status === "PAUSED") badge = '<span class="badge paused">II</span>';
+      else if (s.status === "WAITING_USER") badge = '<span class="badge attention">?</span>';
+      else if (s.status === "RECOVERING") badge = '<span class="badge running">R</span>';
+      else if (s.status === "STOPPED") badge = '<span class="badge paused">■</span>';
+      else if (s.status === "BLOCKED") badge = '<span class="badge attention">×</span>';
       else if (s.status === "RUNNING") badge = '<span class="badge running">▶</span>';
       const goal = s.goal ? s.goal.slice(0, 40) : "";
       return escapeHtml(id) + badge + " " + escapeHtml(goal);
@@ -530,7 +605,7 @@ export class PlanReviewViewProvider implements vscode.WebviewViewProvider {
 
       const hasChoices = state.choices && state.choices.length > 0;
       const hasPlan = state.planMd && state.planMd.trim().length > 0;
-      const isInterrupt = state.phase === "INTERRUPT" && state.interruptBriefing;
+      const isInterrupt = state.phase === state.interruptStageId && state.interruptBriefing;
 
       let content;
       if (isInterrupt) {
@@ -567,9 +642,14 @@ export class PlanReviewViewProvider implements vscode.WebviewViewProvider {
 
     function renderChoosing() {
       const choicesHtml = (state.choices || []).map(function(c) {
-        return '<div class="choice-card" data-choice-id="' + c.id + '"><div class="choice-title">' + escapeHtml(c.title) + '</div><div class="choice-preview">' + escapeHtml(c.body.slice(0, 200)) + '</div></div>';
+        const selected = c.id === state.selectedPlanChoiceId;
+        return '<div class="choice-card' + (selected ? ' selected' : '') + '" data-choice-id="' + c.id + '" role="button" tabindex="0">' +
+          '<div class="choice-title">Option ' + c.id + ': ' + escapeHtml(c.title) + (selected ? '<span class="choice-marker">\u2713</span>' : '') + '</div></div>';
       }).join("");
-      return '<h3>Plan Options</h3>' + choicesHtml;
+      return '<h3>Plan Options</h3>' +
+        '<div class="document-hint">The complete plans are open in the center editor. Choose an option here after comparing the documents.</div>' +
+        choicesHtml +
+        '<div class="btn-row"><button id="btn-open-overview">Open All Plans</button></div>';
     }
 
     function selectChoice(choiceId) {
@@ -581,7 +661,8 @@ export class PlanReviewViewProvider implements vscode.WebviewViewProvider {
         ? '<p class="plan-revised-badge">Plan revised \u2014 resume will re-implement from IMPLEMENTATION.</p>'
         : '';
       var planSection = (state.planMd && state.planMd.trim().length > 0)
-        ? '<h4>Current Plan</h4><div class="plan-preview">' + escapeHtml(state.planMd) + '</div>'
+        ? '<div class="document-hint">The current plan is available as a full Markdown document in the center editor.</div>' +
+          '<div class="btn-row"><button id="btn-open-plan">Open Plan Document</button></div>'
         : '';
       return '<h3>\u26a0 Interrupt \u2014 Action Required</h3>' +
         '<div class="interrupt-briefing">' + escapeHtml(state.interruptBriefing || "") + '</div>' +
@@ -663,8 +744,14 @@ export class PlanReviewViewProvider implements vscode.WebviewViewProvider {
     }
 
     function renderReviewing() {
+      const selected = (state.choices || []).find(function(c) { return c.id === state.selectedPlanChoiceId; });
+      const selectedTitle = selected
+        ? 'Option ' + selected.id + ': ' + escapeHtml(selected.title)
+        : 'Selected plan';
       return '<h3>Plan Review</h3>' +
-        '<div class="plan-preview">' + escapeHtml(state.planMd || "") + '</div>' +
+        '<div class="selected-plan"><span class="selected-plan-label">Selected plan</span><strong>' + selectedTitle + '</strong></div>' +
+        '<div class="document-hint">Review the complete Markdown plan in the center editor, then approve it or request a revision here.</div>' +
+        '<div class="btn-row"><button id="btn-open-plan">Open Plan Document</button></div>' +
         '<div class="chat-area"><textarea id="chat-input" placeholder="Request plan changes... (Ctrl+Enter to send)"></textarea>' +
         '<div class="btn-row">' +
           '<button id="btn-revise" ' + (reviseBusy ? 'disabled' : '') + '>' + (reviseBusy ? '<span class="spinner"></span> Revising...' : 'Revise Plan') + '</button>' +
@@ -675,7 +762,8 @@ export class PlanReviewViewProvider implements vscode.WebviewViewProvider {
 
     function renderPausedReview() {
       return '<h3>Session Paused \u2014 Plan Review</h3>' +
-        '<div class="plan-preview">' + escapeHtml(state.planMd || "") + '</div>' +
+        '<div class="document-hint">Review the complete Markdown plan in the center editor before resuming.</div>' +
+        '<div class="btn-row"><button id="btn-open-plan">Open Plan Document</button></div>' +
         '<div class="chat-area"><textarea id="chat-input" placeholder="Request plan changes... (Ctrl+Enter to send)"></textarea>' +
         '<div class="btn-row">' +
           '<button id="btn-revise" ' + (reviseBusy ? 'disabled' : '') + '>' + (reviseBusy ? '<span class="spinner"></span> Revising...' : 'Revise Plan') + '</button>' +
@@ -724,8 +812,26 @@ export class PlanReviewViewProvider implements vscode.WebviewViewProvider {
     }
 
     document.getElementById("root").addEventListener("click", function(e) {
+      const openOverview = e.target.closest("#btn-open-overview");
+      if (openOverview) {
+        vscode.postMessage({ command: "openPlanOverview", sessionId: state.sessionId });
+        return;
+      }
+      const openPlan = e.target.closest("#btn-open-plan");
+      if (openPlan) {
+        vscode.postMessage({ command: "openSelectedPlan", sessionId: state.sessionId });
+        return;
+      }
       const card = e.target.closest(".choice-card");
       if (card && card.dataset.choiceId) {
+        selectChoice(parseInt(card.dataset.choiceId, 10));
+      }
+    });
+
+    document.getElementById("root").addEventListener("keydown", function(e) {
+      const card = e.target.closest(".choice-card");
+      if (card && card.dataset.choiceId && (e.key === "Enter" || e.key === " ")) {
+        e.preventDefault();
         selectChoice(parseInt(card.dataset.choiceId, 10));
       }
     });

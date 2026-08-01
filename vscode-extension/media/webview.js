@@ -15,6 +15,7 @@
     variantDefaults: {},
     cliProfiles: {},
     variantMapping: {},
+    runtimeLeaseStatus: null,
   };
 
   let logBuffer = "";
@@ -49,6 +50,7 @@
   // Composer state persisted across re-renders so user input is not lost.
   let composerGoal = "";
   let composerTarget = "";
+  let composerAccessMode = "ask";
   let composerProfile = "opencode";
   let composerInitialized = false;
 
@@ -71,7 +73,26 @@
       ? "empty"
       : `${models.length}|${models[0]}|${models[models.length - 1]}|${state.registry?.modelsDiscoveredCli || ""}`;
     return JSON.stringify({
-      s: st ? [st.status, st.phase, st.loopCount, st.updatedAt, st.maxIterations] : null,
+      s: st ? [
+        st.status,
+        st.phase,
+        st.loopCount,
+        st.updatedAt,
+        st.maxIterations,
+        st.activeAttempt?.attemptId,
+        st.activeAttempt?.status,
+        st.activeAttempt?.activity,
+        st.activeAttempt?.mode,
+        st.activeAttempt?.completionRecoveryNumber,
+        st.activeAttempt?.lastProgressAt,
+        st.activeAttempt?.nextRetryAt,
+        st.lastFailure?.kind,
+        st.statusReason,
+        st.automaticRecovery?.cycle,
+        st.automaticRecovery?.resumeAt,
+        st.accessMode,
+        st.pendingAccessRequest?.requestId,
+      ] : null,
       sel: state.selectedSessionId,
       run: state.isRunning,
       metas: (state.registry?.sessionMetas || []).map((m) => [m.sessionId, m.status]),
@@ -85,6 +106,7 @@
       variantMapping: state.variantMapping,
       modelVariants: state.modelVariants,
       variantDefaults: state.variantDefaults,
+      runtimeLeaseStatus: state.runtimeLeaseStatus,
       cliProfiles: state.cliProfiles,
       modelSelections,
       variantSelections,
@@ -224,6 +246,10 @@
             <option value="opencode"${currentProfile === "opencode" ? " selected" : ""}>opencode</option>
             <option value="kilo"${currentProfile === "kilo" ? " selected" : ""}>kilo</option>
           </select>
+          <select id="composer-access-mode" class="composer-input composer-input-sm" title="Filesystem access mode">
+            <option value="ask"${composerAccessMode === "ask" ? " selected" : ""}>Ask when needed</option>
+            <option value="full_access"${composerAccessMode === "full_access" ? " selected" : ""}>Full access</option>
+          </select>
           <button class="btn" id="composer-start">Start Session</button>
           ${cancelBtn}
         </div>
@@ -299,12 +325,39 @@
 
     const modelGrid = buildModelGrid(st);
 
+    const activeAttempt = st?.activeAttempt;
+    const stageDefinition = st?.pipeline?.stages?.find((stage) => stage.id === st.phase);
+    const lastProgressAge = activeAttempt?.lastProgressAt
+      ? Math.max(0, Math.round((Date.now() - Date.parse(activeAttempt.lastProgressAt)) / 1000))
+      : null;
+    const attemptActivity = activeAttempt?.activity || (activeAttempt?.lastOutputAt ? "model_generation" : "initial_transport");
+    const activityTimeoutMs = attemptActivity === "tool_execution"
+      ? st?.resilience?.toolTimeoutMs
+      : attemptActivity === "model_generation"
+      ? st?.idleTimeoutMs
+      : st?.resilience?.transportTimeoutMs;
+    const attemptDisplay = activeAttempt?.mode === "completion_recovery"
+      ? `completion recovery ${activeAttempt.completionRecoveryNumber || 1} / ${st?.resilience?.maxCompletionRecoveryAttempts || 1}`
+      : `${activeAttempt?.attemptNumber || 0} / ${Math.min(activeAttempt?.maxAttempts || 0, st?.resilience?.maxAgentAttempts || activeAttempt?.maxAttempts || 0)}`;
     const statusRows = st
       ? `
         <div class="status-row"><span class="label">Session</span><span class="value">${escapeHtml(st.sessionId)}</span></div>
         <div class="status-row"><span class="label">Status</span>${statusBadge}</div>
+        ${st.statusReason ? `<div class="status-row"><span class="label">Reason</span><span class="value">${escapeHtml(st.statusReason)}</span></div>` : ""}
+        <div class="status-row"><span class="label">Lease</span><span class="value">${escapeHtml(state.runtimeLeaseStatus || "none")}</span></div>
         <div class="status-row"><span class="label">Phase</span><span class="value">${escapeHtml(st.phase)}</span></div>
-        <div class="status-row"><span class="label">Loop</span><span class="value">${st.loopCount} / ${st.maxIterations}</span></div>
+        <div class="status-row"><span class="label">Role</span><span class="value">${escapeHtml(stageDefinition?.role || "unknown")}</span></div>
+        <div class="status-row"><span class="label">Loop</span><span class="value">${st.loopCount} started · ${st.completedIterations ?? 0} completed / ${st.maxIterations}</span></div>
+        ${activeAttempt ? `
+        <div class="status-row"><span class="label">Attempt</span><span class="value">${escapeHtml(attemptDisplay)} · ${escapeHtml(activeAttempt.status)}</span></div>
+        <div class="status-row"><span class="label">Activity</span><span class="value">${escapeHtml(attemptActivity)}${activityTimeoutMs ? ` · ${Math.round(activityTimeoutMs / 1000)}s timeout` : ""}</span></div>
+        <div class="status-row"><span class="label">Reconnect</span><span class="value">${activeAttempt.reconnectUsed ? "used" : "not used"}</span></div>
+        <div class="status-row"><span class="label">Last progress</span><span class="value">${lastProgressAge === null ? "none" : lastProgressAge + "s ago"}</span></div>
+        ${activeAttempt.nextRetryAt ? `<div class="status-row"><span class="label">Retry at</span><span class="value">${escapeHtml(formatDate(activeAttempt.nextRetryAt))}</span></div>` : ""}
+        ` : ""}
+        ${st.lastFailure ? `<div class="status-row"><span class="label">Last failure</span><span class="value">${escapeHtml(st.lastFailure.kind)}</span></div>` : ""}
+        ${st.automaticRecovery ? `<div class="status-row"><span class="label">Auto recovery</span><span class="value">${st.automaticRecovery.cycle} / ${st.automaticRecovery.maxCycles} · ${escapeHtml(formatDate(st.automaticRecovery.resumeAt))}</span></div>` : ""}
+        ${st.interruptBriefing ? `<div class="error-queue"><div class="status-row" style="display:block"><span class="label">Local failure briefing</span></div><div class="error-queue-item">${escapeHtml(String(st.interruptBriefing).slice(0, 2000))}</div></div>` : ""}
         <div class="status-row"><span class="label">Goal</span><span class="value" style="text-align:right;max-width:60%;overflow:hidden;text-overflow:ellipsis">${escapeHtml(String(st.goal).slice(0, 80))}</span></div>
         <div class="status-row"><span class="label">Target</span><span class="value" style="text-align:right;max-width:60%;overflow:hidden;text-overflow:ellipsis">${escapeHtml(String(st.targetProjectPath).slice(0, 60))}</span></div>
         <div class="status-row"><span class="label">CLI</span><span class="value">${escapeHtml(st.cliProfile || "opencode")} / ${escapeHtml(st.cliBinary || "")}</span></div>
@@ -314,10 +367,39 @@
       `
       : `<div class="notes-empty">No session selected.</div>`;
 
+    const pendingAccess = st?.pendingAccessRequest;
+    const accessMode = st?.accessMode || "ask";
+    const heldForAccess = st && ["PAUSED", "WAITING_USER", "RECOVERING", "STOPPED", "BLOCKED"].includes(st.status);
+    const accessEditor = st
+      ? `<div class="access-editor ${pendingAccess ? "access-request" : ""}">
+          <div class="access-mode-row">
+            <span class="access-mode-label">Filesystem access</span>
+            <span class="badge ${accessMode === "full_access" ? "success" : ""}">${accessMode === "full_access" ? "FULL ACCESS" : "ASK WHEN NEEDED"}</span>
+          </div>
+          ${pendingAccess ? `
+            <div class="access-request-title">Access approval required</div>
+            <div class="access-hint">Implementation requested access to:</div>
+            <ul class="access-request-paths">${pendingAccess.requestedPaths.map((value) => `<li>${escapeHtml(value)}</li>`).join("")}</ul>
+            <div class="access-request-actions">
+              <button class="btn" id="btn-allow-requested">Allow &amp; Resume</button>
+              <button class="btn warn" id="btn-allow-full">Allow Full Access &amp; Resume</button>
+            </div>
+          ` : heldForAccess ? `
+            <div class="access-editor-footer">
+              <span class="access-hint">${accessMode === "full_access" ? "Agents can access any filesystem path." : "The loop will pause and ask before using paths outside the target."}</span>
+              <button class="btn secondary" id="btn-toggle-access">${accessMode === "full_access" ? "Use Ask Mode" : "Grant Full Access"}</button>
+            </div>
+          ` : `<div class="access-hint">Stop or hold the session to change this mode.</div>`}
+        </div>`
+      : "";
+
     let runningEntry = "";
     if (state.isRunning && !isStopping && state.state) {
       const currentPhase = state.state.phase;
-      const mapped = phaseToRole[currentPhase];
+      const configuredStage = state.state.pipeline?.stages?.find((stage) => stage.id === currentPhase);
+      const mapped = configuredStage
+        ? { role: configuredStage.role, label: configuredStage.name || configuredStage.role }
+        : phaseToRole[currentPhase];
       if (mapped) {
         runningEntry = `<li class="history-item running">
           <span><span class="phase">${escapeHtml(currentPhase)}</span> &middot; ${escapeHtml(mapped.label)} &middot; loop ${state.state.loopCount}</span>
@@ -344,11 +426,13 @@
       ? `<div class="log-content">${escapeHtml(logBuffer)}</div>`
       : '<div class="log-empty">(no log output yet)</div>';
 
+    const canResume = st && ["PAUSED", "WAITING_USER", "RECOVERING", "STOPPED", "BLOCKED"].includes(st.status) &&
+      !st.pendingAccessRequest && !(st.awaitingPlanApproval && !st.planApproved);
     root.innerHTML = `
       ${summaryBanner}
       <div class="toolbar">
         <select id="session-select">${sessionOptions}</select>
-        <button class="btn secondary" id="btn-resume" ${state.isRunning ? "disabled" : ""}>Resume</button>
+        <button class="btn secondary" id="btn-resume" ${canResume ? "" : "disabled"}>Resume</button>
         <button class="btn danger" id="btn-stop" ${(isStopping || !state.isRunning) ? "disabled" : ""}>${isStopping ? "Terminating..." : "Stop"}</button>
         <button class="btn danger" id="btn-delete" ${!state.selectedSessionId ? "disabled" : ""} title="Delete this session and all its data">Delete</button>
         <button class="btn secondary" id="btn-discover">Models</button>
@@ -359,6 +443,7 @@
         <div class="card status-card">
           <h3>Status</h3>
           ${statusRows}
+          ${accessEditor}
         </div>
         <div class="card model-card">
           <h3>Model Mapping (${(state.registry?.availableModels || []).length} models${state.registry?.modelsDiscoveredCli ? ` from <span class="model-source">${escapeHtml(state.registry.modelsDiscoveredCli)}</span>` : " — not yet discovered"})</h3>
@@ -393,6 +478,9 @@
     const btnDiscover = document.getElementById("btn-discover");
     const btnOpenNotes = document.getElementById("btn-open-notes");
     const btnOpenSummary = document.getElementById("btn-open-summary");
+    const btnAllowRequested = document.getElementById("btn-allow-requested");
+    const btnAllowFull = document.getElementById("btn-allow-full");
+    const btnToggleAccess = document.getElementById("btn-toggle-access");
 
     if (sessionSelect) sessionSelect.onchange = (e) => {
       vscode.postMessage({ command: "selectSession", sessionId: e.target.value });
@@ -417,6 +505,35 @@
     };
     if (btnOpenSummary) btnOpenSummary.onclick = () => {
       if (state.selectedSessionId) vscode.postMessage({ command: "openFinalSummary", sessionId: state.selectedSessionId });
+    };
+    if (btnAllowRequested) btnAllowRequested.onclick = () => {
+      if (!state.selectedSessionId) return;
+      btnAllowRequested.disabled = true;
+      if (btnAllowFull) btnAllowFull.disabled = true;
+      vscode.postMessage({
+        command: "resolveAccessRequest",
+        sessionId: state.selectedSessionId,
+        decision: "allow_requested",
+      });
+    };
+    if (btnAllowFull) btnAllowFull.onclick = () => {
+      if (!state.selectedSessionId) return;
+      btnAllowFull.disabled = true;
+      if (btnAllowRequested) btnAllowRequested.disabled = true;
+      vscode.postMessage({
+        command: "resolveAccessRequest",
+        sessionId: state.selectedSessionId,
+        decision: "full_access",
+      });
+    };
+    if (btnToggleAccess) btnToggleAccess.onclick = () => {
+      if (!state.selectedSessionId || !state.state) return;
+      btnToggleAccess.disabled = true;
+      vscode.postMessage({
+        command: "setAccessMode",
+        sessionId: state.selectedSessionId,
+        accessMode: state.state.accessMode === "full_access" ? "ask" : "full_access",
+      });
     };
     const btnOpenSession = document.getElementById("btn-open-session");
     if (btnOpenSession) btnOpenSession.onclick = () => {
@@ -477,6 +594,7 @@
   function bindComposer() {
     const goalEl = document.getElementById("composer-goal");
     const targetEl = document.getElementById("composer-target");
+    const accessModeEl = document.getElementById("composer-access-mode");
     const startBtn = document.getElementById("composer-start");
     const cancelBtn = document.getElementById("composer-cancel");
 
@@ -507,6 +625,10 @@
     if (targetEl) {
       targetEl.value = composerTarget;
       targetEl.oninput = (e) => { composerTarget = e.target.value; };
+    }
+    if (accessModeEl) {
+      accessModeEl.value = composerAccessMode;
+      accessModeEl.onchange = (e) => { composerAccessMode = e.target.value; };
     }
     const profileEl = document.getElementById("composer-profile");
     if (profileEl) {
@@ -542,6 +664,7 @@
       command: "newSession",
       goal: goal.trim(),
       targetProjectPath: (composerTarget || composerTargetDefault()).trim(),
+      accessMode: composerAccessMode === "full_access" ? "full_access" : "ask",
       cliProfile: composerProfile || "opencode",
       modelMapping: mapping,
       variantMapping: variantMapping,

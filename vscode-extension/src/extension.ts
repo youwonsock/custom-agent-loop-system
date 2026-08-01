@@ -1,15 +1,22 @@
 import * as vscode from "vscode";
+import * as path from "node:path";
+import * as fs from "node:fs/promises";
 import { readExtensionConfig, SessionMeta, ExtensionConfig } from "./types";
 import { StateStore, setGlobalContext } from "./stateStore";
 import { LoopClient } from "./loopClient";
 import { LoopWebviewPanel } from "./webviewPanel";
 import { PlanReviewViewProvider } from "./planReviewView";
+import { decideRecoveryAction } from "./resilience";
 
 let store: StateStore | undefined;
 let client: LoopClient | undefined;
 let config: ExtensionConfig;
 let globalContext: vscode.ExtensionContext | undefined;
 let planReviewView: PlanReviewViewProvider | undefined;
+let recoveryMonitorTimer: NodeJS.Timeout | null = null;
+let recoveryPassPromise: Promise<void> | null = null;
+let recoveryPassPending = false;
+let recoveryMonitorEnabled = false;
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   setGlobalContext(context);
@@ -43,6 +50,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   try {
     await store.ensureInitialized();
+    startRecoveryMonitor(store, client, config.heartbeatIntervalMs);
+    await scheduleRecoveryPass(store, client);
     const autoOpenedFlag = "agentLoop.panelAutoOpened";
     const alreadyOpened = context.globalState.get<boolean>(autoOpenedFlag, false);
     if (!alreadyOpened) {
@@ -154,7 +163,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         "Delete"
       );
       if (confirm !== "Delete") return;
-      if (client!.isRunning(sessionId)) {
+      const stateBeforeDelete = await store!.readState(sessionId);
+      if (stateBeforeDelete?.status === "RUNNING") {
         try {
           const panel = LoopWebviewPanel.getInstance(context, store!, client!, config);
           await panel.requestStopSession(sessionId);
@@ -175,6 +185,23 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
     vscode.commands.registerCommand("agentLoop.refresh", async () => {
       sessionExplorerProvider.refresh();
+    }),
+
+    vscode.commands.registerCommand("agentLoop.openPipelineConfig", async () => {
+      const liveConfig = readExtensionConfig();
+      const root = await store!.getRootDir();
+      const configPath = liveConfig.pipelineConfigPath
+        ? path.resolve(liveConfig.pipelineConfigPath)
+        : path.join(root, "agent_pipeline.json");
+      try {
+        await fs.access(configPath);
+        const document = await vscode.workspace.openTextDocument(vscode.Uri.file(configPath));
+        await vscode.window.showTextDocument(document, { preview: false });
+      } catch {
+        vscode.window.showErrorMessage(
+          `Agent Loop pipeline configuration not found: ${configPath}`
+        );
+      }
     })
   );
 
@@ -185,6 +212,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         config = freshConfig;
         if (store) { (store as any).config = freshConfig; }
         if (client) { (client as any).config = freshConfig; }
+        if (store && client) {
+          startRecoveryMonitor(store, client, freshConfig.heartbeatIntervalMs);
+        }
         try {
           globalContext?.globalState.update("agentLoop.detectedRoot", undefined).then(() => {}, () => {});
         } catch {
@@ -215,14 +245,99 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   context.subscriptions.push({
     dispose: () => {
       store?.stopPolling();
-      client?.dispose();
     },
   });
 }
 
-export function deactivate(): void {
+export async function deactivate(): Promise<void> {
+  stopRecoveryMonitor();
+  client?.setRecoveryWakeup(null);
+  await recoveryPassPromise?.catch(() => {});
+  if (client) {
+    await client.gracefullyStopAll();
+  }
   store?.stopPolling();
   client?.dispose();
+}
+
+async function recoverAbnormalSessions(
+  stateStore: StateStore,
+  loopClient: LoopClient
+): Promise<void> {
+  const registry = await stateStore.readRegistry();
+  for (const meta of registry.sessionMetas) {
+    try {
+      const state = await stateStore.readState(meta.sessionId);
+      if (!state || (state.status !== "RUNNING" && state.status !== "RECOVERING")) continue;
+      const runtime = await stateStore.inspectLease(meta.sessionId);
+      const action = decideRecoveryAction(
+        state.status,
+        state.stateVersion,
+        runtime.disposition,
+        loopClient.isRunning(meta.sessionId),
+        state.automaticRecovery?.resumeAt ?? null
+      );
+      if (action === "recover") {
+        loopClient.stopFollowingExternalSession(meta.sessionId);
+        await loopClient.resumeSession(meta.sessionId, true);
+      } else if (action === "pause_legacy") {
+        await stateStore.pauseLegacyRunningSession(meta.sessionId);
+      } else if (action === "follow") {
+        loopClient.followExternalSession(meta.sessionId);
+      }
+    } catch (err) {
+      console.error(`[agentLoop] Failed to evaluate recovery for ${meta.sessionId}:`, err);
+    }
+  }
+}
+
+function scheduleRecoveryPass(
+  stateStore: StateStore,
+  loopClient: LoopClient
+): Promise<void> {
+  recoveryPassPending = true;
+  if (!recoveryPassPromise) {
+    recoveryPassPromise = (async () => {
+      while (recoveryPassPending) {
+        recoveryPassPending = false;
+        await recoverAbnormalSessions(stateStore, loopClient);
+      }
+    })().finally(() => {
+      recoveryPassPromise = null;
+      if (recoveryMonitorEnabled && recoveryPassPending) {
+        void scheduleRecoveryPass(stateStore, loopClient).catch((err) => {
+          console.error("[agentLoop] Recovery monitor failed:", err);
+        });
+      }
+    });
+  }
+  return recoveryPassPromise;
+}
+
+function startRecoveryMonitor(
+  stateStore: StateStore,
+  loopClient: LoopClient,
+  heartbeatIntervalMs: number
+): void {
+  stopRecoveryMonitor();
+  recoveryMonitorEnabled = true;
+  const intervalMs = Math.max(1_000, Math.min(5_000, heartbeatIntervalMs));
+  const wakeup = () => {
+    void scheduleRecoveryPass(stateStore, loopClient).catch((err) => {
+      console.error("[agentLoop] Recovery monitor failed:", err);
+    });
+  };
+  loopClient.setRecoveryWakeup(wakeup);
+  recoveryMonitorTimer = setInterval(wakeup, intervalMs);
+}
+
+function stopRecoveryMonitor(): void {
+  recoveryMonitorEnabled = false;
+  recoveryPassPending = false;
+  if (recoveryMonitorTimer) {
+    clearInterval(recoveryMonitorTimer);
+    recoveryMonitorTimer = null;
+  }
 }
 
 class SessionExplorerProvider implements vscode.TreeDataProvider<SessionNode> {
@@ -253,8 +368,7 @@ class SessionExplorerProvider implements vscode.TreeDataProvider<SessionNode> {
     for (const m of registry.sessionMetas) {
       const displayStatus = await this.store.resolveSessionDisplayStatus(
         m.sessionId,
-        m.status,
-        this.client.isRunning(m.sessionId)
+        m.status
       );
       nodes.push(
         new SessionNode(
@@ -290,12 +404,20 @@ class SessionNode extends vscode.TreeItem {
     this.iconPath = new vscode.ThemeIcon(
       status === "RUNNING"
         ? "sync~spin"
+        : status === "RECOVERING"
+        ? "refresh"
         : status === "SUCCESS"
         ? "check-all"
         : status === "FAILED"
         ? "error"
         : status === "PAUSED"
         ? "debug-pause"
+        : status === "WAITING_USER"
+        ? "feedback"
+        : status === "STOPPED"
+        ? "debug-stop"
+        : status === "BLOCKED"
+        ? "lock"
         : "circle-outline"
     );
   }

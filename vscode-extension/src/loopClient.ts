@@ -1,14 +1,16 @@
-import { ChildProcess, spawn } from "node:child_process";
+import { ChildProcess, execFile, spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import * as vscode from "vscode";
-import { ExtensionConfig, ModelMapping, VariantMapping, readExtensionConfig } from "./types";
+import { AccessMode, ExtensionConfig, ModelMapping, VariantMapping, readExtensionConfig } from "./types";
 import { StateStore } from "./stateStore";
+import { processLiveness, shouldGracefullyStop } from "./resilience";
 
 export interface NewSessionOptions {
   goal: string;
   targetProjectPath: string;
+  accessMode: AccessMode;
   modelMapping: Partial<ModelMapping>;
   variantMapping?: Partial<VariantMapping>;
 }
@@ -25,8 +27,11 @@ function generateSessionId(): string {
 
 export class LoopClient {
   private activeProcesses: Map<string, ChildProcess> = new Map();
+  private externalTails: Map<string, NodeJS.Timeout> = new Map();
   private logListeners: Map<string, (entry: LogEntry) => void> = new Map();
   private exitListeners: Map<string, (code: number | null, signal: NodeJS.Signals | null) => void> = new Map();
+  private recoveryWakeup: (() => void) | null = null;
+  private activePlanRevisions = new Set<string>();
 
   constructor(
     private readonly config: ExtensionConfig,
@@ -68,8 +73,28 @@ export class LoopClient {
       seen.add(candidate);
       try {
         await fs.access(candidate);
+        const rootCandidate = path.dirname(path.dirname(candidate));
+        const distStat = await fs.stat(candidate);
+        const sourceNames = [
+          "loop_orchestrator.ts",
+          "process_supervisor.ts",
+          "resilience.ts",
+          "pipeline.ts",
+          "agent_attempt_runner.ts",
+        ];
+        for (const sourceName of sourceNames) {
+          const sourceStat = await fs.stat(path.join(rootCandidate, sourceName)).catch(() => null);
+          if (sourceStat && sourceStat.mtimeMs > distStat.mtimeMs + 1) {
+            throw new Error(
+              `Compiled orchestrator is older than ${sourceName}. Run "npm run build" in ${rootCandidate} before starting a session.`
+            );
+          }
+        }
         return candidate;
-      } catch {
+      } catch (err) {
+        if (err instanceof Error && err.message.includes("Compiled orchestrator is older")) {
+          throw err;
+        }
         // try next
       }
     }
@@ -137,7 +162,21 @@ export class LoopClient {
       "--max-iterations", String(cfg.maxIterations),
       "--phase-timeout", String(cfg.phaseTimeoutMs),
       "--idle-timeout", String(cfg.idleTimeoutMs),
+      "--tool-timeout", String(cfg.toolTimeoutMs),
+      "--transport-timeout", String(cfg.transportTimeoutMs),
+      "--phase-recovery-budget", String(cfg.phaseRecoveryBudgetMs),
+      "--max-agent-attempts", String(cfg.maxAgentAttempts),
+      "--completion-recovery-attempts", String(cfg.maxCompletionRecoveryAttempts),
+      "--automatic-recovery-cycles", String(cfg.maxAutomaticRecoveryCycles),
+      "--automatic-recovery-backoff", cfg.automaticRecoveryBackoffMs.join(","),
+      "--retry-backoff", cfg.retryBackoffMs.join(","),
+      "--termination-grace", String(cfg.terminationGraceMs),
+      "--kill-timeout", String(cfg.killTimeoutMs),
+      "--heartbeat-interval", String(cfg.heartbeatIntervalMs),
+      "--lease-ttl", String(cfg.leaseTtlMs),
+      "--max-output-bytes", String(cfg.maxInMemoryOutputBytes),
     ];
+    if (opts.accessMode === "full_access") args.push("--full-access");
 
     if (opts.modelMapping.planner) args.push("--planner-model", opts.modelMapping.planner);
     if (opts.modelMapping.implementer) args.push("--implementer-model", opts.modelMapping.implementer);
@@ -152,14 +191,25 @@ export class LoopClient {
     if (opts.variantMapping?.qa_lead) args.push("--qa-variant", opts.variantMapping.qa_lead);
     if (opts.variantMapping?.master) args.push("--master-variant", opts.variantMapping.master);
     if (opts.variantMapping?.interrupter) args.push("--interrupter-variant", opts.variantMapping.interrupter);
+    if (cfg.pipelineConfigPath) args.push("--pipeline", cfg.pipelineConfigPath);
 
     this.spawnSession(args, root, sessionId);
     void this.store.syncRegistrySessionStatus(sessionId, "RUNNING");
     return sessionId;
   }
 
-  async resumeSession(sessionId: string): Promise<string> {
-    if (this.isRunning(sessionId)) {
+  async resumeSession(
+    sessionId: string,
+    recovery = false,
+    accessDecision?: "allow_requested" | "full_access"
+  ): Promise<string> {
+    const runtime = await this.store.inspectLease(sessionId);
+    if (
+      this.isRunning(sessionId) ||
+      runtime.disposition === "active" ||
+      runtime.disposition === "expired_owner_alive" ||
+      runtime.disposition === "unverifiable"
+    ) {
       throw new Error(`Session ${sessionId} is already running.`);
     }
     const root = await this.store.getRootDir();
@@ -171,10 +221,44 @@ export class LoopClient {
       "--session", sessionId,
       "--root", root,
     ];
+    if (recovery) args.push("--recovery");
+    if (!recovery) {
+      const cfg = this.liveConfig();
+      args.push(
+        "--max-iterations", String(cfg.maxIterations),
+        "--phase-timeout", String(cfg.phaseTimeoutMs),
+        "--idle-timeout", String(cfg.idleTimeoutMs),
+        "--tool-timeout", String(cfg.toolTimeoutMs),
+        "--transport-timeout", String(cfg.transportTimeoutMs),
+        "--phase-recovery-budget", String(cfg.phaseRecoveryBudgetMs),
+        "--max-agent-attempts", String(cfg.maxAgentAttempts),
+        "--completion-recovery-attempts", String(cfg.maxCompletionRecoveryAttempts),
+        "--automatic-recovery-cycles", String(cfg.maxAutomaticRecoveryCycles),
+        "--automatic-recovery-backoff", cfg.automaticRecoveryBackoffMs.join(","),
+        "--retry-backoff", cfg.retryBackoffMs.join(","),
+        "--termination-grace", String(cfg.terminationGraceMs),
+        "--kill-timeout", String(cfg.killTimeoutMs),
+        "--heartbeat-interval", String(cfg.heartbeatIntervalMs),
+        "--lease-ttl", String(cfg.leaseTtlMs),
+        "--max-output-bytes", String(cfg.maxInMemoryOutputBytes)
+      );
+    }
+    if (accessDecision === "allow_requested") args.push("--approve-access");
+    if (accessDecision === "full_access") args.push("--full-access");
 
     this.spawnSession(args, root, sessionId);
     void this.store.syncRegistrySessionStatus(sessionId, "RUNNING");
     return sessionId;
+  }
+
+  async interruptSession(sessionId: string, message: string): Promise<void> {
+    await this.store.enqueueControlRequest(sessionId, "INTERRUPT", message);
+    const state = await this.store.readState(sessionId);
+    const runtime = await this.store.inspectLease(sessionId);
+    if (state?.status === "RUNNING" && runtime.disposition !== "recoverable") {
+      return;
+    }
+    await this.resumeSession(sessionId, runtime.disposition === "recoverable");
   }
 
   private spawnSession(args: string[], cwd: string, sessionId: string): string {
@@ -211,48 +295,142 @@ export class LoopClient {
         stream: "stderr",
         text: `\n[process exited] code=${code ?? "null"} signal=${signal ?? "null"}\n`,
       });
+      this.recoveryWakeup?.();
     });
 
     return sessionId;
   }
 
-  stopSession(sessionId: string): void {
+  async stopSession(sessionId: string): Promise<boolean> {
+    const request = await this.store.enqueueControlRequest(sessionId, "STOP");
+    const acknowledged = await this.store.waitForControlCompletion(sessionId, request.requestId, 8_000);
+    if (acknowledged) return true;
+
     const child = this.activeProcesses.get(sessionId);
-    if (!child) return;
-    let exited = false;
-    const onExit = () => {
-      exited = true;
-      this.activeProcesses.delete(sessionId);
-    };
-    child.on("exit", onExit);
-    try { child.kill("SIGTERM"); } catch { /* already dead */ }
-    const killTimer = setTimeout(() => {
-      if (!exited && child.exitCode === null && child.signalCode === null) {
-        try { child.kill("SIGKILL"); } catch { /* already dead */ }
-      }
-    }, 5000);
-    child.on("exit", () => clearTimeout(killTimer));
+    const runtime = await this.store.inspectLease(sessionId);
+    const ownerPid = child?.pid ?? runtime.lease?.ownerPid ?? null;
+    if (ownerPid && processLiveness(ownerPid) !== "dead") {
+      await this.forceTerminateProcessTree(ownerPid, this.liveConfig().killTimeoutMs);
+    }
+    if (!ownerPid || processLiveness(ownerPid) === "dead") {
+      await this.store.markSessionStopped(
+        sessionId,
+        "The core process did not acknowledge STOP within 8 seconds and was terminated."
+      );
+      await this.store.completeQueuedControlRequest(
+        sessionId,
+        request,
+        "completed",
+        "Session stopped by the extension after the core did not acknowledge STOP."
+      );
+    }
+    return false;
   }
 
-  stopAll(): void {
-    for (const [sid, child] of this.activeProcesses) {
-      if (!child.killed) {
-        child.kill("SIGTERM");
-      }
-      this.activeProcesses.delete(sid);
+  async gracefullyStopAll(): Promise<void> {
+    const registry = await this.store.readRegistry().catch(() => null);
+    const sessionIds = new Set<string>(this.activeProcesses.keys());
+    for (const meta of registry?.sessionMetas ?? []) {
+      const state = await this.store.readState(meta.sessionId).catch(() => null);
+      if (state && shouldGracefullyStop(state.status)) sessionIds.add(meta.sessionId);
+    }
+    await Promise.allSettled(Array.from(sessionIds, (sessionId) => this.stopSession(sessionId)));
+  }
+
+  /** @deprecated Use gracefullyStopAll. */
+  async gracefullyPauseAll(): Promise<void> {
+    await this.gracefullyStopAll();
+  }
+
+  private async forceTerminateProcessTree(pid: number, timeoutMs: number): Promise<void> {
+    if (process.platform === "win32") {
+      await new Promise<void>((resolve) => {
+        const child = execFile(
+          "taskkill",
+          ["/T", "/F", "/PID", String(pid)],
+          { timeout: timeoutMs, windowsHide: true },
+          () => resolve()
+        );
+        child.on("error", () => resolve());
+      });
+      return;
+    }
+    try { process.kill(pid, "SIGTERM"); } catch { return; }
+    await new Promise((resolve) => setTimeout(resolve, Math.min(1000, timeoutMs)));
+    if (processLiveness(pid) === "alive") {
+      try { process.kill(pid, "SIGKILL"); } catch { /* already exited */ }
     }
   }
 
   isRunning(sessionId: string): boolean {
     const child = this.activeProcesses.get(sessionId);
-    return !!child && !child.killed;
+    return !!child && child.exitCode === null && child.signalCode === null;
   }
 
   getActiveSessionIds(): string[] {
     return Array.from(this.activeProcesses.keys());
   }
 
+  setRecoveryWakeup(listener: (() => void) | null): void {
+    this.recoveryWakeup = listener;
+  }
+
+  followExternalSession(sessionId: string): void {
+    if (this.externalTails.has(sessionId)) return;
+    let currentPath: string | null = null;
+    let offset = 0;
+    let reading = false;
+    const timer = setInterval(() => {
+      if (reading) return;
+      reading = true;
+      void (async () => {
+        const state = await this.store.readState(sessionId);
+        if (!state || state.status !== "RUNNING") {
+          this.stopFollowingExternalSession(sessionId);
+          return;
+        }
+        const logPath = state.activeAttempt?.outputLogPath ?? null;
+        if (!logPath) return;
+        if (!this.logListeners.has(sessionId)) return;
+        if (currentPath !== logPath) {
+          currentPath = logPath;
+          offset = 0;
+        }
+        const stat = await fs.stat(logPath).catch(() => null);
+        if (!stat || stat.size <= offset) return;
+        const length = Math.min(64 * 1024, stat.size - offset);
+        const handle = await fs.open(logPath, "r");
+        try {
+          const buffer = Buffer.alloc(length);
+          const result = await handle.read(buffer, 0, length, offset);
+          offset += result.bytesRead;
+          if (result.bytesRead > 0) {
+            this.emitLog(sessionId, {
+              timestamp: new Date().toISOString(),
+              stream: "stdout",
+              text: buffer.subarray(0, result.bytesRead).toString("utf8"),
+            });
+          }
+        } finally {
+          await handle.close();
+        }
+      })().catch(() => {}).finally(() => {
+        reading = false;
+      });
+    }, 500);
+    this.externalTails.set(sessionId, timer);
+  }
+
+  stopFollowingExternalSession(sessionId: string): void {
+    const timer = this.externalTails.get(sessionId);
+    if (timer) clearInterval(timer);
+    this.externalTails.delete(sessionId);
+  }
+
   async revisePlan(sessionId: string, message: string): Promise<{ exitCode: number | null; stdout: string }> {
+    if (this.activePlanRevisions.has(sessionId)) {
+      throw new Error(`A plan revision is already running for session ${sessionId}.`);
+    }
     const root = await this.store.getRootDir();
     const script = await this.resolveOrchestratorScript();
     const args: string[] = [
@@ -263,14 +441,25 @@ export class LoopClient {
       "--message", message,
     ];
 
-    return new Promise((resolve) => {
-      const child = spawn(this.config.nodeBinary, args, { cwd: root, env: process.env });
-      let stdout = "";
-      child.stdout.on("data", (c: Buffer) => { stdout += c.toString(); });
-      child.stderr.on("data", (_c: Buffer) => { /* captured for logging but not sent to reject */ });
-      child.on("error", (err) => resolve({ exitCode: -1, stdout: err.message }));
-      child.on("exit", (code) => resolve({ exitCode: code, stdout }));
-    });
+    this.activePlanRevisions.add(sessionId);
+    try {
+      return await new Promise((resolve) => {
+        const child = spawn(this.config.nodeBinary, args, { cwd: root, env: process.env });
+        let stdout = "";
+        let settled = false;
+        const finish = (exitCode: number | null, output: string) => {
+          if (settled) return;
+          settled = true;
+          resolve({ exitCode, stdout: output });
+        };
+        child.stdout.on("data", (c: Buffer) => { stdout += c.toString(); });
+        child.stderr.on("data", (_c: Buffer) => { /* core reports the failure through its exit code */ });
+        child.on("error", (err) => finish(-1, err.message));
+        child.on("exit", (code) => finish(code, stdout));
+      });
+    } finally {
+      this.activePlanRevisions.delete(sessionId);
+    }
   }
 
   onLog(sessionId: string, listener: (entry: LogEntry) => void): void {
@@ -297,7 +486,10 @@ export class LoopClient {
   }
 
   dispose(): void {
-    this.stopAll();
+    this.recoveryWakeup = null;
+    for (const sessionId of this.externalTails.keys()) {
+      this.stopFollowingExternalSession(sessionId);
+    }
     this.logListeners.clear();
     this.exitListeners.clear();
   }

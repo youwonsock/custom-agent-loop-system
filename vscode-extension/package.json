@@ -2,7 +2,7 @@
   "name": "agent-loop-vscode",
   "displayName": "Agent Loop Orchestrator",
   "description": "VS Code extension that controls the Custom Agent Loop System CLI to autonomously achieve coding goals via a multi-model multi-session orchestrator.",
-  "version": "3.0.11",
+  "version": "3.2.8",
   "publisher": "custom-agent-loop",
   "license": "MIT",
   "repository": {
@@ -23,6 +23,7 @@
     "onCommand:agentLoop.resumeSession",
     "onCommand:agentLoop.discoverModels",
     "onCommand:agentLoop.stopSession",
+    "onCommand:agentLoop.openPipelineConfig",
     "onView:agentLoopExplorer"
   ],
   "main": "./out/extension.js",
@@ -67,6 +68,12 @@
         "title": "Agent Loop: Refresh",
         "category": "Agent Loop",
         "icon": "$(refresh)"
+      },
+      {
+        "command": "agentLoop.openPipelineConfig",
+        "title": "Agent Loop: Open Pipeline Configuration",
+        "category": "Agent Loop",
+        "icon": "$(settings-gear)"
       }
     ],
     "viewsContainers": {
@@ -151,6 +158,11 @@
           "default": "",
           "description": "Path to the compiled loop_orchestrator.js. Empty = auto-detect relative to rootDir."
         },
+        "agentLoop.pipelineConfigPath": {
+          "type": "string",
+          "default": "",
+          "description": "Path to agent_pipeline.json. Empty uses agent_pipeline.json in the orchestrator root."
+        },
         "agentLoop.maxIterations": {
           "type": "number",
           "default": 20,
@@ -158,13 +170,104 @@
         },
         "agentLoop.phaseTimeoutMs": {
           "type": "number",
-          "default": 600000,
-          "description": "Phase timeout in milliseconds."
+          "default": 900000,
+          "description": "Progress-renewable attempt window. Meaningful events extend it, capped by the role recovery budget."
         },
         "agentLoop.idleTimeoutMs": {
           "type": "number",
+          "default": 300000,
+          "minimum": 1,
+          "description": "No-progress timeout while the model is generating its next response or tool call."
+        },
+        "agentLoop.toolTimeoutMs": {
+          "type": "number",
           "default": 600000,
-          "description": "Idle timeout in milliseconds."
+          "minimum": 1,
+          "description": "No-progress timeout while a tool call is actively executing."
+        },
+        "agentLoop.transportTimeoutMs": {
+          "type": "number",
+          "default": 120000,
+          "minimum": 1,
+          "description": "Initial no-output timeout in milliseconds."
+        },
+        "agentLoop.phaseRecoveryBudgetMs": {
+          "type": "number",
+          "default": 2880000,
+          "minimum": 1,
+          "description": "Total automatic recovery budget for one agent role."
+        },
+        "agentLoop.maxAgentAttempts": {
+          "type": "number",
+          "default": 3,
+          "minimum": 1,
+          "maximum": 10,
+          "description": "Maximum automatic attempts per agent role."
+        },
+        "agentLoop.maxCompletionRecoveryAttempts": {
+          "type": "number",
+          "default": 1,
+          "minimum": 0,
+          "maximum": 3,
+          "description": "Extra fresh-session attempt used only when the final normal attempt exits cleanly without satisfying the completion contract."
+        },
+        "agentLoop.maxAutomaticRecoveryCycles": {
+          "type": "number",
+          "default": 3,
+          "minimum": 0,
+          "maximum": 10,
+          "description": "Automatic delayed recovery cycles for transient transport failures that show no meaningful model-token consumption."
+        },
+        "agentLoop.automaticRecoveryBackoffMs": {
+          "type": "array",
+          "items": {
+            "type": "number",
+            "minimum": 1
+          },
+          "default": [60000, 300000, 900000],
+          "description": "Delay per automatic transient-recovery cycle in milliseconds. The last value is reused for additional cycles."
+        },
+        "agentLoop.retryBackoffMs": {
+          "type": "array",
+          "items": {
+            "type": "number",
+            "minimum": 1
+          },
+          "default": [
+            5000,
+            30000
+          ],
+          "description": "Retry backoff delays in milliseconds."
+        },
+        "agentLoop.terminationGraceMs": {
+          "type": "number",
+          "default": 3000,
+          "minimum": 1,
+          "description": "Graceful PTY termination wait."
+        },
+        "agentLoop.killTimeoutMs": {
+          "type": "number",
+          "default": 5000,
+          "minimum": 1,
+          "description": "Forced process-tree termination verification timeout."
+        },
+        "agentLoop.heartbeatIntervalMs": {
+          "type": "number",
+          "default": 5000,
+          "minimum": 1,
+          "description": "Session lease heartbeat interval."
+        },
+        "agentLoop.leaseTtlMs": {
+          "type": "number",
+          "default": 20000,
+          "minimum": 1,
+          "description": "Session owner lease expiry threshold."
+        },
+        "agentLoop.maxInMemoryOutputBytes": {
+          "type": "number",
+          "default": 1048576,
+          "minimum": 1024,
+          "description": "Maximum in-memory PTY output retained per attempt."
         },
         "agentLoop.pollIntervalMs": {
           "type": "number",
@@ -175,11 +278,13 @@
     }
   },
   "scripts": {
-    "vscode:prepublish": "npm run compile",
+    "vscode:prepublish": "npm --prefix .. run build && npm run compile",
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
     "typecheck": "tsc -p ./ --noEmit",
-    "package": "npm version patch --no-git-tag-version && vsce package"
+    "test": "npm run compile && node --test out/*.test.js",
+    "prepack": "npm --prefix .. run build && npm run compile",
+    "package": "vsce package"
   },
   "devDependencies": {
     "@types/node": "^20.11.0",

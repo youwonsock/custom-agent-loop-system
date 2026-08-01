@@ -1,0 +1,121 @@
+{
+  "$schema": "./agent_pipeline.schema.json",
+  "version": 1,
+  "name": "autonomous-mutual-verification",
+  "startStageId": "PLANNING",
+  "interruptStageId": "INTERRUPT",
+  "reentryStageId": "IMPLEMENTATION",
+  "iterationCompletionStageId": "VERIFICATION",
+  "roles": [
+    {
+      "id": "planner",
+      "modelRole": "planner",
+      "description": "Produces competing implementation plans and clarifies the goal.",
+      "instructions": "Generate exactly three materially distinct plan options."
+    },
+    {
+      "id": "implementer",
+      "modelRole": "implementer",
+      "description": "Implements the approved plan.",
+      "instructions": "Inspect existing work first, implement cumulatively, and keep the workspace runnable."
+    },
+    {
+      "id": "tester",
+      "modelRole": "tester",
+      "description": "Creates and runs tests independently from the implementer.",
+      "instructions": "Run relevant tests and finish with VERDICT: PASS or VERDICT: FAIL."
+    },
+    {
+      "id": "qa_lead",
+      "modelRole": "qa_lead",
+      "description": "Reviews implementation and test evidence.",
+      "instructions": "Independently verify the result and finish with APPROVED or REJECTED."
+    },
+    {
+      "id": "master",
+      "modelRole": "master",
+      "description": "Makes the final goal-completion decision.",
+      "instructions": "Audit the complete goal and finish with APPROVED or REJECTED."
+    },
+    {
+      "id": "interrupter",
+      "modelRole": "interrupter",
+      "description": "Produces a bounded local failure briefing.",
+      "instructions": "Explain the failure, evidence, and concrete operator recovery actions."
+    }
+  ],
+  "stages": [
+    {
+      "id": "PLANNING",
+      "name": "Planning",
+      "role": "planner",
+      "kind": "planning",
+      "instructions": "",
+      "onSuccess": "IMPLEMENTATION",
+      "onFailure": "INTERRUPT",
+      "countsIteration": false,
+      "requiresPlanApproval": true,
+      "planOptionsCount": 3
+    },
+    {
+      "id": "IMPLEMENTATION",
+      "name": "Implementation",
+      "role": "implementer",
+      "kind": "implementation",
+      "instructions": "",
+      "onSuccess": "TEST_GENERATION",
+      "onFailure": "INTERRUPT",
+      "countsIteration": true,
+      "requiresPlanApproval": false,
+      "planOptionsCount": 0
+    },
+    {
+      "id": "TEST_GENERATION",
+      "name": "Test generation and execution",
+      "role": "tester",
+      "kind": "test",
+      "instructions": "",
+      "onSuccess": "VERIFICATION",
+      "onFailure": "VERIFICATION",
+      "countsIteration": false,
+      "requiresPlanApproval": false,
+      "planOptionsCount": 0
+    },
+    {
+      "id": "VERIFICATION",
+      "name": "Independent QA verification",
+      "role": "qa_lead",
+      "kind": "review",
+      "instructions": "",
+      "onSuccess": "MASTER_APPROVAL",
+      "onFailure": "IMPLEMENTATION",
+      "countsIteration": false,
+      "requiresPlanApproval": false,
+      "planOptionsCount": 0
+    },
+    {
+      "id": "MASTER_APPROVAL",
+      "name": "Final approval",
+      "role": "master",
+      "kind": "approval",
+      "instructions": "",
+      "onSuccess": "SUCCESS",
+      "onFailure": "IMPLEMENTATION",
+      "countsIteration": false,
+      "requiresPlanApproval": false,
+      "planOptionsCount": 0
+    },
+    {
+      "id": "INTERRUPT",
+      "name": "Failure briefing",
+      "role": "interrupter",
+      "kind": "interrupt",
+      "instructions": "",
+      "onSuccess": "PAUSED",
+      "onFailure": "PAUSED",
+      "countsIteration": false,
+      "requiresPlanApproval": false,
+      "planOptionsCount": 0
+    }
+  ]
+}

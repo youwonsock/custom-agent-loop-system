@@ -1,39 +1,60 @@
 # Agent Loop Orchestrator
 
-VS Code extension that controls the Custom Agent Loop System CLI to autonomously achieve coding goals via a multi-model, multi-session orchestrator.
+VS Code controls the Custom Agent Loop System: an autonomous, multi-role coding
+loop in which implementation, testing, QA, and final approval agents
+cross-check one another until the configured goal is complete.
 
-## Features
+## Version 3.2
 
-- Multi-session autonomous coding loop control
-- Per-agent model selection (planner, implementer, tester, qa_lead, master, interrupter)
-- Live state polling and webview dashboard
-- Dynamic CLI model discovery
-- Session resume after pause/interrupt
+- Configure any number of stages and specialized roles in
+  `agent_pipeline.json`.
+- Assign each role to a built-in model slot or an explicit model/variant.
+- Configure success/failure transitions, iteration boundaries, and optional
+  plan approval.
+- Review complete plan options as rendered Markdown previews in the center editor while
+  the Plan Review sidebar stays focused on option selection, revision, and
+  approval controls.
+- Inspect the active attempt, reconnect state, last meaningful progress,
+  retry time, failure category, and owner lease from the dashboard.
+- Recover stale `RUNNING` sessions after abnormal shutdown and automatically
+  resume due `RECOVERING` sessions.
+- Gracefully stop active sessions during normal VS Code shutdown.
+- Queue concurrent Stop and Interrupt requests without overwriting them.
+- Use Codex-style filesystem access controls: **Ask when needed** enters `WAITING_USER` with a
+  concrete approval request, while **Full access** can be granted per session.
+- Reserve `PAUSED` for repeated token-consuming non-convergence. Transient
+  token-free failures use delayed `RECOVERING`; explicit Stop uses `STOPPED`;
+  unsafe orphan ownership uses `BLOCKED`.
+
+Use **Agent Loop: Open Pipeline Configuration** to open the root pipeline file,
+or set `agentLoop.pipelineConfigPath` to another JSON file.
 
 ## Requirements
 
-- Node.js >= 18
-- The `loop_orchestrator.js` (compiled from the parent project) accessible via `agentLoop.orchestratorScript` or placed under `<rootDir>/dist/`.
-- A coding CLI binary (default: `opencode`) installed and on PATH.
+- Node.js 18 or newer.
+- A built core at `<rootDir>/dist/loop_orchestrator.js`.
+- An authenticated coding CLI (`opencode` or `kilo` by default).
 
-## Extension Settings
+The extension blocks session startup when core TypeScript sources are newer
+than `dist` and tells you to run `npm run build`.
 
-- `agentLoop.cliBinary`: CLI binary name (default `opencode`)
-- `agentLoop.rootDir`: Orchestrator root directory
-- `agentLoop.nodeBinary`: Node.js binary path
-- `agentLoop.orchestratorScript`: Path to `loop_orchestrator.js`
-- `agentLoop.testCommand`: Default test command (default `npm test`)
-- `agentLoop.maxIterations`: Max loop iterations (default 20)
-- `agentLoop.phaseTimeoutMs`: Phase timeout (default 600000)
-- `agentLoop.idleTimeoutMs`: Idle timeout (default 600000)
-- `agentLoop.portsToClean`: Ports to clean before tests
-- `agentLoop.pollIntervalMs`: State polling interval (default 1000)
+## Main settings
 
-## Commands
-
-- `Agent Loop: Show Panel`
-- `Agent Loop: New Session`
-- `Agent Loop: Resume Session`
-- `Agent Loop: Discover Models`
-- `Agent Loop: Stop Session`
-- `Agent Loop: Refresh`
+- `agentLoop.rootDir`
+- `agentLoop.orchestratorScript`
+- `agentLoop.pipelineConfigPath`
+- `agentLoop.cliBinary`
+- `agentLoop.cliProfile`
+- `agentLoop.maxIterations`
+- `agentLoop.phaseTimeoutMs`
+- `agentLoop.transportTimeoutMs`
+- `agentLoop.idleTimeoutMs`
+- `agentLoop.toolTimeoutMs`
+- `agentLoop.phaseRecoveryBudgetMs`
+- `agentLoop.maxAgentAttempts`
+- `agentLoop.maxCompletionRecoveryAttempts`
+- `agentLoop.maxAutomaticRecoveryCycles`
+- `agentLoop.automaticRecoveryBackoffMs`
+- `agentLoop.retryBackoffMs`
+- `agentLoop.heartbeatIntervalMs`
+- `agentLoop.leaseTtlMs`

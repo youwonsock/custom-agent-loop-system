@@ -10,8 +10,13 @@
   "scripts": {
     "build": "tsc",
     "typecheck": "tsc --noEmit",
+    "test": "npm run build && node --test dist/*.test.js",
+    "smoke": "npm run build && node dist/loop_orchestrator.js --help",
+    "prestart": "npm run build",
     "start": "node dist/loop_orchestrator.js",
+    "preinit": "npm run build",
     "init": "node dist/loop_orchestrator.js init",
+    "prepack": "npm run build",
     "postinstall": "node scripts/fix-pty-permissions.js"
   },
   "engines": {

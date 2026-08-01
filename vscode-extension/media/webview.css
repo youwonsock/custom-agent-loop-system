@@ -192,6 +192,10 @@ html, body {
 .badge.success { background: var(--success); color: #000; }
 .badge.failed { background: var(--error); color: #fff; }
 .badge.paused { background: var(--warn); color: #000; }
+.badge.waiting_user { background: var(--warn); color: #000; }
+.badge.recovering { background: var(--running); color: #fff; animation: pulse 1.2s ease-in-out infinite alternate; }
+.badge.stopped { background: var(--badge-bg); color: var(--badge-fg); }
+.badge.blocked { background: var(--error); color: #fff; }
 .badge.stopping {
   background: var(--warn);
   color: #000;
@@ -536,6 +540,59 @@ html, body {
 
 .composer-meta .btn {
   flex-shrink: 0;
+}
+
+.access-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  border-top: 1px solid var(--border);
+  margin-top: 8px;
+  padding-top: 8px;
+}
+
+.access-editor.access-request {
+  border: 1px solid var(--warn);
+  border-radius: 4px;
+  padding: 8px;
+  background: color-mix(in srgb, var(--warn) 8%, transparent);
+}
+
+.access-mode-row,
+.access-editor-footer,
+.access-request-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.access-mode-label,
+.access-request-title {
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.access-request-title {
+  color: var(--warn);
+}
+
+.access-request-paths {
+  margin: 0 0 2px 18px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.access-request-actions {
+  justify-content: flex-end;
+}
+
+.access-hint {
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.35;
 }
 
 .composer-actions {
