@@ -28,12 +28,12 @@
   },
   "dependencies": {
     "@openai/codex": "^0.146.0",
-    "fs-extra": "^11.2.0",
+    "fs-extra": "^11.4.0",
     "node-pty": "^1.0.0"
   },
   "devDependencies": {
     "@types/fs-extra": "^11.0.4",
-    "@types/node": "^20.11.0",
-    "typescript": "^5.4.0"
+    "@types/node": "^26.1.2",
+    "typescript": "^7.0.2"
   }
 }
