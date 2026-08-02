@@ -45,7 +45,7 @@ jobs:
       - run: npm run package
         working-directory: vscode-extension
       - run: node vscode-extension/core/dist/loop_orchestrator.js --help
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: agent-loop-vsix-${{ matrix.os }}
           path: vscode-extension/agent-loop-vscode-*.vsix
