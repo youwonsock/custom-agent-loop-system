@@ -1,47 +1,53 @@
 {
-  "$schema": "./agent_pipeline.schema.json",
+  "$schema": "./agent_loop.schema.json",
   "version": 1,
   "name": "autonomous-mutual-verification",
   "startStageId": "PLANNING",
   "interruptStageId": "INTERRUPT",
   "reentryStageId": "IMPLEMENTATION",
   "iterationCompletionStageId": "VERIFICATION",
-  "roles": [
+  "stageTypes": [
     {
-      "id": "planner",
-      "modelRole": "planner",
-      "description": "Produces competing implementation plans and clarifies the goal.",
-      "instructions": "Generate exactly three materially distinct plan options."
+      "id": "planning",
+      "label": "Planning",
+      "executor": "planning",
+      "completionContract": "plan_options",
+      "description": "Produces selectable plan options and waits for approval when configured."
     },
     {
-      "id": "implementer",
-      "modelRole": "implementer",
-      "description": "Implements the approved plan.",
-      "instructions": "Inspect existing work first, implement cumulatively, and keep the workspace runnable."
+      "id": "implementation",
+      "label": "Implementation",
+      "executor": "implementation",
+      "completionContract": "phase_done",
+      "description": "Applies cumulative changes to the target project."
     },
     {
-      "id": "tester",
-      "modelRole": "tester",
-      "description": "Creates and runs tests independently from the implementer.",
-      "instructions": "Run relevant tests and finish with VERDICT: PASS or VERDICT: FAIL."
+      "id": "test",
+      "label": "Test",
+      "executor": "test",
+      "completionContract": "verdict",
+      "description": "Runs independent tests and returns a PASS or FAIL verdict."
     },
     {
-      "id": "qa_lead",
-      "modelRole": "qa_lead",
-      "description": "Reviews implementation and test evidence.",
-      "instructions": "Independently verify the result and finish with APPROVED or REJECTED."
+      "id": "review",
+      "label": "Review",
+      "executor": "review",
+      "completionContract": "approval",
+      "description": "Reviews prior evidence and returns APPROVED or REJECTED."
     },
     {
-      "id": "master",
-      "modelRole": "master",
-      "description": "Makes the final goal-completion decision.",
-      "instructions": "Audit the complete goal and finish with APPROVED or REJECTED."
+      "id": "approval",
+      "label": "Approval",
+      "executor": "approval",
+      "completionContract": "approval",
+      "description": "Makes the final goal-completion decision."
     },
     {
-      "id": "interrupter",
-      "modelRole": "interrupter",
-      "description": "Produces a bounded local failure briefing.",
-      "instructions": "Explain the failure, evidence, and concrete operator recovery actions."
+      "id": "interrupt",
+      "label": "Interrupt",
+      "executor": "interrupt",
+      "completionContract": "phase_done",
+      "description": "Produces a bounded failure briefing and stops the loop."
     }
   ],
   "stages": [

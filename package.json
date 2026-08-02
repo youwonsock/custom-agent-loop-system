@@ -1,6 +1,6 @@
 {
   "name": "custom-agent-loop-system",
-  "version": "1.1.3",
+  "version": "3.4.0",
   "description": "Dynamic multi-model multi-session orchestrator that controls an interactive coding CLI (opencode) as child processes to autonomously achieve goals.",
   "type": "commonjs",
   "main": "dist/loop_orchestrator.js",
@@ -8,10 +8,14 @@
     "agent-loop": "dist/loop_orchestrator.js"
   },
   "scripts": {
+    "prebuild": "node scripts/sync-runtime-defaults.js",
     "build": "tsc",
     "typecheck": "tsc --noEmit",
-    "test": "npm run build && node --test dist/*.test.js",
+    "test": "npm run build && node --test --test-concurrency=1 dist/*.test.js",
+    "coverage": "npm run build && node --test --test-concurrency=1 --experimental-test-coverage --test-coverage-include=dist/*.js --test-coverage-exclude=dist/*.test.js --test-coverage-lines=80 --test-coverage-branches=60 --test-coverage-functions=70 dist/*.test.js",
     "smoke": "npm run build && node dist/loop_orchestrator.js --help",
+    "bundle:extension-core": "npm run build && node scripts/bundle-core-for-vsix.js",
+    "pack:check": "npm run build && node scripts/verify-npm-package.js",
     "prestart": "npm run build",
     "start": "node dist/loop_orchestrator.js",
     "preinit": "npm run build",
@@ -23,6 +27,7 @@
     "node": ">=18.0.0"
   },
   "dependencies": {
+    "@openai/codex": "^0.146.0",
     "fs-extra": "^11.2.0",
     "node-pty": "^1.0.0"
   },

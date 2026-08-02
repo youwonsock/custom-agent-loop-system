@@ -26,6 +26,17 @@ switch (mode) {
     process.stdout.write("Prompt says to print [PHASE_DONE]\n");
     process.exit(0);
     break;
+  case "secret-echo":
+    assistant("credential=top-secret\n[PHASE_DONE]");
+    process.exit(0);
+    break;
+  case "split-secret-echo":
+    process.stdout.write('{"type":"text","id":"split-secret","part":{"id":"split-secret","text":"credential=top-');
+    setTimeout(() => {
+      process.stdout.write('secret\\n[PHASE_DONE]"}}\n');
+      process.exit(0);
+    }, 30);
+    break;
   case "incomplete":
     assistant("Work stopped before the completion contract.");
     process.exit(0);
@@ -54,6 +65,10 @@ switch (mode) {
     break;
   case "spinner":
     setInterval(() => process.stdout.write("\u001b[2K\r|"), 20);
+    break;
+  case "permission-prompt":
+    process.stdout.write("Allow access to C:\\outside? [y/n]\n");
+    setInterval(() => {}, 1000);
     break;
   case "delayed-model":
     emit({ type: "step_start", id: "delayed-model-step", sessionID: "delayed-model-session" });

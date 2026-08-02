@@ -67,7 +67,7 @@ function execFileAsync(
   });
 }
 
-test("dist CLI executes a custom autonomous role/stage pipeline to SUCCESS", async () => {
+test("dist CLI composes separate role and loop files to execute a custom pipeline", async () => {
   const root = await fsp.mkdtemp(path.join(os.tmpdir(), "agent-loop-integration-"));
   try {
     await fsp.writeFile(path.join(root, "models"), "console.log('fake/model');\n", "utf8");
@@ -75,10 +75,15 @@ test("dist CLI executes a custom autonomous role/stage pipeline to SUCCESS", asy
       path.join(root, "run"),
       [
         "const prompt = process.argv[process.argv.length - 1] || '';",
-        "let text = 'work complete\\n[PHASE_DONE]';",
-        "if (prompt.includes('Phase: TEST')) text = 'VERDICT: PASS\\n[PHASE_DONE]';",
-        "if (prompt.includes('Phase: APPROVE')) text = 'APPROVED\\n[PHASE_DONE]';",
-        "console.log(JSON.stringify({type:'text',id:'evt-'+Date.now(),part:{id:'part-'+Date.now(),text}}));",
+        "const evidence = '[REQUIREMENT_EVIDENCE]\\nREQ_ID: REQ-001\\nSTATUS: SATISFIED\\nEVIDENCE: fake integration observation\\n[/REQUIREMENT_EVIDENCE]';",
+        "let text = 'work complete\\n' + evidence + '\\n[PHASE_DONE]';",
+        "if (prompt.includes('Phase: TEST')) text = evidence + '\\nVERDICT: PASS\\n[PHASE_DONE]';",
+        "if (prompt.includes('Phase: APPROVE')) {",
+        "  console.log(JSON.stringify({type:'item.completed',item:{id:'status',type:'agent_message',text:'Inspecting final evidence.'}}));",
+        "  console.log(JSON.stringify({type:'item.completed',item:{id:'final',type:'agent_message',text:evidence + '\\nAPPROVED: acceptance passed.\\n[PHASE_DONE]'}}));",
+        "} else {",
+        "  console.log(JSON.stringify({type:'text',id:'evt-'+Date.now(),part:{id:'part-'+Date.now(),text}}));",
+        "}",
       ].join("\n"),
       "utf8"
     );
@@ -90,6 +95,12 @@ test("dist CLI executes a custom autonomous role/stage pipeline to SUCCESS", asy
       interruptStageId: "INTERRUPT",
       reentryStageId: "BUILD",
       iterationCompletionStageId: "APPROVE",
+      stageTypes: [
+        { id: "build_work", label: "Build work", executor: "implementation", completionContract: "phase_done", description: "Custom implementation type." },
+        { id: "quality_gate", label: "Quality gate", executor: "test", completionContract: "verdict", description: "Custom test type." },
+        { id: "release_gate", label: "Release gate", executor: "approval", completionContract: "approval", description: "Custom approval type." },
+        { id: "failure_stop", label: "Failure stop", executor: "interrupt", completionContract: "phase_done", description: "Custom interrupt type." },
+      ],
       roles: [
         { id: "builder", modelRole: "implementer", description: "Build", instructions: "" },
         { id: "test_specialist", modelRole: "tester", description: "Test", instructions: "" },
@@ -98,29 +109,32 @@ test("dist CLI executes a custom autonomous role/stage pipeline to SUCCESS", asy
       ],
       stages: [
         {
-          id: "BUILD", name: "Build", role: "builder", kind: "implementation",
+          id: "BUILD", name: "Build", role: "builder", kind: "build_work",
           instructions: "", onSuccess: "TEST", onFailure: "INTERRUPT",
           countsIteration: true, requiresPlanApproval: false, planOptionsCount: 0,
         },
         {
-          id: "TEST", name: "Test", role: "test_specialist", kind: "test",
+          id: "TEST", name: "Test", role: "test_specialist", kind: "quality_gate",
           instructions: "", onSuccess: "APPROVE", onFailure: "BUILD",
           countsIteration: false, requiresPlanApproval: false, planOptionsCount: 0,
         },
         {
-          id: "APPROVE", name: "Approve", role: "acceptance", kind: "approval",
+          id: "APPROVE", name: "Approve", role: "acceptance", kind: "release_gate",
           instructions: "", onSuccess: "SUCCESS", onFailure: "BUILD",
           countsIteration: false, requiresPlanApproval: false, planOptionsCount: 0,
         },
         {
-          id: "INTERRUPT", name: "Interrupt", role: "failure_brief", kind: "interrupt",
+          id: "INTERRUPT", name: "Interrupt", role: "failure_brief", kind: "failure_stop",
           instructions: "", onSuccess: "PAUSED", onFailure: "PAUSED",
           countsIteration: false, requiresPlanApproval: false, planOptionsCount: 0,
         },
       ],
     };
-    const pipelinePath = path.join(root, "pipeline.json");
-    await fsp.writeFile(pipelinePath, JSON.stringify(pipeline, null, 2), "utf8");
+    const rolesPath = path.join(root, "custom-roles.json");
+    const loopPath = path.join(root, "custom-loop.json");
+    const { roles, ...loopDefinition } = pipeline;
+    await fsp.writeFile(rolesPath, JSON.stringify({ version: 1, roles }, null, 2), "utf8");
+    await fsp.writeFile(loopPath, JSON.stringify(loopDefinition, null, 2), "utf8");
 
     const cliPath = path.join(__dirname, "loop_orchestrator.js");
     await execFileAsync(
@@ -134,7 +148,8 @@ test("dist CLI executes a custom autonomous role/stage pipeline to SUCCESS", asy
         "--session", "integration-session",
         "--binary", process.execPath,
         "--profile", "opencode",
-        "--pipeline", pipelinePath,
+        "--roles", rolesPath,
+        "--loop", loopPath,
         "--max-iterations", "2",
         "--phase-timeout", "5000",
         "--idle-timeout", "1000",
@@ -255,7 +270,6 @@ test("default planning waits for the user with full center-editor Markdown artif
     );
 
     const cliPath = path.join(__dirname, "loop_orchestrator.js");
-    const pipelinePath = path.resolve(__dirname, "..", "agent_pipeline.json");
     await execFileAsync(
       process.execPath,
       [
@@ -267,7 +281,6 @@ test("default planning waits for the user with full center-editor Markdown artif
         "--session", "planning-review-session",
         "--binary", process.execPath,
         "--profile", "opencode",
-        "--pipeline", pipelinePath,
         "--phase-timeout", "5000",
         "--idle-timeout", "1000",
         "--tool-timeout", "1000",
@@ -409,6 +422,76 @@ test("default planning waits for the user with full center-editor Markdown artif
     ) as { status: string; recoveryCount: number };
     assert.equal(stateAfterRejectedResume.status, "WAITING_USER");
     assert.equal(stateAfterRejectedResume.recoveryCount, ownedState.recoveryCount);
+  } finally {
+    await fsp.rm(root, { recursive: true, force: true });
+  }
+});
+
+test("insufficient named-reference research waits for the user after one planning attempt", async () => {
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), "agent-loop-research-blocked-"));
+  try {
+    await fsp.writeFile(
+      path.join(root, "loop_config.json"),
+      JSON.stringify({
+        toolAccess: {
+          webSearch: { enabled: true, mode: "live" },
+          mcpServers: [],
+        },
+      }, null, 2),
+      "utf8"
+    );
+    await fsp.writeFile(
+      path.join(root, "run"),
+      [
+        "const evidence = `[RESEARCH_EVIDENCE]",
+        "SOURCE: https://example.com/store-listing",
+        "LIMITATION: The available listing does not establish the named game's core gameplay.",
+        "CONFIDENCE: LOW",
+        "[/RESEARCH_EVIDENCE]",
+        "RESEARCH_BLOCKED",
+        "[PHASE_DONE]`;",
+        "console.log(JSON.stringify({type:'item.completed',item:{id:'search',type:'web_search',query:'named game gameplay'}}));",
+        "console.log(JSON.stringify({type:'text',id:'planning-event',part:{id:'planning-part',text:evidence}}));",
+      ].join("\n"),
+      "utf8"
+    );
+
+    const cliPath = path.join(__dirname, "loop_orchestrator.js");
+    await execFileAsync(
+      process.execPath,
+      [
+        cliPath,
+        "run",
+        "--goal", "인터넷을 검색해서 Named Game과 같은 게임을 제작해",
+        "--target", root,
+        "--root", root,
+        "--session", "research-blocked-session",
+        "--binary", process.execPath,
+        "--profile", "opencode",
+        "--phase-timeout", "5000",
+        "--idle-timeout", "1000",
+        "--tool-timeout", "1000",
+        "--transport-timeout", "1000",
+        "--max-agent-attempts", "3",
+        "--phase-recovery-budget", "60000",
+      ],
+      root
+    );
+
+    const sessionDir = path.join(root, ".goal", "sessions", "research-blocked-session");
+    const state = JSON.parse(
+      await fsp.readFile(path.join(sessionDir, "loop_state.json"), "utf8")
+    ) as {
+      status: string;
+      statusReason: string | null;
+      totalAgentAttempts: number;
+      awaitingPlanApproval: boolean;
+    };
+    assert.equal(state.status, "WAITING_USER");
+    assert.match(state.statusReason ?? "", /did not establish.*core gameplay/i);
+    assert.equal(state.totalAgentAttempts, 1);
+    assert.equal(state.awaitingPlanApproval, false);
+    await assert.rejects(fsp.access(path.join(sessionDir, "plan_choices.json")));
   } finally {
     await fsp.rm(root, { recursive: true, force: true });
   }
@@ -603,6 +686,7 @@ test("token-free transient exhaustion schedules recovery without spending interr
         "--transport-timeout", "200",
         "--phase-recovery-budget", "10000",
         "--max-agent-attempts", "1",
+        "--automatic-recovery-backoff", "10",
       ],
       root
     );
@@ -623,6 +707,33 @@ test("token-free transient exhaustion schedules recovery without spending interr
     assert.match(state.interruptBriefing, /Disposition: recover_transport/);
     assert.equal(state.automaticRecovery?.cycle, 1);
     assert.equal(state.automaticRecovery?.failureKind, "idle_timeout");
+
+    await fsp.writeFile(
+      path.join(root, "run"),
+      "console.log(JSON.stringify({type:'text',id:'recovered',part:{id:'recovered-part',text:'Recovered without manual intervention\\n[PHASE_DONE]'}}));\n",
+      "utf8"
+    );
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    await execFileAsync(
+      process.execPath,
+      [
+        cliPath,
+        "resume",
+        "--session", "interrupter-evidence-session",
+        "--root", root,
+        "--recovery",
+      ],
+      root
+    );
+    const recoveredState = JSON.parse(
+      await fsp.readFile(
+        path.join(root, ".goal", "sessions", "interrupter-evidence-session", "loop_state.json"),
+        "utf8"
+      )
+    ) as { status: string; automaticRecovery: unknown; recoveryCount: number };
+    assert.equal(recoveredState.status, "SUCCESS");
+    assert.equal(recoveredState.automaticRecovery, null);
+    assert.equal(recoveredState.recoveryCount, 0, "automatic recovery is not a manual recovery cycle");
   } finally {
     await fsp.rm(root, { recursive: true, force: true });
   }

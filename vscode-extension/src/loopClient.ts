@@ -3,8 +3,8 @@ import { randomBytes } from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import * as vscode from "vscode";
-import { AccessMode, ExtensionConfig, ModelMapping, VariantMapping, readExtensionConfig } from "./types";
-import { StateStore } from "./stateStore";
+import { AccessMode, ExtensionConfig, ModelMapping, ProviderMapping, VariantMapping, readExtensionConfig } from "./types";
+import { StateStore, getGlobalContext } from "./stateStore";
 import { processLiveness, shouldGracefullyStop } from "./resilience";
 
 export interface NewSessionOptions {
@@ -12,6 +12,7 @@ export interface NewSessionOptions {
   targetProjectPath: string;
   accessMode: AccessMode;
   modelMapping: Partial<ModelMapping>;
+  providerMapping?: Partial<ProviderMapping>;
   variantMapping?: Partial<VariantMapping>;
 }
 
@@ -31,12 +32,17 @@ export class LoopClient {
   private logListeners: Map<string, (entry: LogEntry) => void> = new Map();
   private exitListeners: Map<string, (code: number | null, signal: NodeJS.Signals | null) => void> = new Map();
   private recoveryWakeup: (() => void) | null = null;
+  private recoveryCancellations = new Set<string>();
   private activePlanRevisions = new Set<string>();
 
   constructor(
-    private readonly config: ExtensionConfig,
+    private config: ExtensionConfig,
     private readonly store: StateStore
   ) {}
+
+  updateConfig(config: ExtensionConfig): void {
+    this.config = config;
+  }
 
   async resolveOrchestratorScript(): Promise<string> {
     const liveScript = readExtensionConfig().orchestratorScript;
@@ -61,6 +67,12 @@ export class LoopClient {
     if (this.config.orchestratorScript && this.config.orchestratorScript.length > 0) {
       await addCandidate(this.config.orchestratorScript);
     }
+    const extensionContext = getGlobalContext();
+    if (extensionContext) {
+      candidates.push(
+        path.join(extensionContext.extensionUri.fsPath, "core", "dist", "loop_orchestrator.js")
+      );
+    }
     const root = await this.store.getRootDir();
     candidates.push(path.join(root, "dist", "loop_orchestrator.js"));
     for (const folder of vscode.workspace.workspaceFolders ?? []) {
@@ -80,6 +92,7 @@ export class LoopClient {
           "process_supervisor.ts",
           "resilience.ts",
           "pipeline.ts",
+          "provider_runtime.ts",
           "agent_attempt_runner.ts",
         ];
         for (const sourceName of sourceNames) {
@@ -108,6 +121,13 @@ export class LoopClient {
     return readExtensionConfig();
   }
 
+  private async coreProcessEnvironment(): Promise<NodeJS.ProcessEnv> {
+    return {
+      ...process.env,
+      ...await this.store.buildCoreSecretEnvironment(),
+    };
+  }
+
   async discoverModels(): Promise<{ models: string[]; exitCode: number | null; stderr: string; command: string }> {
     const root = await this.store.getRootDir();
     let script: string;
@@ -118,8 +138,7 @@ export class LoopClient {
       vscode.window.showErrorMessage(msg);
       return { models: [], exitCode: -1, stderr: msg, command: "" };
     }
-    const cfg = this.liveConfig();
-    const args = ["models", "--binary", cfg.cliBinary, "--profile", cfg.cliProfile, "--root", root];
+    const args = ["models", "--root", root];
     const cmdStr = `${this.config.nodeBinary} ${script} ${args.join(" ")}`;
     return new Promise<{ models: string[]; exitCode: number | null; stderr: string; command: string }>((resolve) => {
       const child = spawn(this.config.nodeBinary, [script, ...args], {
@@ -178,6 +197,9 @@ export class LoopClient {
     ];
     if (opts.accessMode === "full_access") args.push("--full-access");
 
+    args.push("--model-mapping", JSON.stringify(opts.modelMapping));
+    args.push("--provider-mapping", JSON.stringify(opts.providerMapping ?? {}));
+
     if (opts.modelMapping.planner) args.push("--planner-model", opts.modelMapping.planner);
     if (opts.modelMapping.implementer) args.push("--implementer-model", opts.modelMapping.implementer);
     if (opts.modelMapping.tester) args.push("--tester-model", opts.modelMapping.tester);
@@ -191,9 +213,9 @@ export class LoopClient {
     if (opts.variantMapping?.qa_lead) args.push("--qa-variant", opts.variantMapping.qa_lead);
     if (opts.variantMapping?.master) args.push("--master-variant", opts.variantMapping.master);
     if (opts.variantMapping?.interrupter) args.push("--interrupter-variant", opts.variantMapping.interrupter);
-    if (cfg.pipelineConfigPath) args.push("--pipeline", cfg.pipelineConfigPath);
 
-    this.spawnSession(args, root, sessionId);
+    const env = await this.coreProcessEnvironment();
+    this.spawnSession(args, root, sessionId, env);
     void this.store.syncRegistrySessionStatus(sessionId, "RUNNING");
     return sessionId;
   }
@@ -203,6 +225,8 @@ export class LoopClient {
     recovery = false,
     accessDecision?: "allow_requested" | "full_access"
   ): Promise<string> {
+    if (recovery && this.recoveryCancellations.has(sessionId)) return sessionId;
+    if (!recovery) this.recoveryCancellations.delete(sessionId);
     const runtime = await this.store.inspectLease(sessionId);
     if (
       this.isRunning(sessionId) ||
@@ -246,7 +270,8 @@ export class LoopClient {
     if (accessDecision === "allow_requested") args.push("--approve-access");
     if (accessDecision === "full_access") args.push("--full-access");
 
-    this.spawnSession(args, root, sessionId);
+    const env = await this.coreProcessEnvironment();
+    this.spawnSession(args, root, sessionId, env);
     void this.store.syncRegistrySessionStatus(sessionId, "RUNNING");
     return sessionId;
   }
@@ -261,10 +286,15 @@ export class LoopClient {
     await this.resumeSession(sessionId, runtime.disposition === "recoverable");
   }
 
-  private spawnSession(args: string[], cwd: string, sessionId: string): string {
+  private spawnSession(
+    args: string[],
+    cwd: string,
+    sessionId: string,
+    env: NodeJS.ProcessEnv
+  ): string {
     const child = spawn(this.config.nodeBinary, args, {
       cwd,
-      env: process.env,
+      env,
     });
 
     this.activeProcesses.set(sessionId, child);
@@ -302,7 +332,27 @@ export class LoopClient {
   }
 
   async stopSession(sessionId: string): Promise<boolean> {
+    this.recoveryCancellations.add(sessionId);
     const request = await this.store.enqueueControlRequest(sessionId, "STOP");
+    const initialState = await this.store.readState(sessionId);
+    const initialRuntime = await this.store.inspectLease(sessionId);
+    if (
+      initialState?.status === "RECOVERING" &&
+      !this.isRunning(sessionId) &&
+      initialRuntime.disposition === "missing"
+    ) {
+      await this.store.markSessionStopped(
+        sessionId,
+        "Operator cancelled the scheduled automatic recovery."
+      );
+      await this.store.completeQueuedControlRequest(
+        sessionId,
+        request,
+        "completed",
+        "Scheduled automatic recovery cancelled before a core process was spawned."
+      );
+      return true;
+    }
     const acknowledged = await this.store.waitForControlCompletion(sessionId, request.requestId, 8_000);
     if (acknowledged) return true;
 
@@ -325,6 +375,51 @@ export class LoopClient {
       );
     }
     return false;
+  }
+
+  async prepareSessionDeletion(
+    sessionId: string
+  ): Promise<{ safe: boolean; reason: string | null }> {
+    this.recoveryCancellations.add(sessionId);
+    this.stopFollowingExternalSession(sessionId);
+    let state = await this.store.readState(sessionId);
+    let runtime = await this.store.inspectLease(sessionId);
+    const ownerMayBeRunning = [
+      "active",
+      "expired_owner_alive",
+      "unverifiable",
+    ].includes(runtime.disposition);
+    if (
+      this.isRunning(sessionId) ||
+      state?.status === "RUNNING" ||
+      state?.status === "RECOVERING" ||
+      ownerMayBeRunning
+    ) {
+      await this.stopSession(sessionId);
+    }
+
+    const deadline = Date.now() + 8_000;
+    do {
+      state = await this.store.readState(sessionId);
+      runtime = await this.store.inspectLease(sessionId);
+      const activeChildPid = state?.activeAttempt &&
+        ["starting", "running", "retry_wait"].includes(state.activeAttempt.status)
+        ? state.activeAttempt.childPid
+        : null;
+      const childLiveness = processLiveness(activeChildPid);
+      const ownershipSafe = runtime.disposition === "missing" || runtime.disposition === "recoverable";
+      if (ownershipSafe && childLiveness === "dead" && state?.status !== "RUNNING" && state?.status !== "RECOVERING") {
+        return { safe: true, reason: null };
+      }
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    } while (Date.now() < deadline);
+
+    return {
+      safe: false,
+      reason:
+        `Session ownership or a child process is still live/unverifiable ` +
+        `(status=${state?.status ?? "missing"}, lease=${runtime.disposition}).`,
+    };
   }
 
   async gracefullyStopAll(): Promise<void> {
@@ -443,8 +538,9 @@ export class LoopClient {
 
     this.activePlanRevisions.add(sessionId);
     try {
+      const env = await this.coreProcessEnvironment();
       return await new Promise((resolve) => {
-        const child = spawn(this.config.nodeBinary, args, { cwd: root, env: process.env });
+        const child = spawn(this.config.nodeBinary, args, { cwd: root, env });
         let stdout = "";
         let settled = false;
         const finish = (exitCode: number | null, output: string) => {

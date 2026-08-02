@@ -1,7 +1,7 @@
 import * as path from "node:path";
 import * as os from "node:os";
 import * as fs from "node:fs/promises";
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import * as vscode from "vscode";
 import {
   ExtensionConfig,
@@ -19,16 +19,114 @@ import {
   ControlRequest,
   ControlAck,
   PlanChoice,
+  SystemSettings,
+  ProviderConfig,
+  ToolAccessConfig,
+  PipelineDefinition,
+  PipelineCompletionContract,
+  PipelineRole,
+  PipelineStageExecutor,
+  PipelineStageType,
+  AgentRolesDefinition,
+  AgentLoopDefinition,
 } from "./types";
 import {
   LeaseDisposition,
   SessionLease,
   SessionOwnerLock,
+  assessSessionDeletionSafety,
   evaluateOwnership,
   processLiveness,
 } from "./resilience";
+import generatedAgentRoles from "./generated_agent_roles.json";
+import generatedAgentLoop from "./generated_agent_loop.json";
 
 let globalContext: vscode.ExtensionContext | undefined;
+const SECRET_REFERENCE = /^\$\{secret:([^}]+)\}$/;
+const ENV_REFERENCE = /^\$\{env:[A-Za-z_][A-Za-z0-9_]*\}$/;
+export const CORE_SECRET_VALUES_ENV = "AGENT_LOOP_SECRET_VALUES";
+
+const STAGE_EXECUTORS: PipelineStageExecutor[] = [
+  "planning", "implementation", "test", "review", "approval", "interrupt",
+];
+const COMPLETION_CONTRACTS: PipelineCompletionContract[] = [
+  "phase_done", "plan_options", "verdict", "approval",
+];
+
+function completionContractForExecutor(executor: PipelineStageExecutor): PipelineCompletionContract {
+  if (executor === "planning") return "plan_options";
+  if (executor === "test") return "verdict";
+  if (executor === "review" || executor === "approval") return "approval";
+  return "phase_done";
+}
+
+function defaultStageTypes(): PipelineStageType[] {
+  return STAGE_EXECUTORS.map((executor) => ({
+    id: executor,
+    label: executor.charAt(0).toUpperCase() + executor.slice(1),
+    executor,
+    completionContract: completionContractForExecutor(executor),
+    description: `Built-in ${executor} stage behavior.`,
+  }));
+}
+
+function fixedPipelineDefinition(existing?: PipelineDefinition | null): PipelineDefinition {
+  const canonicalRoles = generatedAgentRoles as AgentRolesDefinition;
+  const canonicalLoop = generatedAgentLoop as AgentLoopDefinition;
+  const existingRoles = new Map((existing?.roles ?? []).map((role) => [role.id, role]));
+  const role = (
+    id: string,
+    modelRole: PipelineRole["modelRole"],
+    description: string,
+    instructions: string
+  ): PipelineRole => {
+    const previous = existingRoles.get(id);
+    return {
+      id,
+      modelRole,
+      description,
+      instructions,
+      ...(previous?.provider ? { provider: previous.provider } : {}),
+      ...(previous?.model ? { model: previous.model } : {}),
+      ...(previous?.variant ? { variant: previous.variant } : {}),
+    };
+  };
+  return {
+    version: 1,
+    name: canonicalLoop.name,
+    startStageId: canonicalLoop.startStageId,
+    interruptStageId: canonicalLoop.interruptStageId,
+    reentryStageId: canonicalLoop.reentryStageId,
+    iterationCompletionStageId: canonicalLoop.iterationCompletionStageId,
+    stageTypes: canonicalLoop.stageTypes ?? defaultStageTypes(),
+    roles: canonicalRoles.roles.map((candidate) => role(
+      candidate.id,
+      candidate.modelRole,
+      candidate.description,
+      candidate.instructions
+    )),
+    stages: canonicalLoop.stages,
+  };
+}
+
+function combinePipelineDefinitions(
+  rolesDefinition?: AgentRolesDefinition | null,
+  loopDefinition?: AgentLoopDefinition | null
+): PipelineDefinition {
+  const defaults = fixedPipelineDefinition();
+  return {
+    version: 1,
+    name: loopDefinition?.name ?? defaults.name,
+    startStageId: loopDefinition?.startStageId ?? defaults.startStageId,
+    interruptStageId: loopDefinition?.interruptStageId ?? defaults.interruptStageId,
+    reentryStageId: loopDefinition?.reentryStageId ?? defaults.reentryStageId,
+    iterationCompletionStageId:
+      loopDefinition?.iterationCompletionStageId ?? defaults.iterationCompletionStageId,
+    stageTypes: loopDefinition?.stageTypes ?? defaults.stageTypes,
+    roles: rolesDefinition?.roles ?? defaults.roles,
+    stages: loopDefinition?.stages ?? defaults.stages,
+  };
+}
 
 function assertSafeSessionId(sessionId: string): void {
   if (
@@ -47,6 +145,52 @@ function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, Math.max(0, ms)));
 }
 
+function emptySessionRegistry(): SessionRegistry {
+  return {
+    version: 1,
+    activeSessionIds: [],
+    availableModels: [],
+    modelsDiscoveredAt: null,
+    modelsDiscoveredCli: null,
+    sessionMetas: [],
+    manualModelsOverride: null,
+    modelVariants: null,
+  };
+}
+
+function mcpSecretStorageKey(
+  serverId: string,
+  scope: "environment" | "headers",
+  fieldName: string
+): string {
+  const digest = createHash("sha256").update(fieldName).digest("hex").slice(0, 24);
+  return `agentLoop.mcp.${serverId}.${scope}.${digest}`;
+}
+
+function secretReferences(toolAccess?: ToolAccessConfig): Set<string> {
+  const references = new Set<string>();
+  for (const server of toolAccess?.mcpServers ?? []) {
+    for (const values of [server.environment, server.headers]) {
+      for (const value of Object.values(values ?? {})) {
+        const match = value.match(SECRET_REFERENCE);
+        if (match) references.add(match[1]);
+      }
+    }
+  }
+  return references;
+}
+
+function hasLiteralMcpCredentials(toolAccess?: ToolAccessConfig): boolean {
+  for (const server of toolAccess?.mcpServers ?? []) {
+    for (const values of [server.environment, server.headers]) {
+      for (const value of Object.values(values ?? {})) {
+        if (!SECRET_REFERENCE.test(value) && !ENV_REFERENCE.test(value)) return true;
+      }
+    }
+  }
+  return false;
+}
+
 export class StateStore {
   private registryCache: SessionRegistry | null = null;
   private stateCache: Map<string, LoopState> = new Map();
@@ -54,7 +198,15 @@ export class StateStore {
   private listeners: Array<() => void> = [];
   private pathsCache: LoopPathsConfig | null = null;
 
-  constructor(private readonly config: ExtensionConfig) {}
+  constructor(private config: ExtensionConfig) {}
+
+  updateConfig(config: ExtensionConfig): void {
+    this.config = config;
+    this.pathsCache = null;
+    this.registryCache = null;
+    this.stateCache.clear();
+    this.notifyListeners();
+  }
 
   async getPathsConfig(): Promise<LoopPathsConfig> {
     if (this.pathsCache) return this.pathsCache;
@@ -83,15 +235,9 @@ export class StateStore {
       }
     }
     if (globalContext) {
-      const cached = globalContext.globalState.get<string>("agentLoop.detectedRoot");
-      if (cached && cached.length > 0) {
-        try {
-          await fs.access(path.join(cached, "dist", "loop_orchestrator.js"));
-          return cached;
-        } catch {
-          // stale cache, fall through
-        }
-      }
+      const storagePath = globalContext.globalStorageUri.fsPath;
+      await fs.mkdir(storagePath, { recursive: true });
+      return storagePath;
     }
     for (const folder of vscode.workspace.workspaceFolders ?? []) {
       const distScript = path.join(folder.uri.fsPath, "dist", "loop_orchestrator.js");
@@ -110,11 +256,6 @@ export class StateStore {
       } catch {
         // not here
       }
-    }
-    if (globalContext) {
-      const storagePath = globalContext.globalStorageUri.fsPath;
-      await fs.mkdir(storagePath, { recursive: true });
-      return storagePath;
     }
     const defaultDir = path.join(os.homedir(), ".agent-loop");
     await fs.mkdir(defaultDir, { recursive: true });
@@ -200,6 +341,246 @@ export class StateStore {
       return await fs.readFile(p, "utf8");
     } catch {
       return null;
+    }
+  }
+
+  async readSystemSettings(): Promise<SystemSettings> {
+    const root = await this.getRootDir();
+    const loopConfigPath = path.join(root, "loop_config.json");
+    const rolesPath = path.join(root, "agent_roles.json");
+    const agentLoopPath = path.join(root, "agent_loop.json");
+    let loopConfig = await this.readJsonAtomic<{
+      providers?: Record<string, ProviderConfig>;
+      toolAccess?: ToolAccessConfig;
+    }>(loopConfigPath) ?? {};
+    if (globalContext && hasLiteralMcpCredentials(loopConfig.toolAccess)) {
+      const lockPath = path.join(root, "settings_write.lock");
+      await this.withFileLock(lockPath, async () => {
+        const latest = await this.readJsonAtomic<{
+          providers?: Record<string, ProviderConfig>;
+          toolAccess?: ToolAccessConfig;
+          [key: string]: unknown;
+        }>(loopConfigPath) ?? {};
+        if (latest.toolAccess && hasLiteralMcpCredentials(latest.toolAccess)) {
+          latest.toolAccess = await this.protectMcpCredentials(latest.toolAccess);
+          await this.writeJsonAtomic(loopConfigPath, latest);
+        }
+        loopConfig = latest;
+      });
+    }
+    const fallbackProviders: Record<string, ProviderConfig> = {
+      opencode: { label: "OpenCode", adapter: "opencode", binary: "opencode", enabled: true, modelsArgs: ["models"], fallbackModels: ["opencode/big-pickle"] },
+      kilo: { label: "Kilo Code", adapter: "kilo", binary: "kilo", enabled: true, modelsArgs: ["models", "--pure"], fallbackModels: ["anthropic/claude-sonnet-4-5"] },
+      codex: { label: "OpenAI GPT / Codex", adapter: "codex", binary: "codex", enabled: true, modelsArgs: [], fallbackModels: ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"] },
+      claude: { label: "Anthropic Claude Code", adapter: "claude", binary: "claude", enabled: true, modelsArgs: [], fallbackModels: ["sonnet", "opus"] },
+    };
+    const storedRoles = await this.readJsonAtomic<AgentRolesDefinition>(rolesPath);
+    const storedLoop = await this.readJsonAtomic<AgentLoopDefinition>(agentLoopPath);
+    if (storedRoles && storedRoles.version !== 1) {
+      throw new Error("Agent roles version must be 1.");
+    }
+    if (storedLoop && storedLoop.version !== 1) {
+      throw new Error("Agent loop version must be 1.");
+    }
+    const pipeline = combinePipelineDefinitions(storedRoles, storedLoop);
+    this.normalizePipelineStageTypes(pipeline);
+    this.stripLegacyRoleToolOverrides(pipeline);
+    const settings: SystemSettings = {
+      providers: { ...fallbackProviders, ...(loopConfig.providers ?? {}) },
+      toolAccess: loopConfig.toolAccess ?? {
+        webSearch: { enabled: false, mode: "cached" },
+        mcpServers: [],
+      },
+      pipeline,
+    };
+    this.validateSystemSettings(settings);
+    return settings;
+  }
+
+  async saveSystemSettings(settings: SystemSettings): Promise<void> {
+    this.normalizePipelineStageTypes(settings.pipeline);
+    this.stripLegacyRoleToolOverrides(settings.pipeline);
+    this.validateSystemSettings(settings);
+    const root = await this.getRootDir();
+    const rolesPath = path.join(root, "agent_roles.json");
+    const loopConfigPath = path.join(root, "loop_config.json");
+    const lockPath = path.join(root, "settings_write.lock");
+    let removedSecrets = new Set<string>();
+    await this.withFileLock(lockPath, async () => {
+      const current = await this.readJsonAtomic<Record<string, unknown> & { toolAccess?: ToolAccessConfig }>(loopConfigPath) ?? {};
+      const previousSecrets = secretReferences(current.toolAccess);
+      const protectedToolAccess = await this.protectMcpCredentials(settings.toolAccess);
+      const nextSecrets = secretReferences(protectedToolAccess);
+      removedSecrets = new Set([...previousSecrets].filter((key) => !nextSecrets.has(key)));
+      current.providers = settings.providers;
+      current.toolAccess = protectedToolAccess;
+      current.$schema = "./loop_config.schema.json";
+      await this.writeJsonAtomic(loopConfigPath, current);
+      await this.writeJsonAtomic(rolesPath, {
+        $schema: "./agent_roles.schema.json",
+        version: 1,
+        roles: settings.pipeline.roles,
+      });
+    });
+    if (globalContext) {
+      await Promise.allSettled([...removedSecrets].map((key) => globalContext!.secrets.delete(key)));
+    }
+    this.registryCache = null;
+    this.notifyListeners();
+  }
+
+  /** Build the one-process-only secret bundle consumed and removed by the core at startup. */
+  async buildCoreSecretEnvironment(): Promise<Record<string, string>> {
+    const settings = await this.readSystemSettings();
+    const references = secretReferences(settings.toolAccess);
+    if (references.size === 0) return {};
+    if (!globalContext) {
+      throw new Error("VS Code SecretStorage is unavailable for configured MCP credentials.");
+    }
+    const values: Record<string, string> = {};
+    for (const key of references) {
+      const value = await globalContext.secrets.get(key);
+      if (value === undefined) {
+        throw new Error(`MCP credential '${key}' is missing. Re-enter it in Agent Loop tool settings.`);
+      }
+      values[key] = value;
+    }
+    return { [CORE_SECRET_VALUES_ENV]: JSON.stringify(values) };
+  }
+
+  private async protectMcpCredentials(toolAccess: ToolAccessConfig): Promise<ToolAccessConfig> {
+    const protectMap = async (
+      serverId: string,
+      scope: "environment" | "headers",
+      values: Record<string, string> | undefined
+    ): Promise<Record<string, string>> => {
+      const protectedValues: Record<string, string> = {};
+      for (const [fieldName, value] of Object.entries(values ?? {})) {
+        if (SECRET_REFERENCE.test(value) || ENV_REFERENCE.test(value)) {
+          protectedValues[fieldName] = value;
+          continue;
+        }
+        if (!globalContext) {
+          throw new Error("VS Code SecretStorage is unavailable; MCP credentials cannot be saved safely.");
+        }
+        const secretKey = mcpSecretStorageKey(serverId, scope, fieldName);
+        await globalContext.secrets.store(secretKey, value);
+        protectedValues[fieldName] = `\${secret:${secretKey}}`;
+      }
+      return protectedValues;
+    };
+
+    return {
+      webSearch: { ...toolAccess.webSearch },
+      mcpServers: await Promise.all(toolAccess.mcpServers.map(async (server) => ({
+        ...server,
+        args: [...(server.args ?? [])],
+        allowedTools: [...(server.allowedTools ?? [])],
+        environment: await protectMap(server.id, "environment", server.environment),
+        headers: await protectMap(server.id, "headers", server.headers),
+      }))),
+    };
+  }
+
+  private validateSystemSettings(settings: SystemSettings): void {
+    const safeId = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
+    const providerIds = Object.keys(settings.providers);
+    if (providerIds.length === 0) throw new Error("At least one provider is required.");
+    for (const [id, provider] of Object.entries(settings.providers)) {
+      if (!safeId.test(id)) throw new Error(`Unsafe provider id: ${id}`);
+      if (!provider.binary?.trim()) throw new Error(`Provider ${id} needs a binary.`);
+      if (!["opencode", "kilo", "codex", "claude"].includes(provider.adapter)) {
+        throw new Error(`Provider ${id} uses an unsupported adapter.`);
+      }
+    }
+    if (!Object.values(settings.providers).some((provider) => provider.enabled)) {
+      throw new Error("At least one provider must be enabled.");
+    }
+    const mcpIds = new Set<string>();
+    for (const server of settings.toolAccess.mcpServers) {
+      if (!safeId.test(server.id)) throw new Error(`Unsafe MCP server id: ${server.id}`);
+      if (mcpIds.has(server.id)) throw new Error(`Duplicate MCP server id: ${server.id}`);
+      mcpIds.add(server.id);
+      if (server.type === "local" && !server.command?.trim()) {
+        throw new Error(`Local MCP server ${server.id} needs a command.`);
+      }
+      if (server.type === "remote" && !/^https?:\/\//i.test(server.url ?? "")) {
+        throw new Error(`Remote MCP server ${server.id} needs an http(s) URL.`);
+      }
+      if (server.timeoutMs !== undefined && (!Number.isFinite(server.timeoutMs) || server.timeoutMs <= 0)) {
+        throw new Error(`MCP server ${server.id} timeout must be positive.`);
+      }
+    }
+    const pipeline = settings.pipeline;
+    if (pipeline.version !== 1 || pipeline.roles.length === 0 || pipeline.stages.length === 0) {
+      throw new Error("Pipeline version 1 requires at least one role and stage.");
+    }
+    const roleIds = new Set<string>();
+    for (const role of pipeline.roles) {
+      if (!safeId.test(role.id) || roleIds.has(role.id)) throw new Error(`Invalid or duplicate role id: ${role.id}`);
+      roleIds.add(role.id);
+      if (!["planner", "implementer", "tester", "qa_lead", "master", "interrupter"].includes(role.modelRole)) {
+        throw new Error(`Role ${role.id} has an invalid template.`);
+      }
+      if (role.provider && !settings.providers[role.provider]) throw new Error(`Role ${role.id} references unknown provider ${role.provider}.`);
+    }
+    const stageTypeIds = new Set<string>();
+    for (const stageType of pipeline.stageTypes ?? []) {
+      if (!safeId.test(stageType.id) || stageTypeIds.has(stageType.id)) {
+        throw new Error(`Invalid or duplicate stage type id: ${stageType.id}`);
+      }
+      if (!STAGE_EXECUTORS.includes(stageType.executor)) {
+        throw new Error(`Stage type ${stageType.id} has an invalid executor.`);
+      }
+      if (!COMPLETION_CONTRACTS.includes(stageType.completionContract)) {
+        throw new Error(`Stage type ${stageType.id} has an invalid completion contract.`);
+      }
+      const expectedContract = completionContractForExecutor(stageType.executor);
+      if (stageType.completionContract !== expectedContract) {
+        throw new Error(`Stage type ${stageType.id} executor ${stageType.executor} requires ${expectedContract}.`);
+      }
+      if (!stageType.label?.trim()) throw new Error(`Stage type ${stageType.id} needs a label.`);
+      stageTypeIds.add(stageType.id);
+    }
+    const stageIds = new Set<string>();
+    for (const stage of pipeline.stages) {
+      if (!safeId.test(stage.id) || stageIds.has(stage.id)) throw new Error(`Invalid or duplicate stage id: ${stage.id}`);
+      if (!roleIds.has(stage.role)) throw new Error(`Stage ${stage.id} references unknown role ${stage.role}.`);
+      if (!stageTypeIds.has(stage.kind)) throw new Error(`Stage ${stage.id} references unknown stage type ${stage.kind}.`);
+      stageIds.add(stage.id);
+    }
+    for (const required of [pipeline.startStageId, pipeline.interruptStageId, pipeline.reentryStageId, pipeline.iterationCompletionStageId]) {
+      if (!stageIds.has(required)) throw new Error(`Pipeline references unknown required stage ${required}.`);
+    }
+    const interruptStage = pipeline.stages.find((stage) => stage.id === pipeline.interruptStageId);
+    const interruptType = pipeline.stageTypes?.find((stageType) => stageType.id === interruptStage?.kind);
+    if (interruptType?.executor !== "interrupt") {
+      throw new Error("The interrupt stage must use the interrupt kind.");
+    }
+    if (!pipeline.stages.some((stage) => stage.countsIteration)) {
+      throw new Error("At least one stage must count an iteration.");
+    }
+    for (const stage of pipeline.stages) {
+      for (const target of [stage.onSuccess, stage.onFailure]) {
+        if (!stageIds.has(target) && target !== "SUCCESS" && target !== "PAUSED") {
+          throw new Error(`Stage ${stage.id} references unknown transition ${target}.`);
+        }
+      }
+    }
+  }
+
+  private normalizePipelineStageTypes(pipeline: PipelineDefinition): void {
+    const legacy = pipeline as PipelineDefinition & { stageTypes?: PipelineStageType[] };
+    if (!Array.isArray(legacy.stageTypes) || legacy.stageTypes.length === 0) {
+      pipeline.stageTypes = defaultStageTypes();
+    }
+  }
+
+  private stripLegacyRoleToolOverrides(pipeline: PipelineDefinition): void {
+    for (const role of pipeline.roles) {
+      const legacy = role as typeof role & { webSearch?: boolean; mcpServers?: string[] };
+      delete legacy.webSearch;
+      delete legacy.mcpServers;
     }
   }
 
@@ -441,6 +822,61 @@ export class StateStore {
   }
 
   async ensureInitialized(): Promise<void> {
+    const root = await this.getRootDir();
+    const settingsLockPath = path.join(root, "settings_write.lock");
+    await this.withFileLock(settingsLockPath, async () => {
+      const pipeline = fixedPipelineDefinition();
+      const context = getGlobalContext();
+      const configurationFiles: Array<[string, unknown]> = [
+        ["agent_roles.json", {
+          $schema: "./agent_roles.schema.json",
+          version: 1,
+          roles: pipeline.roles,
+        }],
+        ["agent_loop.json", {
+          $schema: "./agent_loop.schema.json",
+          version: 1,
+          name: pipeline.name,
+          startStageId: pipeline.startStageId,
+          interruptStageId: pipeline.interruptStageId,
+          reentryStageId: pipeline.reentryStageId,
+          iterationCompletionStageId: pipeline.iterationCompletionStageId,
+          stageTypes: pipeline.stageTypes,
+          stages: pipeline.stages,
+        }],
+      ];
+      for (const [fileName, contents] of configurationFiles) {
+        const target = path.join(root, fileName);
+        const exists = await fs.stat(target).then((stat) => stat.isFile()).catch(() => false);
+        if (exists) continue;
+        const bundledSource = context
+          ? path.join(context.extensionUri.fsPath, "core", fileName)
+          : null;
+        const bundledSourceExists = bundledSource
+          ? await fs.stat(bundledSource).then((stat) => stat.isFile()).catch(() => false)
+          : false;
+        if (bundledSource && bundledSourceExists) {
+          await fs.copyFile(bundledSource, target);
+        } else {
+          await this.writeJsonAtomic(target, contents);
+        }
+      }
+
+      if (context) {
+        for (const schemaName of [
+          "agent_roles.schema.json",
+          "agent_loop.schema.json",
+          "loop_config.schema.json",
+        ]) {
+          const target = path.join(root, schemaName);
+          const exists = await fs.stat(target).then((stat) => stat.isFile()).catch(() => false);
+          if (exists) continue;
+          const source = path.join(context.extensionUri.fsPath, "core", schemaName);
+          const sourceExists = await fs.stat(source).then((stat) => stat.isFile()).catch(() => false);
+          if (sourceExists) await fs.copyFile(source, target);
+        }
+      }
+    });
     const registryPath = await this.getRegistryPath();
     const cfg = await this.getPathsConfig();
     try {
@@ -448,16 +884,7 @@ export class StateStore {
     } catch {
       const root = await this.getRootDir();
       await fs.mkdir(path.join(root, cfg.sessionsRoot), { recursive: true });
-      const empty: SessionRegistry = {
-        version: 1,
-        activeSessionIds: [],
-        availableModels: [],
-        modelsDiscoveredAt: null,
-        modelsDiscoveredCli: null,
-        sessionMetas: [],
-        manualModelsOverride: null,
-        modelVariants: null,
-      };
+      const empty = emptySessionRegistry();
       const lockPath = path.join(path.dirname(registryPath), cfg.registryLockFileName);
       await this.withFileLock(lockPath, async () => {
         try {
@@ -478,90 +905,109 @@ export class StateStore {
       this.registryCache = data;
       return data;
     }
-    if (this.registryCache) {
-      return this.registryCache;
-    }
-    try {
-      await fs.access(registryPath);
-      const backupPath = `${registryPath}.corrupt.${Date.now()}`;
-      try {
-        await fs.copyFile(registryPath, backupPath);
-        console.error(`[StateStore] Corrupted registry at ${registryPath}. Backed up to ${backupPath}.`);
-      } catch {
-        // ignore backup failure
-      }
-      await fs.unlink(registryPath).catch(() => {});
-    } catch {
-      // file doesn't exist, will be created below
-    }
-    await this.ensureInitialized();
-    const fresh = await this.readJsonAtomic<SessionRegistry>(registryPath);
-    if (fresh) {
-      this.registryCache = fresh;
-      return fresh;
-    }
-    const fallback: SessionRegistry = {
-      version: 1,
-      activeSessionIds: [],
-      availableModels: [],
-      modelsDiscoveredAt: null,
-      modelsDiscoveredCli: null,
-      sessionMetas: [],
-      manualModelsOverride: null,
-      modelVariants: null,
-    };
-    this.registryCache = fallback;
-    return fallback;
-  }
-
-  async writeRegistry(registry: SessionRegistry): Promise<void> {
-    const registryPath = await this.getRegistryPath();
     const cfg = await this.getPathsConfig();
     const lockPath = path.join(path.dirname(registryPath), cfg.registryLockFileName);
-    await this.withFileLock(lockPath, () => this.writeJsonAtomic(registryPath, registry));
-    this.registryCache = registry;
-    this.notifyListeners();
+    const recovered = await this.withFileLock(lockPath, async () => {
+      const latest = await this.readJsonAtomic<SessionRegistry>(registryPath);
+      if (latest) return latest;
+      const exists = await fs.stat(registryPath).then((stat) => stat.isFile()).catch(() => false);
+      if (exists) {
+        const backupPath = `${registryPath}.corrupt.${Date.now()}.${randomBytes(4).toString("hex")}`;
+        await fs.rename(registryPath, backupPath);
+        console.error(`[StateStore] Corrupted registry at ${registryPath}. Moved atomically to ${backupPath}.`);
+      }
+      const fallback: SessionRegistry = this.registryCache ?? emptySessionRegistry();
+      await this.writeJsonAtomic(registryPath, fallback);
+      return fallback;
+    });
+    this.registryCache = recovered;
+    await this.reconcileRegistryWithSessionDirectories();
+    return this.registryCache ?? recovered;
   }
 
   async deleteSession(sessionId: string): Promise<{ removedFromRegistry: boolean; dirRemoved: boolean; error?: string }> {
     assertSafeSessionId(sessionId);
     let removedFromRegistry = false;
     let dirRemoved = false;
+    let tombstonePath: string | null = null;
     try {
-      const state = await this.readState(sessionId);
-      if (state?.status === "RUNNING") {
-        return {
-          removedFromRegistry: false,
-          dirRemoved: false,
-          error: "Session is still RUNNING. Stop it and wait for STOPPED acknowledgement before deletion.",
-        };
-      }
+      const sessionDir = await this.getSessionDir(sessionId);
+      const sessionsRoot = path.dirname(sessionDir);
+      const deletionLock = path.join(
+        path.dirname(sessionsRoot),
+        `session_delete_${sessionId}.lock`
+      );
       const registryPath = await this.getRegistryPath();
       const cfg = await this.getPathsConfig();
-      const lockPath = path.join(path.dirname(registryPath), cfg.registryLockFileName);
-      await this.withFileLock(lockPath, async () => {
-        const registry = (await this.readJsonAtomic<SessionRegistry>(registryPath)) ??
-          await this.readRegistry();
-        const before = registry.sessionMetas.length;
-        registry.sessionMetas = registry.sessionMetas.filter((m) => m.sessionId !== sessionId);
-        registry.activeSessionIds = (registry.activeSessionIds || []).filter((id) => id !== sessionId);
-        if (registry.sessionMetas.length < before) {
-          await this.writeJsonAtomic(registryPath, registry);
-          this.registryCache = registry;
-          removedFromRegistry = true;
+      await this.withFileLock(deletionLock, async () => {
+        const state = await this.readState(sessionId);
+        const runtime = await this.inspectLease(sessionId);
+        const activeAttemptPid = state?.activeAttempt &&
+          ["starting", "running", "retry_wait"].includes(state.activeAttempt.status)
+          ? state.activeAttempt.childPid
+          : null;
+        const childPids = new Set(
+          [runtime.lease?.childPid, activeAttemptPid]
+            .filter((pid): pid is number => typeof pid === "number" && pid > 0)
+        );
+        const deletionSafety = assessSessionDeletionSafety(
+          state?.status ?? null,
+          runtime.disposition,
+          [...childPids].map((pid) => processLiveness(pid))
+        );
+        if (!deletionSafety.safe) {
+          throw new Error(
+            `${deletionSafety.reason} Stop the session and wait for ownership/child termination before deletion.`
+          );
+        }
+
+        const sessionExists = await fs.stat(sessionDir).then((stat) => stat.isDirectory()).catch(() => false);
+        if (sessionExists) {
+          const tombstoneRoot = path.join(path.dirname(sessionsRoot), "session_tombstones");
+          await fs.mkdir(tombstoneRoot, { recursive: true });
+          tombstonePath = path.join(
+            tombstoneRoot,
+            `${sessionId}.${Date.now()}.${randomBytes(4).toString("hex")}`
+          );
+          await fs.rename(sessionDir, tombstonePath);
+        }
+
+        const registryLock = path.join(path.dirname(registryPath), cfg.registryLockFileName);
+        try {
+          await this.withFileLock(registryLock, async () => {
+            const registry = await this.readJsonAtomic<SessionRegistry>(registryPath);
+            if (!registry) throw new Error("Session registry is missing or invalid.");
+            const before = registry.sessionMetas.length;
+            registry.sessionMetas = registry.sessionMetas.filter((m) => m.sessionId !== sessionId);
+            registry.activeSessionIds = (registry.activeSessionIds || []).filter((id) => id !== sessionId);
+            if (registry.sessionMetas.length < before) removedFromRegistry = true;
+            await this.writeJsonAtomic(registryPath, registry);
+            this.registryCache = registry;
+          });
+        } catch (err) {
+          if (tombstonePath) {
+            await fs.rename(tombstonePath, sessionDir).catch(() => {});
+            tombstonePath = null;
+          }
+          throw err;
         }
       });
       this.stateCache.delete(sessionId);
-      const sessionDir = await this.getSessionDir(sessionId);
-      try {
-        await fs.rm(sessionDir, { recursive: true, force: true });
+      if (tombstonePath) {
+        try {
+          await fs.rm(tombstonePath, { recursive: true, force: true });
+          dirRemoved = true;
+        } catch (err) {
+          return {
+            removedFromRegistry,
+            dirRemoved: false,
+            error:
+              `Session was detached into a recoverable tombstone but cleanup failed: ` +
+              `${err instanceof Error ? err.message : String(err)}`,
+          };
+        }
+      } else {
         dirRemoved = true;
-      } catch (err) {
-        return {
-          removedFromRegistry,
-          dirRemoved: false,
-          error: `Registry updated but failed to remove session directory: ${err instanceof Error ? err.message : String(err)}`,
-        };
       }
     } catch (err) {
       return {
@@ -626,7 +1072,8 @@ export class StateStore {
     const lockPath = path.join(path.dirname(registryPath), cfg.registryLockFileName);
     const fresh = await this.withFileLock(lockPath, async () => {
       const latest = (await this.readJsonAtomic<SessionRegistry>(registryPath)) ??
-        await this.readRegistry();
+        this.registryCache ??
+        emptySessionRegistry();
       const existing = latest.sessionMetas.find((m) => m.sessionId === sessionId);
       if (existing) {
         existing.status = patch.status;
@@ -711,6 +1158,11 @@ export class StateStore {
     if (data) {
       this.stateCache.set(sessionId, data);
       return data;
+    }
+    const exists = await fs.stat(statePath).then((stat) => stat.isFile()).catch(() => false);
+    if (!exists) {
+      this.stateCache.delete(sessionId);
+      return null;
     }
     return cached ?? null;
   }

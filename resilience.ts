@@ -31,6 +31,7 @@ export type FailureKind =
   | "auth"
   | "model_unavailable"
   | "permission"
+  | "role_violation"
   | "cancelled"
   | "orphaned_process"
   | "unknown";

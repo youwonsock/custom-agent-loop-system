@@ -1,0 +1,203 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://custom-agent-loop.local/schemas/loop_config.schema.json",
+  "title": "Agent Loop Runtime Configuration",
+  "description": "Partial overrides for the built-in agent-loop runtime defaults.",
+  "type": "object",
+  "properties": {
+    "$schema": { "type": "string" },
+    "paths": {
+      "type": "object",
+      "properties": {
+        "sessionsRoot": { "$ref": "#/$defs/relativePath" },
+        "registryFileName": { "$ref": "#/$defs/pathSegment" },
+        "variantsConfigFileName": { "$ref": "#/$defs/pathSegment" },
+        "loopHistoryDirName": { "$ref": "#/$defs/pathSegment" },
+        "sessionFileNames": {
+          "type": "object",
+          "propertyNames": { "$ref": "#/$defs/id" },
+          "additionalProperties": { "$ref": "#/$defs/pathSegment" }
+        },
+        "roomFileNames": {
+          "type": "object",
+          "propertyNames": { "$ref": "#/$defs/id" },
+          "additionalProperties": { "$ref": "#/$defs/pathSegment" }
+        },
+        "roomDirNames": {
+          "type": "object",
+          "propertyNames": { "$ref": "#/$defs/id" },
+          "additionalProperties": { "$ref": "#/$defs/pathSegment" }
+        },
+        "controlDirName": { "$ref": "#/$defs/pathSegment" },
+        "ownerLockFileName": { "$ref": "#/$defs/pathSegment" },
+        "stateLockFileName": { "$ref": "#/$defs/pathSegment" },
+        "leaseFileName": { "$ref": "#/$defs/pathSegment" },
+        "registryLockFileName": { "$ref": "#/$defs/pathSegment" },
+        "attemptLogsDirName": { "$ref": "#/$defs/pathSegment" }
+      },
+      "additionalProperties": false
+    },
+    "defaults": {
+      "type": "object",
+      "properties": {
+        "cliBinary": { "type": "string", "minLength": 1 },
+        "maxIterations": { "$ref": "#/$defs/positiveInteger" },
+        "phaseTimeoutMs": { "$ref": "#/$defs/positiveInteger" },
+        "idleTimeoutMs": { "$ref": "#/$defs/positiveInteger" },
+        "ptyCols": { "$ref": "#/$defs/positiveInteger" },
+        "ptyRows": { "$ref": "#/$defs/positiveInteger" },
+        "profileFallbackModels": {
+          "type": "object",
+          "additionalProperties": { "type": "string", "minLength": 1 }
+        },
+        "transportTimeoutMs": { "$ref": "#/$defs/positiveInteger" },
+        "toolTimeoutMs": { "$ref": "#/$defs/positiveInteger" },
+        "maxAgentAttempts": { "$ref": "#/$defs/positiveInteger" },
+        "maxCompletionRecoveryAttempts": { "type": "integer", "minimum": 0 },
+        "maxAutomaticRecoveryCycles": { "type": "integer", "minimum": 0 },
+        "automaticRecoveryBackoffMs": { "$ref": "#/$defs/millisecondArray" },
+        "retryBackoffMs": { "$ref": "#/$defs/millisecondArray" },
+        "phaseRecoveryBudgetMs": { "$ref": "#/$defs/positiveInteger" },
+        "terminationGraceMs": { "$ref": "#/$defs/positiveInteger" },
+        "killTimeoutMs": { "$ref": "#/$defs/positiveInteger" },
+        "heartbeatIntervalMs": { "$ref": "#/$defs/positiveInteger" },
+        "leaseTtlMs": { "$ref": "#/$defs/positiveInteger" },
+        "maxInMemoryOutputBytes": { "type": "integer", "minimum": 1024 }
+      },
+      "additionalProperties": false
+    },
+    "cliProfiles": {
+      "type": "object",
+      "propertyNames": { "$ref": "#/$defs/id" },
+      "additionalProperties": {
+        "type": "object",
+        "required": ["defaultBinary", "modelsArgs", "interactionWhitelist", "extraInteractionPatterns"],
+        "properties": {
+          "defaultBinary": { "type": "string", "minLength": 1 },
+          "modelsArgs": { "$ref": "#/$defs/stringArray" },
+          "interactionWhitelist": { "$ref": "#/$defs/stringArray" },
+          "extraInteractionPatterns": { "$ref": "#/$defs/stringArray" }
+        },
+        "additionalProperties": false
+      }
+    },
+    "providers": {
+      "type": "object",
+      "propertyNames": { "$ref": "#/$defs/id" },
+      "additionalProperties": { "$ref": "#/$defs/provider" }
+    },
+    "toolAccess": {
+      "type": "object",
+      "required": ["webSearch", "mcpServers"],
+      "properties": {
+        "webSearch": {
+          "type": "object",
+          "required": ["enabled", "mode"],
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "mode": { "enum": ["cached", "live"] }
+          },
+          "additionalProperties": false
+        },
+        "mcpServers": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/mcpServer" }
+        }
+      },
+      "additionalProperties": false
+    },
+    "destructivePrompts": { "$ref": "#/$defs/stringArray" },
+    "variantDefaults": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "array",
+        "items": { "type": "string", "minLength": 1 },
+        "uniqueItems": true
+      }
+    }
+  },
+  "$defs": {
+    "id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"
+    },
+    "pathSegment": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?!\\.{1,2}$)[^\\\\/\\u0000]+$"
+    },
+    "relativePath": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?![A-Za-z]:[\\\\/])(?![\\\\/])(?!.*(?:^|[\\\\/])\\.{1,2}(?:[\\\\/]|$))[^\\u0000]+$"
+    },
+    "positiveInteger": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "millisecondArray": {
+      "type": "array",
+      "items": { "type": "integer", "minimum": 0 }
+    },
+    "stringArray": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "provider": {
+      "type": "object",
+      "properties": {
+        "label": { "type": "string", "minLength": 1 },
+        "adapter": { "enum": ["opencode", "kilo", "codex", "claude"] },
+        "binary": { "type": "string", "minLength": 1 },
+        "enabled": { "type": "boolean" },
+        "modelsArgs": { "$ref": "#/$defs/stringArray" },
+        "fallbackModels": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "interactionWhitelist": { "$ref": "#/$defs/stringArray" }
+      },
+      "additionalProperties": false
+    },
+    "credentialReference": {
+      "type": "string",
+      "pattern": "^\\$\\{(?:env:[A-Za-z_][A-Za-z0-9_]*|secret:[^}]+)\\}$"
+    },
+    "mcpServer": {
+      "type": "object",
+      "required": ["id", "name", "enabled", "type"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "name": { "type": "string", "minLength": 1 },
+        "enabled": { "type": "boolean" },
+        "type": { "enum": ["local", "remote"] },
+        "command": { "type": "string", "minLength": 1 },
+        "args": { "$ref": "#/$defs/stringArray" },
+        "url": { "type": "string", "pattern": "^https?://" },
+        "environment": {
+          "type": "object",
+          "propertyNames": { "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" },
+          "additionalProperties": { "$ref": "#/$defs/credentialReference" }
+        },
+        "headers": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/credentialReference" }
+        },
+        "timeoutMs": { "$ref": "#/$defs/positiveInteger" },
+        "allowedTools": { "$ref": "#/$defs/stringArray" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "type": { "const": "local" } }, "required": ["type"] },
+          "then": { "required": ["command"] }
+        },
+        {
+          "if": { "properties": { "type": { "const": "remote" } }, "required": ["type"] },
+          "then": { "required": ["url"] }
+        }
+      ],
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

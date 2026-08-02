@@ -1,0 +1,19 @@
+{
+  "maxIterations": 20,
+  "phaseTimeoutMs": 900000,
+  "idleTimeoutMs": 300000,
+  "toolTimeoutMs": 600000,
+  "pollIntervalMs": 1000,
+  "transportTimeoutMs": 120000,
+  "phaseRecoveryBudgetMs": 2880000,
+  "maxAgentAttempts": 3,
+  "maxCompletionRecoveryAttempts": 1,
+  "maxAutomaticRecoveryCycles": 3,
+  "automaticRecoveryBackoffMs": [60000, 300000, 900000],
+  "retryBackoffMs": [5000, 30000],
+  "terminationGraceMs": 3000,
+  "killTimeoutMs": 5000,
+  "heartbeatIntervalMs": 5000,
+  "leaseTtlMs": 20000,
+  "maxInMemoryOutputBytes": 1048576
+}

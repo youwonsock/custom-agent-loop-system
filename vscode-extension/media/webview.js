@@ -14,6 +14,7 @@
     modelVariants: null,
     variantDefaults: {},
     cliProfiles: {},
+    systemSettings: { providers: {}, toolAccess: { webSearch: { enabled: false, mode: "cached" }, mcpServers: [] }, pipeline: { roles: [], stages: [] } },
     variantMapping: {},
     runtimeLeaseStatus: null,
   };
@@ -21,7 +22,7 @@
   let logBuffer = "";
   const maxLogSize = 100000;
 
-  const agentRoles = ["planner", "implementer", "tester", "qa_lead", "master", "interrupter"];
+  let agentRoles = ["planner", "implementer", "tester", "qa_lead", "master", "interrupter"];
   const agentRoleLabels = {
     planner: "Planner",
     implementer: "Implementer",
@@ -39,7 +40,11 @@
     INTERRUPT: { role: "interrupter", label: "Interrupter" },
   };
   let modelSelections = {};
+  let providerSelections = {};
   let variantSelections = {};
+  let settingsOpen = false;
+  let settingsDraft = null;
+  let settingsSection = "models";
 
   // Compose mode: when the user explicitly starts a "New Session" flow,
   // lock the view to the composer regardless of existing sessions so typing
@@ -51,7 +56,6 @@
   let composerGoal = "";
   let composerTarget = "";
   let composerAccessMode = "ask";
-  let composerProfile = "opencode";
   let composerInitialized = false;
 
   // Re-render guard: while the user is interacting with a form control
@@ -72,6 +76,15 @@
     const modelsHash = models.length === 0
       ? "empty"
       : `${models.length}|${models[0]}|${models[models.length - 1]}|${state.registry?.modelsDiscoveredCli || ""}`;
+    const providerCatalogHash = Object.values(state.registry?.providerCatalog || {})
+      .map((provider) => [
+        provider.id,
+        provider.enabled,
+        provider.available,
+        (provider.models || []).length,
+        (provider.models || [])[0] || "",
+        (provider.models || []).at(-1) || "",
+      ]);
     return JSON.stringify({
       s: st ? [
         st.status,
@@ -92,11 +105,19 @@
         st.automaticRecovery?.resumeAt,
         st.accessMode,
         st.pendingAccessRequest?.requestId,
+        st.referenceIdentity?.packageId,
+        st.referenceIdentity?.identityMatch,
+        st.referenceIdentity?.confidence,
+        st.requirements?.evidence?.length,
+        st.requirements?.evidence?.at(-1)?.recordedAt,
+        st.convergence?.stagnantCycles,
+        st.convergence?.history?.at(-1)?.signature,
       ] : null,
       sel: state.selectedSessionId,
       run: state.isRunning,
       metas: (state.registry?.sessionMetas || []).map((m) => [m.sessionId, m.status]),
       modelsHash,
+      providerCatalogHash,
       disc: state.registry?.modelsDiscoveredAt,
       notesLen: state.progressNotes.length,
       histLen: (state.history || []).length,
@@ -108,7 +129,9 @@
       variantDefaults: state.variantDefaults,
       runtimeLeaseStatus: state.runtimeLeaseStatus,
       cliProfiles: state.cliProfiles,
+      systemSettings: state.systemSettings,
       modelSelections,
+      providerSelections,
       variantSelections,
     });
   }
@@ -120,6 +143,10 @@
     const hasRegistry = !!state.registry;
     const hasSession = !!state.selectedSessionId || (state.registry?.sessionMetas?.length ?? 0) > 0;
 
+    if (settingsOpen) {
+      renderSettings(root);
+      return;
+    }
     if (composingNew || (!hasRegistry && !hasSession)) {
       renderEmpty(root);
       return;
@@ -127,28 +154,60 @@
     renderActive(root);
   }
 
-  function buildGroupedModels() {
-    const availableModels = state.registry?.availableModels || [];
-    const grouped = {};
-    for (const m of availableModels) {
-      const slashIdx = m.indexOf("/");
-      const provider = slashIdx > 0 ? m.slice(0, slashIdx) : "other";
-      const name = slashIdx > 0 ? m.slice(slashIdx + 1) : m;
-      if (!grouped[provider]) grouped[provider] = [];
-      grouped[provider].push({ value: m, name });
-    }
-    return { grouped, providerNames: Object.keys(grouped).sort() };
+  function providerCatalog() {
+    return state.registry?.providerCatalog || {};
   }
 
-  function buildModelOptions(current, grouped, providerNames) {
-    let html = `<option value="">(auto)</option>`;
-    for (const provider of providerNames) {
-      const items = grouped[provider]
-        .map((it) => `<option value="${escapeHtml(it.value)}"${it.value === current ? " selected" : ""}>${escapeHtml(it.name)}</option>`)
-        .join("");
-      html += `<optgroup label="${escapeHtml(provider)}">${items}</optgroup>`;
+  function availableProviders() {
+    return Object.values(providerCatalog())
+      .filter((provider) => provider.enabled !== false && provider.available === true)
+      .sort((a, b) => String(a.label || a.id).localeCompare(String(b.label || b.id)));
+  }
+
+  function defaultProviderId() {
+    return availableProviders()[0]?.id || "";
+  }
+
+  function resolveProviderId(requested) {
+    return availableProviders().some((provider) => provider.id === requested)
+      ? requested
+      : defaultProviderId();
+  }
+
+  function buildProviderOptions(current) {
+    const providers = availableProviders();
+    if (providers.length === 0) {
+      return `<option value="" selected disabled>No installed provider found</option>`;
+    }
+    const selected = resolveProviderId(current);
+    return providers
+      .map((provider) => `<option value="${escapeHtml(provider.id)}"${provider.id === selected ? " selected" : ""}>${escapeHtml(provider.label || provider.id)} (${(provider.models || []).length})</option>`)
+      .join("");
+  }
+
+  function buildProviderModelOptions(providerId, current) {
+    const provider = providerCatalog()[providerId];
+    if (!providerId || !provider || provider.available !== true) {
+      return `<option value="" selected disabled>Discover an installed provider first</option>`;
+    }
+    const models = [...new Set(provider.models || [])]
+      .sort((a, b) => String(a).localeCompare(String(b)));
+    let html = `<option value="">(auto — provider default)</option>`;
+    if (models.length === 0) {
+      html += `<option value="" disabled>No models reported by this provider</option>`;
+    }
+    for (const model of models) {
+      const displayName = provider.modelLabels?.[model];
+      const label = displayName && displayName !== model ? `${displayName} — ${model}` : model;
+      html += `<option value="${escapeHtml(model)}"${model === current ? " selected" : ""}>${escapeHtml(label)}</option>`;
     }
     return html;
+  }
+
+  function providerCatalogSummary() {
+    const providers = availableProviders();
+    const modelCount = providers.reduce((sum, provider) => sum + (provider.models || []).length, 0);
+    return `${providers.length} installed provider${providers.length === 1 ? "" : "s"} · ${modelCount} models`;
   }
 
   function mapVariantByIndex(currentVariant, oldVariants, newVariants) {
@@ -166,6 +225,10 @@
     if (!modelId) return [];
     const regOverrides = state.modelVariants?.[modelId];
     if (regOverrides) return regOverrides;
+    for (const provider of Object.values(providerCatalog())) {
+      const discovered = provider.modelVariants?.[modelId];
+      if (Array.isArray(discovered) && discovered.length > 0) return discovered;
+    }
     const slashIdx = modelId.indexOf("/");
     const provider = slashIdx > 0 ? modelId.slice(0, slashIdx).toLowerCase() : "";
     var configDefaults = (state.variantDefaults && state.variantDefaults[provider]) || [];
@@ -197,16 +260,29 @@
   }
 
   function buildModelGrid(st) {
-    const { grouped, providerNames } = buildGroupedModels();
     return agentRoles
       .map((role) => {
-        const current = st?.modelMapping?.[role] || modelSelections[role] || "";
+        const roleConfig = state.systemSettings?.pipeline?.roles?.find((item) => item.id === role);
+        const requestedProvider = Object.prototype.hasOwnProperty.call(providerSelections, role)
+          ? providerSelections[role]
+          : st?.providerMapping?.[role] || roleConfig?.provider || defaultProviderId();
+        const provider = resolveProviderId(requestedProvider);
+        const configuredModel = Object.prototype.hasOwnProperty.call(modelSelections, role)
+          ? modelSelections[role]
+          : st?.modelMapping?.[role] || roleConfig?.model || "";
+        const providerModels = providerCatalog()[provider]?.models || [];
+        const current = requestedProvider === provider && providerModels.includes(configuredModel)
+          ? configuredModel
+          : "";
         const label = agentRoleLabels[role] || role;
         return `
           <div class="model-row">
             <label class="model-role">${escapeHtml(label)}</label>
-            <select data-role="${escapeHtml(role)}" class="model-select">
-              ${buildModelOptions(current, grouped, providerNames)}
+            <select data-role="${escapeHtml(role)}" data-field="provider" class="model-select provider-select" aria-label="${escapeHtml(label)} provider" title="Installed agent CLI / model provider">
+              ${buildProviderOptions(provider)}
+            </select>
+            <select data-role="${escapeHtml(role)}" data-field="model" class="model-select model-choice-select" aria-label="${escapeHtml(label)} model" title="Models reported by the selected provider only">
+              ${buildProviderModelOptions(provider, current)}
             </select>
             ${buildVariantSelect(role, current)}
           </div>`;
@@ -214,15 +290,33 @@
       .join("");
   }
 
-  function buildApplyAllHtml() {
-    const { grouped, providerNames } = buildGroupedModels();
-    const allSame = agentRoles.every((r) => (modelSelections[r] || "") === (modelSelections[agentRoles[0]] || ""));
-    const currentBulk = allSame ? (modelSelections[agentRoles[0]] || "") : "";
+  function buildApplyAllHtml(st) {
+    const roleProviders = agentRoles.map((role) => resolveProviderId(
+      Object.prototype.hasOwnProperty.call(providerSelections, role)
+        ? providerSelections[role]
+        : st?.providerMapping?.[role] || state.systemSettings?.pipeline?.roles?.find((item) => item.id === role)?.provider || defaultProviderId()
+    ));
+    const roleModels = agentRoles.map((role) => Object.prototype.hasOwnProperty.call(modelSelections, role)
+      ? modelSelections[role]
+      : st?.modelMapping?.[role] || state.systemSettings?.pipeline?.roles?.find((item) => item.id === role)?.model || "");
+    const allProvidersSame = roleProviders.every((provider) => provider === roleProviders[0]);
+    const currentProvider = allProvidersSame ? roleProviders[0] : defaultProviderId();
+    const allSame = roleModels.every((model) => model === roleModels[0]);
+    const configuredBulk = allSame ? roleModels[0] : "";
+    const currentBulk = (providerCatalog()[currentProvider]?.models || []).includes(configuredBulk)
+      ? configuredBulk
+      : "";
     return `
+      <div class="model-column-headings" aria-hidden="true">
+        <span>Agent role</span><span>Provider / CLI</span><span>Available model</span><span>Variant</span>
+      </div>
       <div class="apply-all-row">
         <label class="apply-all-label">Apply to all</label>
-        <select id="apply-all-model" class="model-select apply-all-select">
-          ${buildModelOptions(currentBulk, grouped, providerNames)}
+        <select id="apply-all-provider" class="model-select apply-all-select provider-select" aria-label="Provider for all agents">
+          ${buildProviderOptions(currentProvider)}
+        </select>
+        <select id="apply-all-model" class="model-select apply-all-select model-choice-select" aria-label="Model for all agents">
+          ${buildProviderModelOptions(currentProvider, currentBulk)}
         </select>
         ${buildVariantSelect("apply-all", currentBulk)}
       </div>`;
@@ -236,21 +330,17 @@
     const rows = compact ? 2 : 4;
     const cancelBtn = composingNew ? `<button class="btn secondary" id="composer-cancel">Cancel</button>` : "";
     const targetPlaceholder = composerTargetDefault() ? "" : "Target project path (current workspace)";
-    const currentProfile = state.state?.cliProfile || state.cliProfile || "opencode";
+    const hasInstalledProvider = availableProviders().length > 0;
     return `
       <div class="${wrapClass}" id="composer">
         <textarea id="composer-goal" class="${textareaClass}" rows="${rows}" placeholder="Describe the goal for the agent loop to achieve... (Ctrl+Enter to start)">${goalVal}</textarea>
         <div class="composer-meta">
           <input type="text" id="composer-target" class="composer-input" placeholder="${targetPlaceholder}" value="${targetVal}" title="Target project path where agents will modify and test code. Defaults to the current workspace folder." />
-          <select id="composer-profile" class="composer-input composer-input-sm" title="CLI profile (command conventions)">
-            <option value="opencode"${currentProfile === "opencode" ? " selected" : ""}>opencode</option>
-            <option value="kilo"${currentProfile === "kilo" ? " selected" : ""}>kilo</option>
-          </select>
           <select id="composer-access-mode" class="composer-input composer-input-sm" title="Filesystem access mode">
             <option value="ask"${composerAccessMode === "ask" ? " selected" : ""}>Ask when needed</option>
             <option value="full_access"${composerAccessMode === "full_access" ? " selected" : ""}>Full access</option>
           </select>
-          <button class="btn" id="composer-start">Start Session</button>
+          <button class="btn" id="composer-start" ${hasInstalledProvider ? "" : "disabled"} title="${hasInstalledProvider ? "Start the agent loop" : "Discover and install at least one supported provider first"}">Start Session</button>
           ${cancelBtn}
         </div>
       </div>`;
@@ -261,21 +351,7 @@
   }
 
   function renderEmpty(root) {
-    const { grouped, providerNames } = buildGroupedModels();
-    const modelGrid = agentRoles
-      .map((role) => {
-        const current = modelSelections[role] || "";
-        const label = agentRoleLabels[role] || role;
-        return `
-          <div class="model-row">
-            <label class="model-role">${escapeHtml(label)}</label>
-            <select data-role="${escapeHtml(role)}" class="model-select">
-              ${buildModelOptions(current, grouped, providerNames)}
-            </select>
-            ${buildVariantSelect(role, current)}
-          </div>`;
-      })
-      .join("");
+    const modelGrid = buildModelGrid(null);
 
     root.innerHTML = `
       <div class="empty-wrap">
@@ -291,6 +367,7 @@
           <div class="model-grid">${modelGrid}</div>
           <div class="composer-actions">
             <button class="btn secondary" id="btn-discover">Discover Models</button>
+            <button class="btn secondary" id="btn-settings">Models & Tools</button>
             <span class="composer-hint">${state.registry?.modelsDiscoveredAt ? "Last discovered: " + escapeHtml(formatDate(state.registry.modelsDiscoveredAt)) : "No models discovered yet."}</span>
           </div>
         </div>
@@ -299,6 +376,8 @@
     bindModelSelects();
     const btnDiscover = document.getElementById("btn-discover");
     if (btnDiscover) btnDiscover.onclick = () => vscode.postMessage({ command: "discoverModels" });
+    const btnSettings = document.getElementById("btn-settings");
+    if (btnSettings) btnSettings.onclick = openSettings;
   }
 
   function renderActive(root) {
@@ -339,6 +418,15 @@
     const attemptDisplay = activeAttempt?.mode === "completion_recovery"
       ? `completion recovery ${activeAttempt.completionRecoveryNumber || 1} / ${st?.resilience?.maxCompletionRecoveryAttempts || 1}`
       : `${activeAttempt?.attemptNumber || 0} / ${Math.min(activeAttempt?.maxAttempts || 0, st?.resilience?.maxAgentAttempts || activeAttempt?.maxAttempts || 0)}`;
+    const latestRequirementStatuses = new Map();
+    for (const evidence of st?.requirements?.evidence || []) {
+      latestRequirementStatuses.set(evidence.requirementId, evidence.status);
+    }
+    const requirementItems = st?.requirements?.items || [];
+    const satisfiedRequirements = requirementItems.filter(
+      (item) => latestRequirementStatuses.get(item.id) === "SATISFIED"
+    ).length;
+    const unresolvedRequirements = requirementItems.length - satisfiedRequirements;
     const statusRows = st
       ? `
         <div class="status-row"><span class="label">Session</span><span class="value">${escapeHtml(st.sessionId)}</span></div>
@@ -348,6 +436,8 @@
         <div class="status-row"><span class="label">Phase</span><span class="value">${escapeHtml(st.phase)}</span></div>
         <div class="status-row"><span class="label">Role</span><span class="value">${escapeHtml(stageDefinition?.role || "unknown")}</span></div>
         <div class="status-row"><span class="label">Loop</span><span class="value">${st.loopCount} started · ${st.completedIterations ?? 0} completed / ${st.maxIterations}</span></div>
+        ${requirementItems.length > 0 ? `<div class="status-row"><span class="label">Requirements</span><span class="value">${satisfiedRequirements} satisfied · ${unresolvedRequirements} unresolved / ${requirementItems.length}</span></div>` : ""}
+        ${st.convergence?.stagnantCycles ? `<div class="status-row"><span class="label">Stagnation</span><span class="value">${st.convergence.stagnantCycles} non-improving cycle(s)</span></div>` : ""}
         ${activeAttempt ? `
         <div class="status-row"><span class="label">Attempt</span><span class="value">${escapeHtml(attemptDisplay)} · ${escapeHtml(activeAttempt.status)}</span></div>
         <div class="status-row"><span class="label">Activity</span><span class="value">${escapeHtml(attemptActivity)}${activityTimeoutMs ? ` · ${Math.round(activityTimeoutMs / 1000)}s timeout` : ""}</span></div>
@@ -359,6 +449,7 @@
         ${st.automaticRecovery ? `<div class="status-row"><span class="label">Auto recovery</span><span class="value">${st.automaticRecovery.cycle} / ${st.automaticRecovery.maxCycles} · ${escapeHtml(formatDate(st.automaticRecovery.resumeAt))}</span></div>` : ""}
         ${st.interruptBriefing ? `<div class="error-queue"><div class="status-row" style="display:block"><span class="label">Local failure briefing</span></div><div class="error-queue-item">${escapeHtml(String(st.interruptBriefing).slice(0, 2000))}</div></div>` : ""}
         <div class="status-row"><span class="label">Goal</span><span class="value" style="text-align:right;max-width:60%;overflow:hidden;text-overflow:ellipsis">${escapeHtml(String(st.goal).slice(0, 80))}</span></div>
+        ${st.referenceIdentity ? `<div class="status-row"><span class="label">Reference</span><span class="value" style="text-align:right;max-width:68%">${escapeHtml(st.referenceIdentity.title)} / ${escapeHtml(st.referenceIdentity.creator)} / ${escapeHtml(st.referenceIdentity.packageId)} <span class="badge success">${escapeHtml(st.referenceIdentity.identityMatch)} · ${escapeHtml(st.referenceIdentity.confidence)}</span></span></div>` : ""}
         <div class="status-row"><span class="label">Target</span><span class="value" style="text-align:right;max-width:60%;overflow:hidden;text-overflow:ellipsis">${escapeHtml(String(st.targetProjectPath).slice(0, 60))}</span></div>
         <div class="status-row"><span class="label">CLI</span><span class="value">${escapeHtml(st.cliProfile || "opencode")} / ${escapeHtml(st.cliBinary || "")}</span></div>
         ${st.errorQueue && st.errorQueue.length > 0 ? `<div class="error-queue"><div class="status-row" style="display:block"><span class="label">Error Queue (Lookback-5):</span></div>${st.errorQueue
@@ -428,14 +519,16 @@
 
     const canResume = st && ["PAUSED", "WAITING_USER", "RECOVERING", "STOPPED", "BLOCKED"].includes(st.status) &&
       !st.pendingAccessRequest && !(st.awaitingPlanApproval && !st.planApproved);
+    const canStop = state.isRunning || st?.status === "RECOVERING";
     root.innerHTML = `
       ${summaryBanner}
       <div class="toolbar">
         <select id="session-select">${sessionOptions}</select>
         <button class="btn secondary" id="btn-resume" ${canResume ? "" : "disabled"}>Resume</button>
-        <button class="btn danger" id="btn-stop" ${(isStopping || !state.isRunning) ? "disabled" : ""}>${isStopping ? "Terminating..." : "Stop"}</button>
+        <button class="btn danger" id="btn-stop" ${(isStopping || !canStop) ? "disabled" : ""}>${isStopping ? "Terminating..." : st?.status === "RECOVERING" ? "Cancel Recovery" : "Stop"}</button>
         <button class="btn danger" id="btn-delete" ${!state.selectedSessionId ? "disabled" : ""} title="Delete this session and all its data">Delete</button>
         <button class="btn secondary" id="btn-discover">Models</button>
+        <button class="btn secondary" id="btn-settings">Settings</button>
         <button class="btn secondary" id="btn-open-notes">Notes</button>
         <button class="btn secondary" id="btn-open-session">Folder</button>
       </div>
@@ -476,6 +569,7 @@
     const btnStop = document.getElementById("btn-stop");
     const btnDelete = document.getElementById("btn-delete");
     const btnDiscover = document.getElementById("btn-discover");
+    const btnSettings = document.getElementById("btn-settings");
     const btnOpenNotes = document.getElementById("btn-open-notes");
     const btnOpenSummary = document.getElementById("btn-open-summary");
     const btnAllowRequested = document.getElementById("btn-allow-requested");
@@ -500,6 +594,7 @@
       if (state.selectedSessionId) vscode.postMessage({ command: "deleteSession", sessionId: state.selectedSessionId });
     };
     if (btnDiscover) btnDiscover.onclick = () => vscode.postMessage({ command: "discoverModels" });
+    if (btnSettings) btnSettings.onclick = openSettings;
     if (btnOpenNotes) btnOpenNotes.onclick = () => {
       if (state.selectedSessionId) vscode.postMessage({ command: "openProgressNotes", sessionId: state.selectedSessionId });
     };
@@ -546,7 +641,12 @@
     document.querySelectorAll("select[data-role]").forEach((sel) => {
       sel.onchange = (e) => {
         const role = e.target.getAttribute("data-role");
-        if (e.target.dataset.field === "variant") {
+        if (e.target.dataset.field === "provider") {
+          providerSelections[role] = e.target.value;
+          modelSelections[role] = "";
+          variantSelections[role] = "";
+          requestRender();
+        } else if (e.target.dataset.field === "variant") {
           if (role === "apply-all") {
             const val = e.target.value;
             for (const r of agentRoles) {
@@ -559,7 +659,7 @@
             variantSelections[role] = e.target.value;
           }
           requestRender();
-        } else {
+        } else if (e.target.dataset.field === "model") {
           var oldModel = modelSelections[role] || "";
           var newModel = e.target.value;
           var oldVariants = oldModel ? getModelVariants(oldModel) : [];
@@ -570,6 +670,15 @@
         }
       };
     });
+    const applyAllProvider = document.getElementById("apply-all-provider");
+    if (applyAllProvider) applyAllProvider.onchange = (e) => {
+      for (const role of agentRoles) {
+        providerSelections[role] = e.target.value;
+        modelSelections[role] = "";
+        variantSelections[role] = "";
+      }
+      requestRender();
+    };
     const applyAll = document.getElementById("apply-all-model");
     if (applyAll) applyAll.onchange = (e) => {
       const val = e.target.value;
@@ -582,7 +691,7 @@
       }
       document.querySelectorAll("select[data-role]").forEach((sel) => {
         const role = sel.getAttribute("data-role");
-        if (!sel.dataset.field && role) sel.value = val;
+        if (sel.dataset.field === "model" && role) sel.value = val;
       });
       document.querySelectorAll("select[data-role][data-field='variant']").forEach((sel) => {
         sel.value = "";
@@ -630,14 +739,6 @@
       accessModeEl.value = composerAccessMode;
       accessModeEl.onchange = (e) => { composerAccessMode = e.target.value; };
     }
-    const profileEl = document.getElementById("composer-profile");
-    if (profileEl) {
-      profileEl.value = composerProfile;
-      profileEl.onchange = (e) => {
-        composerProfile = e.target.value;
-        vscode.postMessage({ command: "setCliProfile", profile: e.target.value });
-      };
-    }
     if (startBtn) startBtn.onclick = () => sendNewSession();
     if (cancelBtn) cancelBtn.onclick = () => cancelCompose();
     composerInitialized = true;
@@ -652,9 +753,16 @@
   function sendNewSession() {
     const goal = composerGoal;
     if (!goal || goal.trim().length === 0) return;
+    const fallbackProvider = defaultProviderId();
+    if (!fallbackProvider) {
+      vscode.postMessage({ command: "discoverModels" });
+      return;
+    }
     const mapping = {};
+    const providerMapping = {};
     for (const role of agentRoles) {
       if (modelSelections[role]) mapping[role] = modelSelections[role];
+      providerMapping[role] = resolveProviderId(providerSelections[role] || fallbackProvider);
     }
     const variantMapping = {};
     for (const role of agentRoles) {
@@ -665,14 +773,195 @@
       goal: goal.trim(),
       targetProjectPath: (composerTarget || composerTargetDefault()).trim(),
       accessMode: composerAccessMode === "full_access" ? "full_access" : "ask",
-      cliProfile: composerProfile || "opencode",
       modelMapping: mapping,
+      providerMapping: providerMapping,
       variantMapping: variantMapping,
     });
     composingNew = false;
     composerGoal = "";
     const goalEl = document.getElementById("composer-goal");
     if (goalEl) goalEl.value = "";
+  }
+
+  function cloneSettings(value) {
+    return JSON.parse(JSON.stringify(value || {}));
+  }
+
+  function openSettings() {
+    settingsDraft = cloneSettings(state.systemSettings);
+    settingsOpen = true;
+    settingsSection = "models";
+    lastStateSig = "";
+    render();
+  }
+
+  function uniqueId(prefix, existing) {
+    let index = 1;
+    while (existing.includes(`${prefix}_${index}`)) index++;
+    return `${prefix}_${index}`;
+  }
+
+  function optionList(values, current) {
+    return values.map((value) => `<option value="${escapeHtml(value)}"${value === current ? " selected" : ""}>${escapeHtml(value)}</option>`).join("");
+  }
+
+  function renderSettings(root) {
+    if (!settingsDraft) settingsDraft = cloneSettings(state.systemSettings);
+    const providers = settingsDraft.providers || {};
+    const tools = settingsDraft.toolAccess || { webSearch: { enabled: false, mode: "cached" }, mcpServers: [] };
+    const pipeline = settingsDraft.pipeline || { version: 1, name: "custom", stageTypes: [], roles: [], stages: [] };
+    const providerCards = Object.entries(providers).map(([id, provider]) => `
+      <div class="settings-item">
+        <div class="settings-item-title"><strong>${escapeHtml(id)}</strong><button class="btn danger compact-btn" data-remove-provider="${escapeHtml(id)}">Remove</button></div>
+        <div class="settings-grid">
+          <label>Enabled <input type="checkbox" data-provider="${escapeHtml(id)}" data-setting-field="enabled" ${provider.enabled !== false ? "checked" : ""}></label>
+          <label>Label <input value="${escapeHtml(provider.label || id)}" data-provider="${escapeHtml(id)}" data-setting-field="label"></label>
+          <label>Adapter <select data-provider="${escapeHtml(id)}" data-setting-field="adapter">${optionList(["opencode", "kilo", "codex", "claude"], provider.adapter)}</select></label>
+          <label>Binary <input value="${escapeHtml(provider.binary || id)}" data-provider="${escapeHtml(id)}" data-setting-field="binary"></label>
+          <label class="wide">Model discovery args (one per line)<textarea rows="2" data-provider="${escapeHtml(id)}" data-setting-field="modelsArgs">${escapeHtml((provider.modelsArgs || []).join("\n"))}</textarea></label>
+          <label class="wide">Models / fallback models (one per line)<textarea rows="3" data-provider="${escapeHtml(id)}" data-setting-field="fallbackModels">${escapeHtml((provider.fallbackModels || []).join("\n"))}</textarea></label>
+        </div>
+      </div>`).join("");
+
+    const mcpCards = (tools.mcpServers || []).map((server, index) => `
+      <div class="settings-item">
+        <div class="settings-item-title"><strong>${escapeHtml(server.id)}</strong><button class="btn danger compact-btn" data-remove-mcp="${index}">Remove</button></div>
+        <div class="settings-grid">
+          <label>Enabled <input type="checkbox" data-mcp="${index}" data-setting-field="enabled" ${server.enabled !== false ? "checked" : ""}></label>
+          <label>Name <input value="${escapeHtml(server.name || server.id)}" data-mcp="${index}" data-setting-field="name"></label>
+          <label>Transport <select data-mcp="${index}" data-setting-field="type">${optionList(["local", "remote"], server.type || "local")}</select></label>
+          <label>Command <input value="${escapeHtml(server.command || "")}" data-mcp="${index}" data-setting-field="command" placeholder="npx"></label>
+          <label class="wide">Arguments (one per line)<textarea rows="2" data-mcp="${index}" data-setting-field="args">${escapeHtml((server.args || []).join("\n"))}</textarea></label>
+          <label class="wide">Remote URL <input value="${escapeHtml(server.url || "")}" data-mcp="${index}" data-setting-field="url" placeholder="https://..."></label>
+          <label>Timeout ms <input type="number" min="1" value="${escapeHtml(server.timeoutMs || 60000)}" data-mcp="${index}" data-setting-field="timeoutMs"></label>
+          <label class="wide">Allowed tool names (one per line; empty = all)<textarea rows="2" data-mcp="${index}" data-setting-field="allowedTools">${escapeHtml((server.allowedTools || []).join("\n"))}</textarea></label>
+          <label class="wide">Environment JSON <textarea rows="2" data-mcp="${index}" data-setting-field="environment">${escapeHtml(JSON.stringify(server.environment || {}, null, 2))}</textarea></label>
+          <label class="wide">Headers JSON <textarea rows="2" data-mcp="${index}" data-setting-field="headers">${escapeHtml(JSON.stringify(server.headers || {}, null, 2))}</textarea></label>
+        </div>
+      </div>`).join("");
+
+    const installedProviders = availableProviders();
+    const installedProviderIds = new Set(installedProviders.map((provider) => provider.id));
+    const modelAssignmentCards = (pipeline.roles || []).map((role, index) => {
+      const selectedProvider = installedProviderIds.has(role.provider) ? role.provider : "";
+      const unavailableProvider = role.provider && !installedProviderIds.has(role.provider)
+        ? `<span class="provider-unavailable">Configured provider '${escapeHtml(role.provider)}' is not installed.</span>`
+        : "";
+      const providerOptions = installedProviders
+        .map((provider) => `<option value="${escapeHtml(provider.id)}"${provider.id === selectedProvider ? " selected" : ""}>${escapeHtml(provider.label || provider.id)} (${(provider.models || []).length})</option>`)
+        .join("");
+      const filteredModel = selectedProvider && (providerCatalog()[selectedProvider]?.models || []).includes(role.model || "")
+        ? role.model || ""
+        : "";
+      const modelOptions = selectedProvider
+        ? buildProviderModelOptions(selectedProvider, filteredModel)
+        : `<option value="" selected>Select a provider first</option>`;
+      return `
+        <div class="settings-item compact-settings-item model-assignment-item">
+          <div class="settings-item-title"><strong>${escapeHtml(role.id)}</strong><span class="composer-hint">${escapeHtml(role.description || role.modelRole)}</span>${unavailableProvider}</div>
+          <div class="settings-grid model-assignment-grid">
+            <label>Provider / CLI <select class="settings-provider-select" data-role-setting="${index}" data-setting-field="provider"><option value="">Per session</option>${providerOptions}</select></label>
+            <label>Available model <select class="settings-model-select" data-role-setting="${index}" data-setting-field="model" ${selectedProvider ? "" : "disabled"}>${modelOptions}</select></label>
+            <label>Variant <input value="${escapeHtml(role.variant || "")}" data-role-setting="${index}" data-setting-field="variant" placeholder="Provider default"></label>
+          </div>
+        </div>`;
+    }).join("");
+
+    const settingsContent = settingsSection === "models"
+      ? `<div class="card settings-section-card" data-settings-section="models">
+          <h3>Model providers / agent CLIs</h3>
+          <p class="composer-hint">Each provider is the installed agent CLI that discovers and runs its own models.</p>
+          ${providerCards}<button class="btn secondary" id="add-provider">Add provider</button>
+          <h3>Agent model assignments</h3>
+          <p class="composer-hint">Choose one installed provider. The model list contains only models owned by that provider.</p>
+          ${modelAssignmentCards}
+        </div>`
+      : `<div class="card settings-section-card" data-settings-section="tools">
+          <h3>Web search</h3>
+          <div class="settings-grid"><label>Web search <input id="web-enabled" type="checkbox" ${tools.webSearch?.enabled ? "checked" : ""}></label><label>Search mode <select id="web-mode">${optionList(["cached", "live"], tools.webSearch?.mode || "cached")}</select></label></div>
+          <h3>MCP servers</h3>
+          ${mcpCards}<button class="btn secondary" id="add-mcp">Add MCP server</button>
+          <p class="settings-global-note">Enabled web search and MCP servers are applied to every agent in the pipeline.</p>
+        </div>`;
+
+    root.innerHTML = `
+      <div class="settings-page">
+        <div class="toolbar sticky-toolbar"><button class="btn secondary" id="settings-back">Back</button><h2>Agent Loop Settings</h2><button class="btn" id="settings-save">Save Settings</button></div>
+        <div class="settings-tabs" role="tablist" aria-label="Agent Loop settings sections">
+          <button class="settings-tab${settingsSection === "models" ? " active" : ""}" data-settings-tab="models" role="tab" aria-selected="${settingsSection === "models"}">Models</button>
+          <button class="settings-tab${settingsSection === "tools" ? " active" : ""}" data-settings-tab="tools" role="tab" aria-selected="${settingsSection === "tools"}">Tools</button>
+        </div>
+        ${settingsContent}
+      </div>`;
+    bindSettings();
+  }
+
+  function listValue(value) {
+    return String(value || "").split(/\r?\n/).map((item) => item.trim()).filter(Boolean);
+  }
+
+  function bindSettings() {
+    const rerenderSettings = () => { lastStateSig = ""; render(); };
+    document.getElementById("settings-back").onclick = () => { settingsOpen = false; settingsDraft = null; lastStateSig = ""; render(); };
+    document.getElementById("settings-save").onclick = () => {
+      vscode.postMessage({ command: "saveSystemSettings", settings: settingsDraft });
+    };
+    document.querySelectorAll("[data-settings-tab]").forEach((button) => button.onclick = () => {
+      settingsSection = button.dataset.settingsTab;
+      rerenderSettings();
+    });
+    const webEnabled = document.getElementById("web-enabled");
+    const webMode = document.getElementById("web-mode");
+    if (webEnabled) webEnabled.onchange = (event) => { settingsDraft.toolAccess.webSearch.enabled = event.target.checked; };
+    if (webMode) webMode.onchange = (event) => { settingsDraft.toolAccess.webSearch.mode = event.target.value; };
+    document.querySelectorAll("[data-provider]").forEach((input) => input.oninput = input.onchange = (event) => {
+      const provider = settingsDraft.providers[event.target.dataset.provider];
+      const field = event.target.dataset.settingField;
+      provider[field] = field === "enabled" ? event.target.checked : ["modelsArgs", "fallbackModels"].includes(field) ? listValue(event.target.value) : event.target.value;
+    });
+    document.querySelectorAll("[data-mcp]").forEach((input) => input.oninput = input.onchange = (event) => {
+      const server = settingsDraft.toolAccess.mcpServers[Number(event.target.dataset.mcp)];
+      const field = event.target.dataset.settingField;
+      try {
+        server[field] = field === "enabled" ? event.target.checked
+          : ["args", "allowedTools"].includes(field) ? listValue(event.target.value)
+          : ["environment", "headers"].includes(field) ? JSON.parse(event.target.value || "{}")
+          : field === "timeoutMs" ? Number(event.target.value) : event.target.value;
+        event.target.setCustomValidity("");
+      } catch {
+        event.target.setCustomValidity("Enter a valid JSON object.");
+      }
+    });
+    document.querySelectorAll("[data-role-setting]").forEach((input) => input.oninput = input.onchange = (event) => {
+      const role = settingsDraft.pipeline.roles[Number(event.target.dataset.roleSetting)];
+      const field = event.target.dataset.settingField;
+      if (field === "provider") {
+        if (event.target.value) role.provider = event.target.value;
+        else delete role.provider;
+        delete role.model;
+        delete role.variant;
+        rerenderSettings();
+        return;
+      }
+      if (["provider", "model", "variant"].includes(field) && !event.target.value) {
+        delete role[field];
+      } else role[field] = event.target.value;
+    });
+    document.querySelectorAll("[data-remove-provider]").forEach((button) => button.onclick = () => { delete settingsDraft.providers[button.dataset.removeProvider]; rerenderSettings(); });
+    document.querySelectorAll("[data-remove-mcp]").forEach((button) => button.onclick = () => { settingsDraft.toolAccess.mcpServers.splice(Number(button.dataset.removeMcp), 1); rerenderSettings(); });
+    const addProvider = document.getElementById("add-provider");
+    if (addProvider) addProvider.onclick = () => {
+      const id = uniqueId("provider", Object.keys(settingsDraft.providers));
+      settingsDraft.providers[id] = { label: id, adapter: "opencode", binary: "opencode", enabled: true, modelsArgs: ["models"], fallbackModels: [] };
+      rerenderSettings();
+    };
+    const addMcp = document.getElementById("add-mcp");
+    if (addMcp) addMcp.onclick = () => {
+      const ids = settingsDraft.toolAccess.mcpServers.map((server) => server.id);
+      const id = uniqueId("mcp", ids);
+      settingsDraft.toolAccess.mcpServers.push({ id, name: id, enabled: true, type: "local", command: "npx", args: [], environment: {}, headers: {}, allowedTools: [], timeoutMs: 60000 });
+      rerenderSettings();
+    };
   }
 
   function focusComposer() {
@@ -752,13 +1041,16 @@
     if (!msg || !msg.command) return;
 
     if (msg.command === "stateUpdate") {
+      state = msg.payload;
+      const configuredRoles = state.systemSettings?.pipeline?.roles || [];
+      if (configuredRoles.length > 0) {
+        agentRoles = configuredRoles.map((role) => role.id);
+        for (const role of configuredRoles) agentRoleLabels[role.id] = role.description || role.id;
+      }
       if (msg.payload.selectedSessionId !== prevSelectedSessionId) {
         prevSelectedSessionId = msg.payload.selectedSessionId;
-        if (msg.payload.selectedSessionId && msg.payload.state?.cliProfile) {
-          composerProfile = msg.payload.state.cliProfile;
-        } else if (!msg.payload.selectedSessionId) {
-          composerProfile = msg.payload.cliProfile || "opencode";
-        }
+        modelSelections = { ...(msg.payload.state?.modelMapping || modelSelections) };
+        providerSelections = { ...(msg.payload.state?.providerMapping || providerSelections) };
         if (msg.payload.variantMapping) {
           variantSelections = { ...msg.payload.variantMapping };
         } else {
@@ -768,7 +1060,6 @@
       if (stoppingSessionId && (!msg.payload.isRunning || msg.payload.selectedSessionId !== stoppingSessionId)) {
         stoppingSessionId = null;
       }
-      state = msg.payload;
       requestRender();
     } else if (msg.command === "logAppend") {
       const text = msg.entry.text;

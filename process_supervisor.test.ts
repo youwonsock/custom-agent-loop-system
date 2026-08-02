@@ -5,11 +5,14 @@ import * as path from "node:path";
 
 interface CaseResult {
   outcome: string;
+  failureKind: string | null;
+  failureMessage: string | null;
   exitCode: number;
   assistantText: string;
   cliSessionId: string | null;
   eventsCount: number;
   eventBytes: number;
+  rawLogIncludesSecret: boolean;
 }
 
 function runFake(
@@ -68,6 +71,22 @@ test("raw prompt echo cannot become assistant completion", async () => {
   assert.equal(result.assistantText, "");
 });
 
+test("configured secrets are redacted from raw logs and assistant text", async () => {
+  const result = await runFake("secret-echo");
+  assert.equal(result.outcome, "succeeded");
+  assert.equal(result.rawLogIncludesSecret, false);
+  assert.equal(result.assistantText.includes("top-secret"), false);
+  assert.match(result.assistantText, /\[REDACTED\]/);
+});
+
+test("configured secrets remain redacted when split across PTY chunks", async () => {
+  const result = await runFake("split-secret-echo");
+  assert.equal(result.outcome, "succeeded");
+  assert.equal(result.rawLogIncludesSecret, false);
+  assert.equal(result.assistantText.includes("top-secret"), false);
+  assert.match(result.assistantText, /\[REDACTED\]/);
+});
+
 test("PTY-wrapped JSON events are reassembled before assistant parsing", async () => {
   const result = await runFake("planner", { cols: 60 });
   assert.equal(result.outcome, "succeeded");
@@ -80,6 +99,17 @@ test("no-output and spinner hangs terminate through separate watchdogs", async (
   assert.equal(noOutput.outcome, "transport_timeout");
   const spinner = await runFake("spinner", { transport: 500, idle: 120, phase: 1_000 });
   assert.equal(spinner.outcome, "idle_timeout");
+});
+
+test("interactive access prompts fail fast instead of being auto-approved or timing out", async () => {
+  const result = await runFake("permission-prompt", {
+    transport: 500,
+    idle: 2_000,
+    phase: 3_000,
+  });
+  assert.equal(result.outcome, "process_exit");
+  assert.equal(result.failureKind, "permission");
+  assert.match(result.failureMessage ?? "", /interactive filesystem\/tool access/i);
 });
 
 test("initial transport timeout stops after connection and model generation gets its own budget", async () => {
@@ -109,7 +139,9 @@ test("meaningful progress renews the phase window up to the absolute recovery de
 
 test("an active tool uses the longer tool timeout and reports tool_timeout when stalled", async () => {
   const completed = await runFake("delayed-tool", {
-    transport: 100,
+    // Process startup can exceed 100ms while the full test suite runs in parallel.
+    // Keep this test focused on the idle-vs-tool timeout distinction.
+    transport: 750,
     idle: 120,
     tool: 500,
     phase: 1_000,
@@ -117,7 +149,7 @@ test("an active tool uses the longer tool timeout and reports tool_timeout when 
   assert.equal(completed.outcome, "succeeded");
 
   const stalled = await runFake("tool-hang", {
-    transport: 100,
+    transport: 750,
     idle: 500,
     tool: 120,
     phase: 1_000,

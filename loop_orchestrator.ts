@@ -3,19 +3,17 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as crypto from "node:crypto";
-import { execFile } from "node:child_process";
+import { ChildProcessWithoutNullStreams, execFile, spawn } from "node:child_process";
 import * as fse from "fs-extra";
 import {
   AgentAttemptState,
   AttemptFailure,
   ClaimedControlRequest,
   ControlQueuePaths,
-  ControlRequest,
   FailureKind,
   SessionOwnership,
   SessionOwnershipAcquireResult,
   assertSafeSessionId,
-  atomicWriteJsonFile,
   backupFileOnce,
   checkProcessLiveness,
   claimNextControlRequest,
@@ -25,7 +23,6 @@ import {
   ensureControlQueue,
   getControlQueuePaths,
   importLegacyControlFiles,
-  readJsonFile,
   recoverClaimedControlRequests,
   resolveContainedSessionPath,
   withShortFileLock,
@@ -36,16 +33,80 @@ import {
 } from "./process_supervisor";
 import {
   BuiltinModelRole,
+  PipelineCompletionContract,
   PipelineDefinition,
   PipelineRole,
   PipelineStage,
+  PipelineStageExecutor,
+  PipelineStageType,
+  defaultAgentLoopDefinition,
+  defaultAgentRolesDefinition,
   defaultPipelineDefinition,
+  executorForStage,
   loadPipelineDefinition,
+  loadSeparatedPipelineDefinition,
   roleForStage,
   stageById,
+  stageTypeForStage,
   validatePipeline,
 } from "./pipeline";
 import { AgentAttemptRunner } from "./agent_attempt_runner";
+import {
+  ProviderConfig,
+  ToolAccessConfig,
+  buildProviderInvocation,
+  claudeMcpDocument,
+  enabledMcpServers,
+  normalizeProviders,
+  resolveMcpServerSecrets,
+  validateToolAccess,
+} from "./provider_runtime";
+import {
+  ConvergenceState,
+  RequirementEvidenceRecord,
+  RequirementLedger,
+  advanceConvergence,
+  deriveRequirementLedger,
+  evaluateRequirementCoverage,
+  latestRequirementStatuses,
+  parseRequirementEvidence,
+} from "./requirement_ledger";
+import {
+  LoopConfig,
+  getDefaultConfig,
+  loadLoopConfig,
+} from "./runtime_config";
+export {
+  advanceConvergence,
+  deriveRequirementLedger,
+  evaluateRequirementCoverage,
+  parseRequirementEvidence,
+} from "./requirement_ledger";
+
+const CORE_SECRET_VALUES_ENV = "AGENT_LOOP_SECRET_VALUES";
+
+function consumeCoreSecretValues(): Record<string, string> {
+  const raw = process.env[CORE_SECRET_VALUES_ENV];
+  delete process.env[CORE_SECRET_VALUES_ENV];
+  if (!raw) return {};
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw new Error("secret bundle must be an object");
+    }
+    const values: Record<string, string> = {};
+    for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
+      if (typeof value !== "string") throw new Error(`secret '${key}' is not a string`);
+      values[key] = value;
+    }
+    return values;
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err);
+    throw new Error(`Invalid Agent Loop secret bundle: ${reason}`);
+  }
+}
+
+const CORE_SECRET_VALUES = consumeCoreSecretValues();
 
 function resolveCmdToExe(cmdPath: string): string {
   try {
@@ -66,6 +127,23 @@ function resolveBinaryOnWindows(binary: string): string {
   if (process.platform !== "win32") return binary;
   if (path.extname(binary).length > 0) return binary;
   if (path.isAbsolute(binary) && fs.existsSync(binary)) return binary;
+  if (binary.toLowerCase() === "codex") {
+    const architecture = process.arch === "arm64"
+      ? { packageName: "codex-win32-arm64", target: "aarch64-pc-windows-msvc" }
+      : { packageName: "codex-win32-x64", target: "x86_64-pc-windows-msvc" };
+    const bundledCodex = path.resolve(
+      __dirname,
+      "..",
+      "node_modules",
+      "@openai",
+      architecture.packageName,
+      "vendor",
+      architecture.target,
+      "bin",
+      "codex.exe"
+    );
+    if (fs.existsSync(bundledCodex)) return bundledCodex;
+  }
   const pathExt = process.env.PATHEXT || ".COM;.EXE;.BAT;.CMD;.VBS;.JS;.WS;.MSC";
   const extensions = pathExt.split(";").filter((e) => e.length > 0);
   const pathDirs = (process.env.PATH || "").split(path.delimiter).filter((d) => d.length > 0);
@@ -151,9 +229,12 @@ interface LoopState {
   accessMode: AccessMode;
   pendingAccessRequest: PendingAccessRequest | null;
   modelMapping: ModelMapping;
+  providerMapping: Record<string, string>;
+  providerConfigs: Record<string, ProviderConfig>;
   errorQueue: ErrorSignature[];
   agentStates: Record<string, AgentState>;
   refinedGoal: string | null;
+  referenceIdentity: ReferenceIdentity | null;
   planningComplete: boolean;
   masterApproved: boolean;
   awaitingPlanApproval: boolean;
@@ -169,6 +250,7 @@ interface LoopState {
   cliBinary: string;
   cliProfile: string;
   variantMapping: VariantMapping;
+  toolAccess: ToolAccessConfig;
   lastFailureDigest: string | null;
   interruptMessage?: string;
   interruptBriefing?: string | null;
@@ -184,6 +266,8 @@ interface LoopState {
   pipeline: PipelineDefinition;
   pipelineConfigPath: string | null;
   stageResults: Record<string, StageResultState>;
+  requirements: RequirementLedger;
+  convergence: ConvergenceState;
 }
 
 interface AutomaticRecoveryState {
@@ -199,6 +283,7 @@ interface StageResultState {
   stageId: string;
   role: string;
   kind: string;
+  executor?: PipelineStageExecutor;
   completedAt: string;
   output: string;
   verdict: "PASS" | "FAIL" | "APPROVED" | "REJECTED" | null;
@@ -245,204 +330,21 @@ interface SessionRegistry {
   sessionMetas: SessionMeta[];
   manualModelsOverride: string[] | null;
   modelVariants: Record<string, string[]> | null;
+  providerCatalog?: Record<string, ProviderCatalogEntry>;
 }
 
-interface LoopPathsConfig {
-  sessionsRoot: string;
-  registryFileName: string;
-  variantsConfigFileName: string;
-  loopHistoryDirName: string;
-  sessionFileNames: {
-    state: string;
-    progressNotes: string;
-    finalSummary: string;
-    plan: string;
-    planChoices: string;
-    planOverview: string;
-    planOptionsDir: string;
-    interruptMessage: string;
-    stopRequest: string;
-  };
-  roomFileNames: {
-    state: string;
-    skills: string;
-    input: string;
-    output: string;
-  };
-  roomDirNames: Record<string, string>;
-  controlDirName: string;
-  ownerLockFileName: string;
-  stateLockFileName: string;
-  leaseFileName: string;
-  registryLockFileName: string;
-  attemptLogsDirName: string;
-}
-
-interface LoopDefaultsConfig {
-  cliBinary: string;
-  maxIterations: number;
-  phaseTimeoutMs: number;
-  idleTimeoutMs: number;
-  ptyCols: number;
-  ptyRows: number;
-  profileFallbackModels: Record<string, string>;
-  transportTimeoutMs: number;
-  toolTimeoutMs: number;
-  maxAgentAttempts: number;
-  maxCompletionRecoveryAttempts: number;
-  maxAutomaticRecoveryCycles: number;
-  automaticRecoveryBackoffMs: number[];
-  retryBackoffMs: number[];
-  phaseRecoveryBudgetMs: number;
-  terminationGraceMs: number;
-  killTimeoutMs: number;
-  heartbeatIntervalMs: number;
-  leaseTtlMs: number;
-  maxInMemoryOutputBytes: number;
-}
-
-interface LoopCliProfileConfig {
-  defaultBinary: string;
-  modelsArgs: string[];
-  interactionWhitelist: string[];
-  extraInteractionPatterns: string[];
-}
-
-interface LoopConfig {
-  paths: LoopPathsConfig;
-  defaults: LoopDefaultsConfig;
-  cliProfiles: Record<string, LoopCliProfileConfig>;
-  destructivePrompts: string[];
-  variantDefaults: Record<string, string[]>;
-}
-
-function getDefaultConfig(): LoopConfig {
-  return {
-    paths: {
-      sessionsRoot: ".goal/sessions",
-      registryFileName: "sessions_registry.json",
-      variantsConfigFileName: "model_variants.json",
-      loopHistoryDirName: "loop_history",
-      sessionFileNames: {
-        state: "loop_state.json",
-        progressNotes: "progress_notes.txt",
-        finalSummary: "final_summary.json",
-        plan: "plan.md",
-        planChoices: "plan_choices.json",
-        planOverview: "plan_options.md",
-        planOptionsDir: "plan_options",
-        interruptMessage: "interrupt_message.txt",
-        stopRequest: "stop_request.txt",
-      },
-      roomFileNames: {
-        state: "state.json",
-        skills: "skills.json",
-        input: "input.json",
-        output: "output.json",
-      },
-      roomDirNames: {
-        planner: "0_planner",
-        implementer: "1_implementer",
-        tester: "2_tester",
-        qa_lead: "3_qa_lead",
-        master: "4_master",
-        interrupter: "5_interrupter",
-      },
-      controlDirName: "control",
-      ownerLockFileName: "session_owner.lock",
-      stateLockFileName: "state_write.lock",
-      leaseFileName: "session_lease.json",
-      registryLockFileName: "registry.lock",
-      attemptLogsDirName: "attempt_logs",
-    },
-    defaults: {
-      cliBinary: "opencode",
-      maxIterations: 20,
-      phaseTimeoutMs: 15 * 60 * 1000,
-      idleTimeoutMs: 5 * 60 * 1000,
-      ptyCols: 200,
-      ptyRows: 50,
-      profileFallbackModels: {
-        opencode: "opencode/big-pickle",
-        kilo: "anthropic/claude-sonnet-4-5",
-        _default: "anthropic/claude-sonnet-4-5",
-      },
-      transportTimeoutMs: 2 * 60 * 1000,
-      toolTimeoutMs: 10 * 60 * 1000,
-      maxAgentAttempts: 3,
-      maxCompletionRecoveryAttempts: 1,
-      maxAutomaticRecoveryCycles: 3,
-      automaticRecoveryBackoffMs: [60_000, 5 * 60_000, 15 * 60_000],
-      retryBackoffMs: [5_000, 30_000],
-      phaseRecoveryBudgetMs: 48 * 60 * 1000,
-      terminationGraceMs: 3_000,
-      killTimeoutMs: 5_000,
-      heartbeatIntervalMs: 5_000,
-      leaseTtlMs: 20_000,
-      maxInMemoryOutputBytes: 1024 * 1024,
-    },
-    cliProfiles: {},
-    destructivePrompts: [
-      "Delete", "Remove all", "Destroy", "Force overwrite",
-      "git clean", "git checkout --", "git reset --hard",
-      "Drop table", "Drop database",
-    ],
-    variantDefaults: {
-      anthropic: ["high", "max"],
-      openai: ["none", "minimal", "low", "medium", "high", "xhigh"],
-      google: ["low", "high"],
-      gemini: ["low", "high"],
-      opencode: ["none", "minimal", "low", "medium", "high", "xhigh"],
-      "opencode-go": ["none", "minimal", "low", "medium", "high", "xhigh"],
-      kilo: ["none", "minimal", "low", "medium", "high", "xhigh"],
-      deepseek: ["low", "medium", "high", "max"],
-    },
-  };
-}
-
-function mergeConfig(defaults: LoopConfig, overrides: Partial<LoopConfig>): LoopConfig {
-  const overridePaths = overrides.paths;
-  return {
-    paths: {
-      ...defaults.paths,
-      ...overridePaths,
-      sessionFileNames: {
-        ...defaults.paths.sessionFileNames,
-        ...overridePaths?.sessionFileNames,
-      },
-      roomFileNames: {
-        ...defaults.paths.roomFileNames,
-        ...overridePaths?.roomFileNames,
-      },
-      roomDirNames: {
-        ...defaults.paths.roomDirNames,
-        ...overridePaths?.roomDirNames,
-      },
-    } as LoopPathsConfig,
-    defaults: {
-      ...defaults.defaults,
-      ...overrides.defaults,
-      profileFallbackModels: {
-        ...defaults.defaults.profileFallbackModels,
-        ...overrides.defaults?.profileFallbackModels,
-      },
-    } as LoopDefaultsConfig,
-    cliProfiles: { ...defaults.cliProfiles, ...overrides.cliProfiles },
-    destructivePrompts: overrides.destructivePrompts ?? defaults.destructivePrompts,
-    variantDefaults: { ...defaults.variantDefaults, ...overrides.variantDefaults },
-  };
-}
-
-async function loadLoopConfig(rootDir: string): Promise<LoopConfig> {
-  const cfgPath = path.join(rootDir, "loop_config.json");
-  const defaults = getDefaultConfig();
-  try {
-    const raw = await fse.readFile(cfgPath, "utf-8");
-    const overrides = JSON.parse(raw) as Partial<LoopConfig>;
-    return mergeConfig(defaults, overrides);
-  } catch {
-    return defaults;
-  }
+interface ProviderCatalogEntry {
+  id: string;
+  label: string;
+  adapter: ProviderConfig["adapter"];
+  binary: string;
+  enabled: boolean;
+  available: boolean;
+  models: string[];
+  modelLabels?: Record<string, string>;
+  modelVariants?: Record<string, string[]>;
+  discoveredAt: string | null;
+  error: string | null;
 }
 
 function cliProfileFromConfig(config: LoopConfig, profileName: string, binaryLower: string): CliProfile {
@@ -452,31 +354,17 @@ function cliProfileFromConfig(config: LoopConfig, profileName: string, binaryLow
       name: profileName || binaryLower,
       defaultBinary: profileCfg.defaultBinary,
       modelsArgs: profileCfg.modelsArgs,
-      buildRunArgs: (opts) => {
-        const args = [
-          "run", "--format", "json",
-          "--model", opts.model,
-          "--dir", opts.targetProjectPath,
-        ];
-        if (profileName === "kilo") {
-          args.push("--auto", "--pure");
-        } else {
-          args.push("--dangerously-skip-permissions");
-        }
-        if (opts.variant) args.push("--variant", opts.variant);
-        if (opts.resumeSessionId) args.push("--session", opts.resumeSessionId);
-        args.push(opts.prompt);
-        return args;
-      },
       interactionWhitelist: profileCfg.interactionWhitelist,
     };
   }
-  return profileName === "kilo" ? KILO_PROFILE : OPENCODE_PROFILE;
+  return CLI_PROFILES[profileName] ?? CLI_PROFILES[binaryLower] ?? OPENCODE_PROFILE;
 }
 
 interface HandoffPayload {
   sessionId: string;
-  refinedGoal: string;
+  originalGoal: string;
+  approvedPlan: string | null;
+  lockedReferenceIdentity: ReferenceIdentity | null;
   targetProjectPath: string;
   additionalAllowedPaths: string[];
   accessMode: AccessMode;
@@ -484,9 +372,21 @@ interface HandoffPayload {
   failureDigest: string | null;
   phase: string;
   loopCount: number;
+  toolAccess?: ToolAccessConfig;
   interruptMessage?: string;
   planRevised?: boolean;
   failureEvidence?: FailureEvidenceSummary | null;
+  requirements?: RequirementLedger;
+}
+
+export interface ReferenceIdentity {
+  title: string;
+  creator: string;
+  packageId: string;
+  canonicalUrl: string;
+  candidateCount: number;
+  identityMatch: "EXACT" | "AMBIGUOUS" | "SIMILAR" | "UNKNOWN";
+  confidence: "HIGH" | "MEDIUM" | "LOW";
 }
 
 interface AttemptEvidenceSummary {
@@ -646,6 +546,21 @@ class ImplementationPreflightError extends Error {
 }
 
 const SENTINEL = "[PHASE_DONE]";
+const MAX_RETAINED_HISTORY_FILES = 250;
+const MAX_RETAINED_ATTEMPT_LOGS = 50;
+const MAX_HISTORY_OUTPUT_BYTES = 512 * 1024;
+
+function boundedHistoryOutput(value: string): string {
+  const bytes = Buffer.from(value, "utf8");
+  if (bytes.length <= MAX_HISTORY_OUTPUT_BYTES) return value;
+  const marker = "\n[AGENT_LOOP_HISTORY_OUTPUT_TRUNCATED]\n";
+  const markerBytes = Buffer.byteLength(marker, "utf8");
+  const headBytes = Math.floor((MAX_HISTORY_OUTPUT_BYTES - markerBytes) / 4);
+  const tailBytes = MAX_HISTORY_OUTPUT_BYTES - markerBytes - headBytes;
+  const head = bytes.subarray(0, headBytes).toString("utf8").replace(/\uFFFD$/, "");
+  const tail = bytes.subarray(bytes.length - tailBytes).toString("utf8").replace(/^\uFFFD/, "");
+  return `${head}${marker}${tail}`;
+}
 
 const INTERACTION_WHITELIST: string[] = [
   "Apply changes? [y/n]",
@@ -662,29 +577,10 @@ const INTERACTION_WHITELIST: string[] = [
   "Do you want to apply",
 ];
 
-const DESTRUCTIVE_PROMPTS: string[] = [
-  "Delete",
-  "Remove all",
-  "Destroy",
-  "Force overwrite",
-  "git clean",
-  "git checkout --",
-  "git reset --hard",
-  "Drop table",
-  "Drop database",
-];
-
 interface CliProfile {
   name: string;
   defaultBinary: string;
   modelsArgs: string[];
-  buildRunArgs: (opts: {
-    model: string;
-    targetProjectPath: string;
-    prompt: string;
-    variant?: string;
-    resumeSessionId?: string;
-  }) => string[];
   interactionWhitelist: string[];
 }
 
@@ -692,19 +588,6 @@ const OPENCODE_PROFILE: CliProfile = {
   name: "opencode",
   defaultBinary: "opencode",
   modelsArgs: ["models"],
-  buildRunArgs: (opts) => {
-    const args = [
-      "run",
-      "--format", "json",
-      "--model", opts.model,
-      "--dir", opts.targetProjectPath,
-      "--dangerously-skip-permissions",
-    ];
-    if (opts.variant) args.push("--variant", opts.variant);
-    if (opts.resumeSessionId) args.push("--session", opts.resumeSessionId);
-    args.push(opts.prompt);
-    return args;
-  },
   interactionWhitelist: INTERACTION_WHITELIST,
 };
 
@@ -712,20 +595,6 @@ const KILO_PROFILE: CliProfile = {
   name: "kilo",
   defaultBinary: "kilo",
   modelsArgs: ["models", "--pure"],
-  buildRunArgs: (opts) => {
-    const args = [
-      "run",
-      "--auto",
-      "--pure",
-      "--format", "json",
-      "--model", opts.model,
-      "--dir", opts.targetProjectPath,
-    ];
-    if (opts.variant) args.push("--variant", opts.variant);
-    if (opts.resumeSessionId) args.push("--session", opts.resumeSessionId);
-    args.push(opts.prompt);
-    return args;
-  },
   interactionWhitelist: [
     ...INTERACTION_WHITELIST,
     "Action Required",
@@ -734,9 +603,25 @@ const KILO_PROFILE: CliProfile = {
   ],
 };
 
+const CODEX_PROFILE: CliProfile = {
+  name: "codex",
+  defaultBinary: "codex",
+  modelsArgs: [],
+  interactionWhitelist: INTERACTION_WHITELIST,
+};
+
+const CLAUDE_PROFILE: CliProfile = {
+  name: "claude",
+  defaultBinary: "claude",
+  modelsArgs: [],
+  interactionWhitelist: INTERACTION_WHITELIST,
+};
+
 const CLI_PROFILES: Record<string, CliProfile> = {
   opencode: OPENCODE_PROFILE,
   kilo: KILO_PROFILE,
+  codex: CODEX_PROFILE,
+  claude: CLAUDE_PROFILE,
 };
 
 function resolveCliProfile(profileName: string | null, binaryName: string): CliProfile {
@@ -754,22 +639,26 @@ function resolveCliProfile(profileName: string | null, binaryName: string): CliP
   return OPENCODE_PROFILE;
 }
 
-function getModelVariants(modelId: string, registry?: SessionRegistry): string[] {
-  const slashIdx = modelId.indexOf("/");
-  const provider = slashIdx > 0 ? modelId.slice(0, slashIdx).toLowerCase() : "";
-  if (registry?.modelVariants?.[modelId]) {
-    return registry.modelVariants[modelId];
-  }
-  return loopConfig.variantDefaults[provider] ?? [];
-}
-
 async function loadModelVariantsConfig(rootDir: string): Promise<Record<string, string[]> | null> {
   const cfgPath = path.join(rootDir, loopConfig.paths.variantsConfigFileName);
   try {
     const raw = await fse.readFile(cfgPath, "utf-8");
-    return JSON.parse(raw);
-  } catch {
-    return null;
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw new Error("the root value must be an object");
+    }
+    const normalized: Record<string, string[]> = {};
+    for (const [model, variants] of Object.entries(parsed as Record<string, unknown>)) {
+      if (!model.trim() || !Array.isArray(variants) || variants.some((value) => typeof value !== "string" || !value)) {
+        throw new Error(`invalid variant list for model '${model}'`);
+      }
+      normalized[model] = [...new Set(variants)];
+    }
+    return normalized;
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return null;
+    const reason = err instanceof Error ? err.message : String(err);
+    throw new Error(`Failed to load ${cfgPath}: ${reason}`);
   }
 }
 
@@ -780,81 +669,100 @@ const DEFAULT_SKILLS: Record<AgentRole, AgentSkills> = {
     role: "planner",
     allowedTools: ["read", "glob", "grep", "bash", "webfetch"],
     enforcedRules: [
-      "Do NOT modify any source code files.",
+      "Read and research only. Do NOT create, modify, move, or delete files.",
+      "Extract every explicit user requirement into an acceptance checklist before choosing implementation details.",
+      "Separate mandatory acceptance requirements from optional design choices and unresolved ambiguity.",
       "Output exactly 3 numbered alternative implementation plans in the format below.",
-      "Each plan must be self-contained with full detail (title + markdown body).",
-      "Identify key files, approach, libraries, and step-by-step instructions in each plan.",
+      "Each option must cover the entire acceptance checklist and state approach, affected files, ordered steps, verification, and risks.",
+      "Do not claim that implementation or verification has already succeeded.",
+      "Treat every clause of the original user goal as an acceptance requirement; a plan may choose an approach but may not redefine the requested product.",
+      "For named reference products, use source-supported gameplay facts and explicitly identify uncertainties instead of substituting an assumed genre.",
+      "If a required decision cannot be established from the project or required research, use RESEARCH_BLOCKED or identify the exact operator decision instead of guessing.",
     ],
-    systemPrompt: `Analyze the goal and the target project. Produce exactly 3 distinct, alternative implementation plans.
+    systemPrompt: `Act only as a planner. Inspect the target and required sources, derive a requirement checklist, and produce exactly 3 distinct implementation strategies. Do not implement any option.
 
 Output MUST follow this format EXACTLY:
 
 === PLAN OPTIONS ===
 ## OPTION 1: <short descriptive title>
-<full markdown plan body with approach, files, steps, libraries>
+<requirement coverage, approach, files, ordered steps, verification, risks>
 
 ## OPTION 2: <short descriptive title>
-<full markdown plan body with approach, files, steps, libraries>
+<requirement coverage, approach, files, ordered steps, verification, risks>
 
 ## OPTION 3: <short descriptive title>
-<full markdown plan body with approach, files, steps, libraries>
+<requirement coverage, approach, files, ordered steps, verification, risks>
 
-Each plan must be a complete, standalone implementation strategy. Vary the approach between options (e.g. different libraries, architecture patterns, or implementation paths). End after OPTION 3.`,
+Each option must be complete and independently selectable. Vary a material implementation decision, not merely wording. End after OPTION 3.`,
   },
   implementer: {
     role: "implementer",
     allowedTools: ["read", "write", "edit", "glob", "grep", "bash"],
     enforcedRules: [
       "Do NOT run destructive git commands (git clean, git checkout --, git reset --hard).",
-      "Apply cumulative fixes. Never delete previous work. Build on top of it.",
+      "Inspect existing files and prior work before editing; continue cumulatively instead of recreating completed work.",
       "Only modify files within the write-access roots supplied by the orchestrator.",
       "If a failure digest is provided, address the specific failures described.",
+      "Implement both the original user goal and the approved plan; if they conflict, preserve the original goal and report the plan defect.",
+      "Map each production change to an original acceptance requirement; do not add unrelated features or replace a locked reference product.",
+      "Do not weaken, delete, skip, or rewrite tests merely to make a failing implementation pass.",
+      "Run focused syntax, build, or smoke checks appropriate to the changed files before completing the phase.",
+      "Report changed files, checks actually run, and unresolved blockers; never report a check as passed unless it executed successfully.",
     ],
-    systemPrompt: "Implement the code changes described in the goal and plan. Write clean, production-ready code. If a failure digest is provided, fix the specific issues mentioned.",
+    systemPrompt: "Act only as the implementer. Inspect current state, implement production changes that satisfy the original acceptance requirements using the approved plan as strategy, and run focused checks. Preserve valid existing work. Do not make the final QA or approval decision.",
   },
   tester: {
     role: "tester",
     allowedTools: ["read", "write", "edit", "glob", "grep", "bash"],
     enforcedRules: [
       "Review the implementation the implementer just produced (read the changed files).",
-      "Design and perform appropriate tests based on that implementation content, not a fixed test command.",
+      "Derive tests independently from every original acceptance requirement and the locked reference identity, not only from implementation structure.",
       "You may write test files and run them with your bash tool to actually execute the tests.",
       "If test files already exist, run them before creating or expanding any test harness.",
       "Keep file reads and command output focused; do not dump entire large files when targeted reads are enough.",
       "Reserve the final response for the test verdict and completion token even when some tests fail.",
-      "Cover happy paths, error paths, and boundary/edge cases.",
+      "Cover the user-visible path plus relevant happy paths, failures, and boundaries; mocks or internal-only checks cannot replace acceptance behavior.",
       "Do NOT modify production source code. Only create or update test files.",
+      "A blocked, skipped, not-run, or inconclusive required check must produce VERDICT: FAIL with the reason.",
+      "Report commands actually executed and their observed results; never infer a passing result from files merely existing.",
       "End with an independent verdict line beginning 'VERDICT: PASS' or 'VERDICT: FAIL'; a concise reason may follow on that same line.",
     ],
-    systemPrompt: "You are the tester. Inspect the implementation and any existing tests with targeted reads. Run existing tests first. Add only the smallest missing tests needed for meaningful coverage, execute them, and report the actual results. Do not spend the response rebuilding an already-present harness. Conclude with 'VERDICT: PASS' or 'VERDICT: FAIL' and a short justification.",
+    systemPrompt: "Act only as the tester. Run existing tests first, add only the smallest missing test coverage, and execute representative user-visible acceptance checks. You may edit tests but never production code. Conclude from observed evidence with VERDICT: PASS or VERDICT: FAIL.",
   },
   qa_lead: {
     role: "qa_lead",
     allowedTools: ["read", "glob", "grep", "bash"],
     enforcedRules: [
-      "Do NOT modify any files.",
-      "You are given the tester's verdict and test output. Verify the tests are legitimate (no mocking-everything, no empty/skipped assertions, no cheating).",
-      "Cross-check that the implementation actually satisfies the goal.",
+      "Read and execute non-mutating checks only. Do NOT create, modify, move, or delete files.",
+      "Independently inspect representative production code and rerun critical checks; do not merely restate the tester's verdict.",
+      "Audit test integrity: reject empty, skipped, tautological, mock-only, or implementation-shaped tests that do not prove acceptance behavior.",
+      "Cross-check every original requirement and the locked reference identity against concrete implementation and runtime evidence.",
+      "Use the original user goal as the authoritative acceptance contract; reject plan-compliant work that changes or omits the requested behavior.",
+      "Missing, blocked, stale, or contradictory evidence requires REJECTED. Do not issue APPROVED with unresolved caveats.",
       "End with an independent line beginning APPROVED or REJECTED; a concrete reason may follow on that same line.",
     ],
-    systemPrompt: "You are the QA lead. Review the tester's verdict and the implementation. Confirm the tests genuinely exercise the implementation and that the goal is met. Output APPROVED or REJECTED with clear reasoning.",
+    systemPrompt: "Act only as the independent QA lead. Audit implementation, test integrity, and requirement coverage using read-only inspection and non-mutating checks. Approve only when the evidence proves the original goal; otherwise reject with concrete defects.",
   },
   master: {
     role: "master",
     allowedTools: ["read", "glob", "grep", "bash"],
     enforcedRules: [
-      "Do NOT modify any files.",
-      "Perform final acceptance testing against the original goal.",
+      "Read and execute non-mutating checks only. Do NOT create, modify, move, or delete files.",
+      "Perform a fresh final acceptance audit against each clause of the original goal and the locked reference identity.",
+      "Do not approve merely because the implementation matches the approved plan; independently compare every original requirement.",
+      "Independently exercise the most important user-visible success path rather than relying solely on prior summaries.",
+      "Partial, unverified, ambiguous, blocked, or caveated completion requires REJECTED.",
+      "Do not repair the implementation or tests in this stage; return precise rejection evidence for the next implementation cycle.",
       "End with an independent line beginning APPROVED or REJECTED; specific feedback may follow on that same line.",
     ],
-    systemPrompt: "You are the final gatekeeper. Perform acceptance testing on the implementation. Confirm the goal is fully achieved. Output APPROVED or REJECTED with detailed reasoning.",
+    systemPrompt: "Act only as the final acceptance gate. Re-evaluate the original goal from user-visible evidence, independently sample the critical path, and issue APPROVED only when every mandatory requirement is proven. Otherwise issue REJECTED with actionable evidence.",
   },
   interrupter: {
     role: "interrupter",
     allowedTools: ["read", "glob", "grep"],
     enforcedRules: [
-      "Do NOT modify any files.",
-      "Summarize the oscillation pattern and recommend a course correction.",
+      "Read only. Do NOT create, modify, move, or delete files and do not continue implementation or testing.",
+      "Summarize the exact repeated failure or stagnation signature and recommend the smallest course correction that can break it.",
       "Be concise and actionable for the human operator.",
       "Treat the structured attempt evidence as authoritative. Never contradict its attempt counts, byte counts, event types, or completed tool status.",
       "Do not claim that a permission prompt, zero output, or a pending tool caused the failure unless the structured evidence explicitly supports it.",
@@ -862,8 +770,9 @@ Each plan must be a complete, standalone implementation strategy. Vary the appro
       "A missing completion token is not proof that deliverables or tests are complete; distinguish files written from tests actually executed.",
       "When accessMode is full_access, outside-target path lists are diagnostic only and must not be described as a blocking path conflict without an explicit permission failure.",
       "Clearly label any root-cause conclusion not directly proven by the evidence as a hypothesis.",
+      "Do not declare the user goal complete; this role diagnoses the pause and identifies the operator action required to resume safely.",
     ],
-    systemPrompt: "The loop has paused due to detected oscillation (repeated failures). Analyze the error history and progress notes. Brief the human on what went wrong and recommend a specific course of action to break the cycle.",
+    systemPrompt: "Act only as the failure interrupter. Using authoritative attempt evidence, separate verified facts from hypotheses, identify the repeated token-wasting pattern, and provide the minimum concrete operator action needed to break it. Do not edit or resume the work.",
   },
 };
 
@@ -968,6 +877,17 @@ async function atomicWriteJson(filePath: string, data: unknown): Promise<void> {
   await renameWithRetry(tmpPath, filePath);
 }
 
+async function atomicWriteSensitiveJson(filePath: string, data: unknown): Promise<void> {
+  await fse.ensureDir(path.dirname(filePath));
+  const tmpPath = `${filePath}.tmp.${process.pid}.${Date.now()}.${crypto.randomBytes(4).toString("hex")}`;
+  await fse.writeFile(tmpPath, JSON.stringify(data, null, 2), {
+    encoding: "utf8",
+    mode: 0o600,
+  });
+  await renameWithRetry(tmpPath, filePath);
+  await fse.chmod(filePath, 0o600).catch(() => {});
+}
+
 async function atomicWriteText(filePath: string, content: string): Promise<void> {
   await fse.ensureDir(path.dirname(filePath));
   const tmpPath = `${filePath}.tmp.${process.pid}.${Date.now()}.${crypto.randomBytes(4).toString("hex")}`;
@@ -1066,7 +986,7 @@ async function mergeAndWriteSessionMeta(
 async function mergeAndWriteRegistryFields(
   registryPath: string,
   fallback: SessionRegistry,
-  fields: Partial<Pick<SessionRegistry, "availableModels" | "modelsDiscoveredAt" | "modelsDiscoveredCli" | "modelVariants">>
+  fields: Partial<Pick<SessionRegistry, "availableModels" | "modelsDiscoveredAt" | "modelsDiscoveredCli" | "modelVariants" | "providerCatalog">>
 ): Promise<SessionRegistry> {
   const lockPath = path.join(path.dirname(registryPath), loopConfig.paths.registryLockFileName);
   return withShortFileLock(lockPath, async () => {
@@ -1075,6 +995,7 @@ async function mergeAndWriteRegistryFields(
     if (fields.modelsDiscoveredAt !== undefined) merged.modelsDiscoveredAt = fields.modelsDiscoveredAt;
     if (fields.modelsDiscoveredCli !== undefined) merged.modelsDiscoveredCli = fields.modelsDiscoveredCli;
     if (fields.modelVariants !== undefined) merged.modelVariants = fields.modelVariants;
+    if (fields.providerCatalog !== undefined) merged.providerCatalog = fields.providerCatalog;
     await atomicWriteJson(registryPath, merged);
     return merged;
   });
@@ -1239,6 +1160,29 @@ export function normalizeLoopState(raw: LoopState): { state: LoopState; migrated
     state.cliProfile = resolveCliProfile(null, state.cliBinary || loopConfig.defaults.cliBinary).name;
     migrated = true;
   }
+  if (!state.providerMapping || typeof state.providerMapping !== "object") {
+    const fallbackProvider = loopConfig.providers[state.cliProfile]?.enabled ? state.cliProfile : "opencode";
+    state.providerMapping = Object.fromEntries(
+      Object.keys(state.modelMapping ?? {}).map((role) => [role, fallbackProvider])
+    );
+    migrated = true;
+  }
+  if (!state.providerConfigs || typeof state.providerConfigs !== "object") {
+    state.providerConfigs = normalizeProviders(loopConfig.providers);
+    const legacyProvider = state.providerConfigs[state.cliProfile];
+    if (legacyProvider && state.cliBinary) legacyProvider.binary = state.cliBinary;
+    migrated = true;
+  } else {
+    state.providerConfigs = normalizeProviders(state.providerConfigs);
+  }
+  if (!state.toolAccess) {
+    state.toolAccess = validateToolAccess(loopConfig.toolAccess);
+    migrated = true;
+  } else {
+    const normalizedToolAccess = validateToolAccess(state.toolAccess);
+    if (JSON.stringify(normalizedToolAccess) !== JSON.stringify(state.toolAccess)) migrated = true;
+    state.toolAccess = normalizedToolAccess;
+  }
   if (!state.pipeline) {
     state.pipeline = defaultPipelineDefinition();
     state.pipelineConfigPath = null;
@@ -1252,6 +1196,30 @@ export function normalizeLoopState(raw: LoopState): { state: LoopState; migrated
   }
   if (!state.stageResults) {
     state.stageResults = {};
+    migrated = true;
+  }
+  if (
+    !state.requirements ||
+    state.requirements.version !== 1 ||
+    !Array.isArray(state.requirements.items) ||
+    state.requirements.items.length === 0
+  ) {
+    state.requirements = deriveRequirementLedger(state.goal, state.createdAt);
+    migrated = true;
+  } else if (!Array.isArray(state.requirements.evidence)) {
+    state.requirements.evidence = [];
+    migrated = true;
+  }
+  if (
+    !state.convergence ||
+    !Number.isFinite(state.convergence.stagnantCycles) ||
+    !Array.isArray(state.convergence.history)
+  ) {
+    state.convergence = { stagnantCycles: 0, history: [] };
+    migrated = true;
+  }
+  if (!Object.prototype.hasOwnProperty.call(state, "referenceIdentity")) {
+    state.referenceIdentity = null;
     migrated = true;
   }
   if (!Object.prototype.hasOwnProperty.call(state, "planOverviewPath")) {
@@ -1725,80 +1693,14 @@ function extractOutput(result: PtyRunResult): string {
   return stripped.trim().slice(-2000);
 }
 
-function sanitizeRefinedGoal(raw: string, fallback: string): string {
-  if (raw.length === 0) return fallback;
-  const trimmed = raw.trim();
-  if (/^\{[\s\S]*"type"\s*:\s*"(step_start|tool_use|step_finish|text)"/.test(trimmed)) {
-    return fallback;
-  }
-  if (trimmed.startsWith("<path>") || trimmed.startsWith("<type>")) {
-    return fallback;
-  }
-  const lines = trimmed.split("\n").filter((l) => {
-    const t = l.trim();
-    if (t.length === 0) return false;
-    if (/^\{[\s\S]*"type"\s*:/i.test(t)) return false;
-    if (/^<[a-z]+>/.test(t)) return false;
-    return true;
-  });
-  const cleaned = lines.join("\n").trim();
-  return cleaned.length > 0 ? cleaned : fallback;
-}
-
-function extractVerdictFromOutput(result: PtyRunResult): string {
-  const textMessages: string[] = [];
-  for (const evt of result.events) {
-    if (evt.type === "text") {
-      const part = evt.part as Record<string, unknown> | undefined;
-      const partText = part && typeof part.text === "string" ? (part.text as string) : null;
-      const val = partText || evt.text || evt.content || evt.message;
-      if (typeof val === "string" && val.length > 0) {
-        textMessages.push(val);
-      }
-    }
-  }
-  if (textMessages.length > 0) {
-    return textMessages[textMessages.length - 1].trim();
-  }
-
-  const allMessages: string[] = [];
-  for (const evt of result.events) {
-    if (evt.type === "text") {
-      const part = evt.part as Record<string, unknown> | undefined;
-      const partText = part && typeof part.text === "string" ? (part.text as string) : null;
-      if (partText && partText.length > 0) {
-        allMessages.push(partText);
-        continue;
-      }
-    }
-    if (evt.type === "step_finish") {
-      const part = evt.part as Record<string, unknown> | undefined;
-      const partResult = part && typeof part.result === "string" ? (part.result as string) : null;
-      if (partResult && partResult.length > 0) {
-        allMessages.push(partResult);
-        continue;
-      }
-    }
-    const contentKeys = ["content", "text", "message", "output"];
-    for (const key of contentKeys) {
-      const val = evt[key];
-      if (typeof val === "string" && val.length > 0) {
-        allMessages.push(val);
-        break;
-      }
-    }
-  }
-  if (allMessages.length > 0) {
-    return allMessages[allMessages.length - 1].trim();
-  }
-
-  const stripped = stripAnsi(result.output);
-  const sentinelIdx = stripped.indexOf(SENTINEL);
-  if (sentinelIdx >= 0) {
-    return stripped.slice(0, sentinelIdx).trim();
-  }
-
-  return stripped.trim().slice(-2000);
+export function extractVerdictFromOutput(result: PtyRunResult): string {
+  // Completion validation uses the complete assistant transcript. Verdict
+  // extraction must use the same source: Codex emits each assistant update as
+  // an item.completed event, so inspecting only the final event loses a valid
+  // decision that appeared at the start of the final assistant message.
+  const assistantText = assistantTextBeforeSentinel(result);
+  if (assistantText.length > 0) return assistantText;
+  return extractOutput(result);
 }
 
 function approvalVerdictFromLine(line: string): "APPROVED" | "REJECTED" | null {
@@ -1808,6 +1710,354 @@ function approvalVerdictFromLine(line: string): "APPROVED" | "REJECTED" | null {
   return match ? (match[1].toUpperCase() as "APPROVED" | "REJECTED") : null;
 }
 
+export function filterDiscoveredModelsForProvider(
+  providerId: string,
+  adapter: ProviderConfig["adapter"],
+  models: string[]
+): string[] {
+  const unique = [...new Set(models.map((model) => model.trim()).filter(Boolean))];
+  if (providerId === "kilo" && adapter === "kilo") {
+    return unique.filter((model) => model.startsWith("kilo/"));
+  }
+  if (providerId === "opencode" && adapter === "opencode") {
+    return unique.filter((model) => model.startsWith("opencode/") || model.startsWith("opencode-go/"));
+  }
+  return unique;
+}
+
+export interface ProviderModelDiscoveryResult {
+  available: boolean;
+  models: string[];
+  error: string | null;
+  modelLabels?: Record<string, string>;
+  modelVariants?: Record<string, string[]>;
+}
+
+export function discoverCodexModels(
+  binary: string,
+  appServerArgs: string[] = ["app-server"],
+  timeoutMs = 30_000
+): Promise<ProviderModelDiscoveryResult> {
+  const resolvedBinary = resolveBinaryOnWindows(binary);
+  const extension = path.extname(resolvedBinary).toLowerCase();
+  const needsWindowsShell =
+    process.platform === "win32" && (extension === ".cmd" || extension === ".bat");
+  return new Promise((resolve) => {
+    let child: ChildProcessWithoutNullStreams | null = null;
+    let settled = false;
+    let spawned = false;
+    let stdoutBuffer = "";
+    let stderr = "";
+    let requestId = 2;
+    let modelListStarted = false;
+    const models = new Set<string>();
+    const modelLabels: Record<string, string> = {};
+    const modelVariants: Record<string, string[]> = {};
+    const seenCursors = new Set<string>();
+    const pendingModelRequestIds = new Set<number>();
+
+    const finish = (result: ProviderModelDiscoveryResult): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      try { child?.stdin.end(); } catch { /* best effort */ }
+      try { child?.kill(); } catch { /* best effort */ }
+      resolve(result);
+    };
+
+    const fail = (message: string, available = spawned): void => {
+      const detail = stderr.trim() ? `${message} (${stderr.trim().slice(-500)})` : message;
+      finish({ available, models: [], error: detail });
+    };
+
+    const send = (message: Record<string, unknown>): void => {
+      if (!child?.stdin.writable) {
+        fail("Codex app-server stdin closed before model discovery completed.");
+        return;
+      }
+      child.stdin.write(`${JSON.stringify(message)}\n`);
+    };
+
+    const requestModelPage = (cursor?: string): void => {
+      const params: Record<string, unknown> = { limit: 100, includeHidden: true };
+      if (cursor) params.cursor = cursor;
+      const id = requestId++;
+      pendingModelRequestIds.add(id);
+      send({ method: "model/list", id, params });
+    };
+
+    const handleMessage = (message: AnyObj): void => {
+      if (message.id === 1) {
+        if (message.error) {
+          fail(`Codex app-server initialize failed: ${JSON.stringify(message.error)}`);
+          return;
+        }
+        send({ method: "initialized", params: {} });
+        modelListStarted = true;
+        requestModelPage();
+        return;
+      }
+      if (!modelListStarted || typeof message.id !== "number" || !pendingModelRequestIds.has(message.id)) return;
+      pendingModelRequestIds.delete(message.id);
+      if (message.error) {
+        fail(`Codex model/list failed: ${JSON.stringify(message.error)}`);
+        return;
+      }
+      const result = message.result as AnyObj | undefined;
+      const data = Array.isArray(result?.data) ? result.data : [];
+      for (const candidate of data) {
+        if (!candidate || typeof candidate !== "object") continue;
+        const item = candidate as AnyObj;
+        const model = typeof item.model === "string"
+          ? item.model.trim()
+          : typeof item.id === "string"
+            ? item.id.trim()
+            : "";
+        if (model) models.add(model);
+        if (model && typeof item.displayName === "string" && item.displayName.trim()) {
+          modelLabels[model] = item.displayName.trim();
+        }
+        if (model && Array.isArray(item.supportedReasoningEfforts)) {
+          const efforts = item.supportedReasoningEfforts
+            .map((effort) => {
+              if (!effort || typeof effort !== "object") return "";
+              const value = (effort as AnyObj).reasoningEffort;
+              return typeof value === "string" ? value.trim() : "";
+            })
+            .filter(Boolean);
+          if (efforts.length > 0) modelVariants[model] = [...new Set(efforts)];
+        }
+      }
+      const nextCursor = typeof result?.nextCursor === "string" && result.nextCursor.trim()
+        ? result.nextCursor.trim()
+        : null;
+      if (nextCursor) {
+        if (seenCursors.has(nextCursor) || seenCursors.size >= 50) {
+          fail("Codex model/list returned a repeated or excessive pagination cursor.");
+          return;
+        }
+        seenCursors.add(nextCursor);
+        requestModelPage(nextCursor);
+        return;
+      }
+      finish({
+        available: true,
+        models: [...models],
+        error: null,
+        modelLabels,
+        modelVariants,
+      });
+    };
+
+    const timer = setTimeout(() => {
+      fail(`Codex model discovery timed out after ${timeoutMs}ms.`);
+    }, Math.max(1, timeoutMs));
+
+    try {
+      child = spawn(resolvedBinary, appServerArgs, {
+        stdio: ["pipe", "pipe", "pipe"],
+        windowsHide: true,
+        shell: needsWindowsShell,
+      }) as ChildProcessWithoutNullStreams;
+    } catch (error) {
+      fail(`Unable to start Codex app-server: ${error instanceof Error ? error.message : String(error)}`, false);
+      return;
+    }
+    child.once("spawn", () => {
+      spawned = true;
+      send({
+        method: "initialize",
+        id: 1,
+        params: {
+          clientInfo: {
+            name: "custom_agent_loop",
+            title: "Custom Agent Loop System",
+            version: "1.2.0",
+          },
+        },
+      });
+    });
+    child.once("error", (error) => {
+      fail(`Unable to start Codex app-server: ${error.message}`, false);
+    });
+    child.stderr.on("data", (chunk: Buffer) => {
+      stderr = `${stderr}${chunk.toString()}`.slice(-64 * 1024);
+    });
+    child.stdout.on("data", (chunk: Buffer) => {
+      stdoutBuffer += chunk.toString();
+      const lines = stdoutBuffer.split(/\r?\n/);
+      stdoutBuffer = lines.pop() ?? "";
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        try {
+          handleMessage(JSON.parse(trimmed) as AnyObj);
+        } catch {
+          stderr = `${stderr}\nInvalid Codex app-server JSON: ${trimmed.slice(0, 300)}`.slice(-64 * 1024);
+        }
+      }
+    });
+    child.once("exit", (code, signal) => {
+      if (!settled) {
+        fail(`Codex app-server exited before model discovery completed (code=${code}, signal=${signal}).`);
+      }
+    });
+  });
+}
+
+export function probeProviderBinary(
+  binary: string
+): Promise<{ available: boolean; error: string | null }> {
+  const candidates: string[] = [];
+  if (process.platform === "win32") {
+    const resolved = resolveBinaryOnWindows(binary);
+    candidates.push(resolved);
+    if (!path.isAbsolute(resolved)) candidates.push(path.resolve(resolved));
+  } else if (path.isAbsolute(binary) || binary.includes(path.sep)) {
+    candidates.push(path.resolve(binary));
+  } else {
+    for (const directory of (process.env.PATH || "").split(path.delimiter).filter(Boolean)) {
+      candidates.push(path.join(directory, binary));
+    }
+  }
+  for (const candidate of [...new Set(candidates)]) {
+    try {
+      fs.accessSync(candidate, process.platform === "win32" ? fs.constants.F_OK : fs.constants.X_OK);
+      return Promise.resolve({ available: true, error: null });
+    } catch {
+      // Try the next PATH candidate.
+    }
+  }
+  return Promise.resolve({
+    available: false,
+    error: `Provider binary '${binary}' is unavailable: not installed or not executable from PATH.`,
+  });
+}
+
+async function discoverProviderCatalog(
+  providers: Record<string, ProviderConfig>,
+  legacyOverride: string[] | null = null
+): Promise<Record<string, ProviderCatalogEntry>> {
+  const discoveredAt = new Date().toISOString();
+  const pairs = await Promise.all(
+    Object.entries(providers).map(async ([id, provider]): Promise<[string, ProviderCatalogEntry]> => {
+      if (!provider.enabled) {
+        return [id, {
+          id, label: provider.label, adapter: provider.adapter, binary: provider.binary,
+          enabled: false, available: false, models: [], discoveredAt: null, error: null,
+        }];
+      }
+      const binaryProbe = await probeProviderBinary(provider.binary);
+      if (!binaryProbe.available) {
+        return [id, {
+          id, label: provider.label, adapter: provider.adapter, binary: provider.binary,
+          enabled: true, available: false, models: [], discoveredAt, error: binaryProbe.error,
+        }];
+      }
+      let models: string[] = [];
+      let error: string | null = null;
+      let modelLabels: Record<string, string> | undefined;
+      let modelVariants: Record<string, string[]> | undefined;
+      if (provider.adapter === "codex") {
+        const discovery = await discoverCodexModels(provider.binary);
+        if (!discovery.available) {
+          return [id, {
+            id, label: provider.label, adapter: provider.adapter, binary: provider.binary,
+            enabled: true, available: false, models: [], discoveredAt, error: discovery.error,
+          }];
+        }
+        models = discovery.models.length > 0
+          ? discovery.models
+          : [...provider.fallbackModels];
+        modelLabels = discovery.modelLabels;
+        modelVariants = discovery.modelVariants;
+        error = discovery.error ?? (discovery.models.length === 0
+          ? `Codex model/list returned no models; using ${models.length} configured fallback model(s).`
+          : null);
+      } else if (provider.modelsArgs.length === 0) {
+        models = [...provider.fallbackModels];
+      } else {
+        const profile: CliProfile = {
+          name: id,
+          defaultBinary: provider.binary,
+          modelsArgs: provider.modelsArgs,
+          interactionWhitelist: provider.interactionWhitelist ?? INTERACTION_WHITELIST,
+        };
+        const providerOverride = id === "opencode" ? legacyOverride : null;
+        models = await discoverCliModels(provider.binary, providerOverride, profile);
+        if (!providerOverride?.length) {
+          models = filterDiscoveredModelsForProvider(id, provider.adapter, models);
+        }
+        if (models.length === 0) {
+          models = [...provider.fallbackModels];
+          error = `Model discovery returned no models; using ${models.length} configured fallback model(s).`;
+        }
+      }
+      return [id, {
+        id,
+        label: provider.label,
+        adapter: provider.adapter,
+        binary: provider.binary,
+        enabled: provider.enabled,
+        available: true,
+        models: [...new Set(models)],
+        ...(modelLabels ? { modelLabels } : {}),
+        ...(modelVariants ? { modelVariants } : {}),
+        discoveredAt,
+        error,
+      }];
+    })
+  );
+  return Object.fromEntries(pairs);
+}
+
+function flatCatalogModels(catalog: Record<string, ProviderCatalogEntry>): string[] {
+  return [...new Set(
+    Object.values(catalog)
+      .filter((entry) => entry.enabled && entry.available)
+      .flatMap((entry) => entry.models)
+  )];
+}
+
+function reusableProviderCatalog(
+  registry: SessionRegistry,
+  providers: Record<string, ProviderConfig>,
+  maxAgeMs = 5 * 60 * 1000
+): Record<string, ProviderCatalogEntry> | null {
+  const catalog = registry.providerCatalog;
+  const discoveredAt = Date.parse(registry.modelsDiscoveredAt ?? "");
+  if (!catalog || !Number.isFinite(discoveredAt) || Date.now() - discoveredAt > maxAgeMs) return null;
+  const providerIds = Object.keys(providers).sort();
+  if (providerIds.join("\0") !== Object.keys(catalog).sort().join("\0")) return null;
+  for (const id of providerIds) {
+    const provider = providers[id];
+    const entry = catalog[id];
+    if (
+      !entry ||
+      typeof entry.available !== "boolean" ||
+      entry.binary !== provider.binary ||
+      entry.adapter !== provider.adapter ||
+      entry.enabled !== provider.enabled
+    ) return null;
+  }
+  return catalog;
+}
+
+function parseJsonRecord(value: string | undefined, option: string): Record<string, string> {
+  if (!value || value === "true") return {};
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("expected object");
+    return Object.fromEntries(
+      Object.entries(parsed as Record<string, unknown>)
+        .filter(([, item]) => typeof item === "string" && item.trim().length > 0)
+        .map(([key, item]) => [key, String(item)])
+    );
+  } catch (error) {
+    throw new Error(`${option} must be a JSON object of string values: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
 export function parseApprovalVerdict(output: string): "APPROVED" | "REJECTED" | null {
   const verdicts = output
     .replace(/\r\n/g, "\n")
@@ -1815,6 +2065,19 @@ export function parseApprovalVerdict(output: string): "APPROVED" | "REJECTED" | 
     .map(approvalVerdictFromLine)
     .filter((verdict): verdict is "APPROVED" | "REJECTED" => verdict !== null);
   return verdicts[verdicts.length - 1] ?? null;
+}
+
+export function approvalDecisionSignature(output: string): string {
+  const lines = output.replace(/\r\n/g, "\n").split("\n");
+  for (let index = lines.length - 1; index >= 0; index--) {
+    const line = lines[index].trim();
+    const verdict = approvalVerdictFromLine(line);
+    if (!verdict) continue;
+    const rationale = line.replace(/^(APPROVED|REJECTED)(?:\s*[:;,.!?\u2013\u2014-]\s*|\s+)/i, "");
+    const normalizedRationale = normalizeSignature(rationale);
+    return `master_${verdict.toLowerCase()}:${normalizedRationale || "no_reason"}`;
+  }
+  return "master_protocol:missing_approval_verdict";
 }
 
 function parseMasterVerdict(output: string): "approved" | "rejected" | "unknown" {
@@ -1845,10 +2108,70 @@ function assistantTextBeforeSentinel(result: PtyRunResult): string {
   return (sentinelIndex >= 0 ? lines.slice(0, sentinelIndex) : lines).join("\n").trim();
 }
 
+const READ_ONLY_MODEL_ROLES = new Set<BuiltinModelRole>([
+  "planner",
+  "qa_lead",
+  "master",
+  "interrupter",
+]);
+
+export function isReadOnlyModelRole(role: BuiltinModelRole): boolean {
+  return READ_ONLY_MODEL_ROLES.has(role);
+}
+
+function isMutatingToolName(value: unknown): boolean {
+  if (typeof value !== "string") return false;
+  const compact = value.toLowerCase().replace(/[^a-z]/g, "");
+  return [
+    "write",
+    "writefile",
+    "edit",
+    "multiedit",
+    "notebookedit",
+    "applypatch",
+    "patch",
+    "createfile",
+    "deletefile",
+    "movefile",
+    "renamefile",
+  ].some((name) => compact === name || compact.endsWith(name));
+}
+
+function eventContainsFileMutation(value: unknown, depth = 0): boolean {
+  if (!value || depth > 6) return false;
+  if (Array.isArray(value)) {
+    return value.some((entry) => eventContainsFileMutation(entry, depth + 1));
+  }
+  if (typeof value !== "object") return false;
+  const node = value as AnyObj;
+  const type = typeof node.type === "string" ? node.type.toLowerCase() : "";
+  if (type === "file_change" || type === "filechange") return true;
+  if (type.includes("tool")) {
+    if (
+      isMutatingToolName(node.name) ||
+      isMutatingToolName(node.tool) ||
+      isMutatingToolName(node.toolName) ||
+      isMutatingToolName(node.tool_name)
+    ) return true;
+  }
+  return Object.values(node).some((entry) => eventContainsFileMutation(entry, depth + 1));
+}
+
+/** Detects provider-reported write/edit/file-change events for read-only role enforcement. */
+export function hasObservedFileMutation(result: Pick<PtyRunResult, "events">): boolean {
+  return result.events.some((event) => eventContainsFileMutation(event));
+}
+
 export function validateAgentCompletion(
-  completionKind: PipelineStage["kind"],
+  completionKind: PipelineCompletionContract | PipelineStageExecutor,
   result: PtyRunResult,
-  planOptionsCount = 3
+  planOptionsCount = 3,
+  requirements: {
+    externalResearchRequired?: boolean;
+    namedReferenceRequired?: boolean;
+    expectedReferenceIdentity?: ReferenceIdentity | null;
+    forbidFileMutation?: boolean;
+  } = {}
 ): { valid: boolean; reason: string | null } {
   if (result.exitCode !== 0) {
     return { valid: false, reason: `Process exited with code ${result.exitCode}` };
@@ -1859,8 +2182,95 @@ export function validateAgentCompletion(
   if (sentinelIndex < 0) {
     return { valid: false, reason: `Assistant response did not contain ${SENTINEL} on its own line.` };
   }
+  if (requirements.forbidFileMutation && hasObservedFileMutation(result)) {
+    return {
+      valid: false,
+      reason: "This read-only role emitted a file mutation event; its result cannot complete the phase.",
+    };
+  }
   const before = lines.slice(0, sentinelIndex);
-  if (completionKind === "planning") {
+  if (requirements.externalResearchRequired) {
+    const completedSearches = countCompletedWebSearch(result);
+    if (completedSearches < 1) {
+      return {
+        valid: false,
+        reason: "The original goal requires internet research, but this attempt did not complete a web search.",
+      };
+    }
+    const researchText = before.join("\n");
+    if (!/^\[RESEARCH_EVIDENCE\]$/im.test(researchText)) {
+      return {
+        valid: false,
+        reason: "The response is missing an independent [RESEARCH_EVIDENCE] marker.",
+      };
+    }
+    if (!/^SOURCE:\s*https?:\/\/\S+/im.test(researchText)) {
+      return {
+        valid: false,
+        reason: "The research evidence does not cite an HTTP(S) source URL.",
+      };
+    }
+    if (!/^(?:VERIFIED_FACT|LIMITATION):\s*\S+/im.test(researchText)) {
+      return {
+        valid: false,
+        reason: "The research evidence is missing a VERIFIED_FACT or LIMITATION line.",
+      };
+    }
+    const researchBlocked = isResearchBlockedResponse(researchText);
+    if (/^CONFIDENCE:\s*LOW\b/im.test(researchText) && !researchBlocked) {
+      return {
+        valid: false,
+        reason: "Low-confidence research must end with RESEARCH_BLOCKED instead of guessing.",
+      };
+    }
+    if (researchBlocked) {
+      return { valid: true, reason: null };
+    }
+    if (requirements.namedReferenceRequired) {
+      if (completedSearches < 2) {
+        return {
+          valid: false,
+          reason: "Named-reference verification requires at least two completed web research actions.",
+        };
+      }
+      const identity = parseReferenceIdentity(researchText);
+      if (!identity) {
+        return {
+          valid: false,
+          reason: "Named-reference research is missing a complete [REFERENCE_IDENTITY] block.",
+        };
+      }
+      const identityFailure = validateExactReferenceIdentity(identity);
+      if (identityFailure) return { valid: false, reason: identityFailure };
+      const evidenceFailure = validateNamedReferenceEvidence(researchText, identity);
+      if (evidenceFailure) return { valid: false, reason: evidenceFailure };
+      const expected = requirements.expectedReferenceIdentity;
+      if (expected && !sameReferenceIdentity(identity, expected)) {
+        return {
+          valid: false,
+          reason:
+            `Reference identity changed between stages. Expected ${referenceIdentityLabel(expected)}, ` +
+            `received ${referenceIdentityLabel(identity)}.`,
+        };
+      }
+      if (completionKind === "review" || completionKind === "approval") {
+        const approved = parseApprovalVerdict(researchText) === "APPROVED";
+        if (approved && containsReferenceIdentityContradiction(researchText)) {
+          return {
+            valid: false,
+            reason: "APPROVED contradicts the response's own statement that the named reference was not exactly verified.",
+          };
+        }
+      }
+    }
+  }
+  const completionContract: PipelineCompletionContract =
+    completionKind === "planning" ? "plan_options"
+      : completionKind === "test" ? "verdict"
+        : completionKind === "review" || completionKind === "approval" ? "approval"
+          : completionKind === "implementation" || completionKind === "interrupt" ? "phase_done"
+            : completionKind;
+  if (completionContract === "plan_options") {
     const choices = parsePlanChoices(before.join("\n"));
     if (choices.length !== planOptionsCount) {
       return { valid: false, reason: `Planning returned ${choices.length} plan option(s); exactly ${planOptionsCount} are required.` };
@@ -1873,17 +2283,202 @@ export function validateAgentCompletion(
       };
     }
   }
-  if (completionKind === "test") {
+  if (completionContract === "verdict") {
     if (parseTesterVerdict(before.join("\n")) === null) {
       return { valid: false, reason: "Tester response is missing a final VERDICT: PASS|FAIL line." };
     }
   }
-  if (completionKind === "review" || completionKind === "approval") {
+  if (completionContract === "approval") {
     if (parseApprovalVerdict(before.join("\n")) === null) {
-      return { valid: false, reason: `${completionKind} response is missing an APPROVED or REJECTED line.` };
+      return { valid: false, reason: "Approval response is missing an APPROVED or REJECTED line." };
     }
   }
   return { valid: true, reason: null };
+}
+
+export function goalRequiresExternalResearch(goal: string): boolean {
+  const normalized = goal.replace(/\s+/g, " ").trim();
+  if (!normalized) return false;
+  return (
+    /(?:인터넷|웹)\s*(?:을|를|에서|으로)?\s*(?:검색|조사|찾)/i.test(normalized) ||
+    /\b(?:search|browse|research|look\s*up)(?:\s+the)?\s+(?:internet|web)\b/i.test(normalized) ||
+    /\b(?:internet|web)\s+(?:search|research)\b/i.test(normalized)
+  );
+}
+
+export function goalRequiresNamedReferenceVerification(goal: string): boolean {
+  if (!goalRequiresExternalResearch(goal)) return false;
+  const normalized = goal.replace(/\s+/g, " ").trim();
+  return (
+    /(?:게임|앱|제품|서비스|사이트)(?:과|와)?\s*(?:같은|동일한|비슷한|유사한)/i.test(normalized) ||
+    /(?:처럼|기반으로|참고해서|레퍼런스)/i.test(normalized) ||
+    /\b(?:same as|similar to|based on|inspired by|clone of|reference (?:app|game|product))\b/i.test(normalized)
+  );
+}
+
+export function parseReferenceIdentity(output: string): ReferenceIdentity | null {
+  const blocks = [...output.matchAll(/\[REFERENCE_IDENTITY\]([\s\S]*?)\[\/REFERENCE_IDENTITY\]/gi)];
+  const body = blocks[blocks.length - 1]?.[1];
+  if (!body) return null;
+  const value = (name: string): string | null => {
+    const match = body.match(new RegExp(`^${name}:\\s*(\\S(?:.*\\S)?)\\s*$`, "im"));
+    return match?.[1]?.trim() ?? null;
+  };
+  const title = value("TITLE");
+  const creator = value("CREATOR");
+  const packageId = value("PACKAGE_ID");
+  const canonicalUrl = value("CANONICAL_URL");
+  const candidateCountRaw = value("CANDIDATE_COUNT");
+  const candidateCount = candidateCountRaw && /^\d+$/.test(candidateCountRaw)
+    ? Number(candidateCountRaw)
+    : null;
+  const identityMatch = value("IDENTITY_MATCH")?.toUpperCase();
+  const confidence = value("CONFIDENCE")?.toUpperCase();
+  if (
+    !title || !creator || !packageId || !canonicalUrl || candidateCount === null ||
+    !identityMatch || !["EXACT", "AMBIGUOUS", "SIMILAR", "UNKNOWN"].includes(identityMatch) ||
+    !confidence || !["HIGH", "MEDIUM", "LOW"].includes(confidence)
+  ) return null;
+  return {
+    title,
+    creator,
+    packageId,
+    canonicalUrl,
+    candidateCount,
+    identityMatch: identityMatch as ReferenceIdentity["identityMatch"],
+    confidence: confidence as ReferenceIdentity["confidence"],
+  };
+}
+
+function validateExactReferenceIdentity(identity: ReferenceIdentity): string | null {
+  if (identity.candidateCount !== 1) {
+    return "Named-reference research found multiple or zero candidate products; it must use RESEARCH_BLOCKED and ask the operator to select the exact reference.";
+  }
+  if (identity.identityMatch !== "EXACT" || identity.confidence !== "HIGH") {
+    return "Named references require IDENTITY_MATCH: EXACT and CONFIDENCE: HIGH; ambiguous, similar, or medium-confidence matches must use RESEARCH_BLOCKED.";
+  }
+  if (!/^https?:\/\/\S+$/i.test(identity.canonicalUrl)) {
+    return "REFERENCE_IDENTITY requires an HTTP(S) CANONICAL_URL.";
+  }
+  if (/^(?:n\/?a|none|unknown|unverified|-)+$/i.test(identity.packageId)) {
+    return "REFERENCE_IDENTITY requires a verified package or stable product ID.";
+  }
+  return null;
+}
+
+function evidenceBlocks(output: string): string[] {
+  return [...output.matchAll(/\[RESEARCH_EVIDENCE\]([\s\S]*?)\[\/RESEARCH_EVIDENCE\]/gi)]
+    .map((match) => match[1]);
+}
+
+function evidenceField(block: string, name: string): string | null {
+  const match = block.match(new RegExp(`^${name}:\\s*(\\S(?:.*\\S)?)\\s*$`, "im"));
+  return match?.[1]?.trim() ?? null;
+}
+
+function validateNamedReferenceEvidence(output: string, identity: ReferenceIdentity): string | null {
+  const blocks = evidenceBlocks(output);
+  const records = blocks.map((block) => ({
+    type: evidenceField(block, "EVIDENCE_TYPE")?.toUpperCase() ?? "",
+    source: evidenceField(block, "SOURCE") ?? "",
+    referenceId: evidenceField(block, "REFERENCE_ID") ?? "",
+    fact: evidenceField(block, "VERIFIED_FACT") ?? "",
+  }));
+  if (records.length < 2) {
+    return "Named-reference verification requires at least two [RESEARCH_EVIDENCE] blocks.";
+  }
+  if (!records.some((record) => record.type === "IDENTITY")) {
+    return "Named-reference verification requires EVIDENCE_TYPE: IDENTITY.";
+  }
+  if (!records.some((record) => record.type === "GAMEPLAY")) {
+    return "Named-reference verification requires EVIDENCE_TYPE: GAMEPLAY.";
+  }
+  const canonical = normalizeResearchUrl(identity.canonicalUrl);
+  if (!records.some(
+    (record) => record.type === "IDENTITY" && normalizeResearchUrl(record.source) === canonical
+  )) {
+    return "The canonical reference URL must also be cited by an EVIDENCE_TYPE: IDENTITY block.";
+  }
+  const expectedId = normalizeReferenceValue(identity.packageId);
+  if (records.some((record) => normalizeReferenceValue(record.referenceId) !== expectedId)) {
+    return "Every research evidence block must use the locked package/product REFERENCE_ID.";
+  }
+  if (records.some((record) => !record.fact || !/^https?:\/\/\S+$/i.test(record.source))) {
+    return "Every research evidence block requires a direct HTTP(S) SOURCE and VERIFIED_FACT.";
+  }
+  const hosts = new Set<string>();
+  for (const record of records) {
+    try {
+      hosts.add(new URL(record.source).hostname.toLowerCase().replace(/^www\./, ""));
+    } catch {
+      return "Research evidence contains an invalid SOURCE URL.";
+    }
+  }
+  if (hosts.size < 2) {
+    return "Named-reference verification requires evidence from at least two distinct source domains.";
+  }
+  return null;
+}
+
+function normalizeResearchUrl(value: string): string {
+  try {
+    const parsed = new URL(value);
+    parsed.hash = "";
+    return parsed.toString().replace(/\/$/, "").toLowerCase();
+  } catch {
+    return value.trim().toLowerCase().replace(/\/$/, "");
+  }
+}
+
+function normalizeReferenceValue(value: string): string {
+  return value.trim().toLowerCase().replace(/[^a-z0-9._-]+/g, "");
+}
+
+function sameReferenceIdentity(left: ReferenceIdentity, right: ReferenceIdentity): boolean {
+  return (
+    normalizeReferenceValue(left.packageId) === normalizeReferenceValue(right.packageId) &&
+    normalizeSignature(left.title) === normalizeSignature(right.title) &&
+    normalizeSignature(left.creator) === normalizeSignature(right.creator)
+  );
+}
+
+function referenceIdentityLabel(identity: ReferenceIdentity): string {
+  return `${identity.title} / ${identity.creator} / ${identity.packageId}`;
+}
+
+function containsReferenceIdentityContradiction(output: string): boolean {
+  return /(?:not (?:the )?(?:exact|same)|different (?:app|game|product)|only (?:a )?(?:similar|style|wording) match|cannot (?:confirm|verify|identify)|unable to (?:confirm|verify|identify)|does not certify|ambiguous|unclear|정확[^\n]{0,30}(?:확인|검증)[^\n]{0,20}(?:못|않)|동일[^\n]{0,20}(?:아니|않)|별도 앱|다른 게임|모호|단정할 수 없|보증[^\n]{0,20}제한)/i.test(output);
+}
+
+export function isResearchBlockedResponse(output: string): boolean {
+  return output
+    .replace(/\r\n/g, "\n")
+    .split("\n")
+    .some((line) => line.trim() === "RESEARCH_BLOCKED");
+}
+
+function countCompletedWebSearch(result: PtyRunResult): number {
+  return result.events.filter((event) => {
+    const type = typeof event.type === "string" ? event.type : "";
+    if (type === "item.completed") {
+      const item = event.item as Record<string, unknown> | undefined;
+      return item?.type === "web_search";
+    }
+    if (type === "tool_use" || type === "tool_result") {
+      const part = event.part as Record<string, unknown> | undefined;
+      const state = part?.state as Record<string, unknown> | undefined;
+      const toolName = [event.name, event.tool, part?.name, part?.tool]
+        .find((value) => typeof value === "string");
+      const normalizedTool = typeof toolName === "string"
+        ? toolName.toLowerCase().replace(/[^a-z]/g, "")
+        : "";
+      const completed = type === "tool_result" || ["completed", "success"].includes(
+        typeof state?.status === "string" ? state.status.toLowerCase() : ""
+      );
+      return completed && ["websearch", "webfetch"].includes(normalizedTool);
+    }
+    return false;
+  }).length;
 }
 
 function isAbsoluteFileSystemPath(value: string): boolean {
@@ -1971,18 +2566,41 @@ export function summarizeAttemptEvents(result: PtyRunResult): Pick<
   const lastStepPart = lastStepFinish?.part as Record<string, unknown> | undefined;
   const lastStepTokens = lastStepPart?.tokens as Record<string, unknown> | undefined;
   let maxObservedTotalTokens: number | null = null;
-  for (const event of stepFinishEvents) {
+  for (const event of result.events) {
     const eventPart = event.part as Record<string, unknown> | undefined;
     const tokens = eventPart?.tokens as Record<string, unknown> | undefined;
-    const total = typeof tokens?.total === "number" ? tokens.total : null;
+    const usage = event.usage as Record<string, unknown> | undefined;
+    const message = event.message as Record<string, unknown> | undefined;
+    const messageUsage = message?.usage as Record<string, unknown> | undefined;
+    const total = typeof tokens?.total === "number"
+      ? tokens.total
+      : typeof usage?.total_tokens === "number"
+        ? usage.total_tokens
+        : typeof usage?.input_tokens === "number" || typeof usage?.output_tokens === "number"
+          ? Number(usage.input_tokens ?? 0) + Number(usage.output_tokens ?? 0)
+          : typeof messageUsage?.input_tokens === "number" || typeof messageUsage?.output_tokens === "number"
+            ? Number(messageUsage.input_tokens ?? 0) + Number(messageUsage.output_tokens ?? 0)
+            : null;
     if (total !== null && (maxObservedTotalTokens === null || total > maxObservedTotalTokens)) {
       maxObservedTotalTokens = total;
     }
   }
+  const lastItem = lastEvent?.item as Record<string, unknown> | undefined;
+  const lastMessage = lastEvent?.message as Record<string, unknown> | undefined;
+  const lastContent = Array.isArray(lastMessage?.content) ? lastMessage.content : [];
+  const lastClaudeTool = [...lastContent].reverse().find(
+    (block) => Boolean(block) && typeof block === "object" && (block as AnyObj).type === "tool_use"
+  ) as Record<string, unknown> | undefined;
   return {
     lastEventType,
-    lastToolName: typeof part?.tool === "string" ? part.tool : null,
-    lastToolStatus: typeof state?.status === "string" ? state.status : null,
+    lastToolName: typeof part?.tool === "string"
+      ? part.tool
+      : typeof lastItem?.type === "string" && lastItem.type !== "agent_message"
+        ? lastItem.type
+        : typeof lastClaudeTool?.name === "string" ? lastClaudeTool.name : null,
+    lastToolStatus: typeof state?.status === "string"
+      ? state.status
+      : typeof lastItem?.status === "string" ? lastItem.status : null,
     lastToolCommand: command,
     lastStepFinishReason:
       typeof lastStepPart?.reason === "string" ? lastStepPart.reason : null,
@@ -1998,6 +2616,18 @@ export function classifyAgentFailure(result: PtyRunResult, completionReason: str
   let retryable = true;
   if (result.cancelled) {
     kind = "cancelled";
+    retryable = false;
+  } else if (
+    result.exitCode === 2 &&
+    /unexpected argument|unknown (?:argument|option)|unrecognized (?:argument|option)|invalid value .* for|usage:\s*\S+/.test(combined)
+  ) {
+    kind = "spawn_error";
+    retryable = false;
+  } else if (
+    completionReason?.startsWith("This read-only role emitted a file mutation event") &&
+    result.exitCode === 0
+  ) {
+    kind = "role_violation";
     retryable = false;
   } else if (completionReason && result.exitCode === 0) {
     kind = "incomplete_response";
@@ -2019,18 +2649,17 @@ export function classifyAgentFailure(result: PtyRunResult, completionReason: str
       retryable = false;
     } else if (/econnreset|econnrefused|enotfound|network|socket|connection (?:closed|lost|reset)|fetch failed/.test(combined)) {
       kind = "network";
-    } else if (completionReason) {
-      kind = "incomplete_response";
     }
   }
   if (kind === "spawn_error" && /enoent|not recognized|not found/.test(combined)) retryable = false;
-  if (["auth", "model_unavailable", "permission", "cancelled", "orphaned_process"].includes(kind)) {
+  if (["auth", "model_unavailable", "permission", "role_violation", "cancelled", "orphaned_process"].includes(kind)) {
     retryable = false;
   }
   return {
     kind,
     message:
-      completionReason ??
+      (kind === "spawn_error" && result.output.trim() ? result.output.trim().slice(-2000) : null) ??
+      (result.exitCode === 0 ? completionReason : null) ??
       result.failureMessage ??
       `Agent process ended with exit code ${result.exitCode}`,
     retryable,
@@ -2112,11 +2741,12 @@ function roomDirectoryName(pipeline: PipelineDefinition, roleId: string): string
   return `${index}_${roleId}`;
 }
 
-function buildPrompt(
+export function buildPrompt(
   role: AgentRole,
   payload: HandoffPayload,
   roleDefinition?: PipelineRole,
-  stage?: PipelineStage
+  stage?: PipelineStage,
+  stageType?: PipelineStageType
 ): string {
   const resolvedRole =
     roleDefinition ??
@@ -2133,8 +2763,36 @@ function buildPrompt(
   lines.push(`Phase: ${payload.phase}`);
   lines.push(`Loop iteration: ${payload.loopCount}`);
   lines.push("");
-  lines.push("=== GOAL ===");
-  lines.push(payload.refinedGoal);
+  lines.push("=== ORIGINAL USER GOAL (AUTHORITATIVE) ===");
+  lines.push(payload.originalGoal);
+  lines.push("");
+  lines.push("=== APPROVED IMPLEMENTATION PLAN (SUBORDINATE STRATEGY) ===");
+  lines.push(payload.approvedPlan?.trim() || "(no plan has been approved yet)");
+  lines.push("");
+  lines.push("The original user goal is the acceptance contract and is never replaced by the approved plan.");
+  lines.push("If the plan omits, narrows, reinterprets, or conflicts with the original goal, the original goal wins.");
+  lines.push("A named reference product must not be replaced with a merely similar genre based on assumption.");
+  const requirementLedger = payload.requirements ?? deriveRequirementLedger(payload.originalGoal);
+  lines.push("");
+  lines.push("=== FIXED REQUIREMENT LEDGER (MACHINE-CHECKED) ===");
+  for (const item of requirementLedger.items) {
+    lines.push(`- ${item.id} [${item.category.toUpperCase()}]: ${item.text}`);
+  }
+  const latestStatuses = latestRequirementStatuses(requirementLedger);
+  if (latestStatuses.size > 0) {
+    lines.push("Latest recorded evidence status:");
+    for (const item of requirementLedger.items) {
+      lines.push(`- ${item.id}: ${latestStatuses.get(item.id) ?? "UNKNOWN"}`);
+    }
+  }
+  lines.push("Do not merge, delete, weaken, or silently reinterpret these requirements.");
+  if (payload.lockedReferenceIdentity) {
+    lines.push("");
+    lines.push("=== LOCKED REFERENCE IDENTITY (MUST NOT CHANGE) ===");
+    lines.push(JSON.stringify(payload.lockedReferenceIdentity, null, 2));
+    lines.push("All implementation, tests, research, and approval must refer to this exact title, creator, and package/product ID.");
+    lines.push("A different product with a similar title, description, genre, or marketing phrase is not an acceptable substitute.");
+  }
   lines.push("");
   lines.push("=== TARGET PROJECT PATH ===");
   lines.push(payload.targetProjectPath);
@@ -2189,18 +2847,90 @@ function buildPrompt(
   lines.push("");
   lines.push("=== YOUR INSTRUCTIONS ===");
   lines.push(skills.systemPrompt);
+  const useWebSearch = payload.toolAccess?.webSearch.enabled ?? false;
+  const mcpServers = payload.toolAccess
+    ? enabledMcpServers(payload.toolAccess)
+    : [];
+  if (useWebSearch || mcpServers.length > 0) {
+    lines.push("");
+    lines.push("=== CONNECTED INFORMATION TOOLS ===");
+    if (useWebSearch) {
+      lines.push("- Web search is enabled. Use it when the goal depends on current, external, or source-verifiable information.");
+    }
+    for (const server of mcpServers) {
+      lines.push(`- MCP server '${server.name}' (${server.id}) is connected for this role.`);
+    }
+    lines.push("Prefer connected MCP sources over generic web search when they directly cover the requested data.");
+  }
+  const externalResearchRequired = goalRequiresExternalResearch(payload.originalGoal);
+  const namedReferenceRequired = goalRequiresNamedReferenceVerification(payload.originalGoal);
+  const requiresIndependentResearch = externalResearchRequired &&
+    ["planning", "review", "approval"].includes(stageType?.executor ?? "");
+  if (externalResearchRequired) {
+    lines.push("");
+    lines.push("=== EXTERNAL RESEARCH REQUIREMENT ===");
+    lines.push("The original goal explicitly requires internet research; this is a mandatory acceptance requirement.");
+    lines.push("Do not infer a named product's gameplay from its title, category, or a vague store description.");
+    lines.push("Preserve exact product identity and distinguish verified mechanics from assumptions.");
+    if (requiresIndependentResearch) {
+      lines.push("You MUST perform web search during this attempt and report source-supported evidence.");
+      if (namedReferenceRequired) {
+        lines.push("First identify the exact named product. Use this exact structure:");
+        lines.push("[REFERENCE_IDENTITY]");
+        lines.push("TITLE: <exact store/product title>");
+        lines.push("CREATOR: <verified developer/publisher/owner>");
+        lines.push("PACKAGE_ID: <verified package or stable product ID>");
+        lines.push("CANONICAL_URL: https://official-or-store-page.example");
+        lines.push("CANDIDATE_COUNT: <number of distinct products found for the requested name>");
+        lines.push("IDENTITY_MATCH: EXACT|AMBIGUOUS|SIMILAR|UNKNOWN");
+        lines.push("CONFIDENCE: HIGH|MEDIUM|LOW");
+        lines.push("[/REFERENCE_IDENTITY]");
+        lines.push("Then provide at least two evidence blocks from two distinct domains: one IDENTITY source and one GAMEPLAY source.");
+      }
+      lines.push("[RESEARCH_EVIDENCE]");
+      if (namedReferenceRequired) lines.push("EVIDENCE_TYPE: IDENTITY|GAMEPLAY|SUPPORTING");
+      lines.push("SOURCE: https://direct-source-url.example");
+      if (namedReferenceRequired) lines.push("REFERENCE_ID: <the exact PACKAGE_ID above>");
+      lines.push("VERIFIED_FACT: <a source-supported gameplay fact>");
+      lines.push("LIMITATION: <what the checked sources do not establish>");
+      if (!namedReferenceRequired) lines.push("CONFIDENCE: HIGH|MEDIUM|LOW");
+      lines.push("[/RESEARCH_EVIDENCE]");
+      lines.push("Use real direct URLs, not the placeholder above.");
+      if (namedReferenceRequired) {
+        lines.push("Only IDENTITY_MATCH: EXACT with CONFIDENCE: HIGH may proceed.");
+        lines.push("Only CANDIDATE_COUNT: 1 may proceed. List all distinct title/creator/package candidates in VERIFIED_FACT or LIMITATION evidence.");
+        lines.push("If the title is ambiguous, CANDIDATE_COUNT is not 1, the creator/package ID is unknown, or exact gameplay cannot be tied to that same ID, output RESEARCH_BLOCKED on its own line.");
+        lines.push("MEDIUM confidence, a similar game, a shared phrase, or a matching genre must never be approved as the requested reference.");
+      } else {
+        lines.push("If reliable sources do not establish the requested facts, set CONFIDENCE: LOW, output RESEARCH_BLOCKED on its own line, and do not guess or approve.");
+      }
+    }
+  }
   if (stage?.instructions.trim()) {
     lines.push("");
     lines.push("=== CURRENT STAGE INSTRUCTIONS ===");
     lines.push(stage.instructions.trim());
   }
-  if (stage?.kind === "planning") {
+  if (stageType && ["implementation", "test", "review", "approval"].includes(stageType.executor)) {
+    lines.push("");
+    lines.push("=== REQUIREMENT EVIDENCE OUTPUT CONTRACT ===");
+    lines.push("Before the completion token, emit one block for EVERY requirement ID:");
+    lines.push("[REQUIREMENT_EVIDENCE]");
+    lines.push("REQ_ID: REQ-001");
+    lines.push("STATUS: SATISFIED|PARTIAL|FAILED|BLOCKED");
+    lines.push("EVIDENCE: <specific file, command/result, observed behavior, or blocker>");
+    lines.push("[/REQUIREMENT_EVIDENCE]");
+    lines.push("Use SATISFIED only for concrete observed evidence. PASS or APPROVED is rejected unless every requirement is SATISFIED.");
+  }
+  if (stage && stageType?.completionContract === "plan_options") {
     lines.push("");
     lines.push("=== PLANNING COMPLETION CONTRACT ===");
     lines.push(
       `This stage requires exactly ${stage.planOptionsCount} numbered plan options in the existing OPTION format. ` +
-      "This stage-specific count supersedes any generic role-template count."
+      "This stage-specific count supersedes any generic role-template count. " +
+      "Exception: when required research cannot establish the named reference's core gameplay, output the research evidence and RESEARCH_BLOCKED instead of inventing plan options."
     );
+    lines.push(`Every option must explicitly list coverage for: ${requirementLedger.items.map((item) => item.id).join(", ")}.`);
   }
   lines.push("");
   lines.push(`When you have completed your task, output the token ${SENTINEL} on a line by itself, then stop.`);
@@ -2211,10 +2941,12 @@ function buildCompletionRecoveryPrompt(
   role: AgentRole,
   roleDefinition: PipelineRole,
   stage: PipelineStage,
+  stageType: PipelineStageType,
   state: Pick<
     LoopState,
     "sessionId" | "loopCount" | "targetProjectPath" | "accessMode" |
     "additionalAllowedPaths" | "refinedGoal" | "goal" | "lastFailure"
+    | "toolAccess" | "referenceIdentity" | "requirements"
   >,
   recoveryNumber: number,
   recoveryLimit: number
@@ -2242,24 +2974,60 @@ function buildCompletionRecoveryPrompt(
       ? "FULL FILESYSTEM ACCESS was explicitly granted by the operator."
       : `Writes must stay within: ${[state.targetProjectPath, ...state.additionalAllowedPaths].join(", ")}`,
     "",
-    "=== GOAL SUMMARY ===",
-    (state.refinedGoal || state.goal).slice(0, 3000),
+    "=== ORIGINAL USER GOAL (AUTHORITATIVE) ===",
+    state.goal.slice(0, 3000),
+    "",
+    "=== APPROVED IMPLEMENTATION PLAN (SUBORDINATE STRATEGY) ===",
+    (state.refinedGoal || "(no approved plan)").slice(0, 3000),
+    "",
+    "The original goal wins over any conflict, omission, narrowing, or reinterpretation in the plan.",
+    ...(state.referenceIdentity
+      ? [
+          "",
+          "=== LOCKED REFERENCE IDENTITY (MUST NOT CHANGE) ===",
+          JSON.stringify(state.referenceIdentity, null, 2),
+        ]
+      : []),
     "",
     "=== RECOVERY RULES ===",
     "- Use targeted file reads and concise command output. Do not dump complete large files.",
     "- Complete only the missing verification/finalization work.",
     "- Do not claim success without executing the relevant checks.",
   ];
-  if (stage.kind === "test") {
+  if (["implementation", "test", "review", "approval"].includes(stageType.executor)) {
+    lines.push(
+      "",
+      "=== FIXED REQUIREMENTS AND EVIDENCE CONTRACT ===",
+      ...state.requirements.items.map((item) => `- ${item.id}: ${item.text}`),
+      "Emit one [REQUIREMENT_EVIDENCE] block with REQ_ID, STATUS, and EVIDENCE for every ID before the completion token."
+    );
+  }
+  if (stageType.completionContract === "verdict") {
     lines.push(
       "- Run existing test files before writing any new test infrastructure.",
       "- Do not modify production files. If a test fails, report it instead of hiding or bypassing it.",
       "- End with an independent line beginning VERDICT: PASS or VERDICT: FAIL; a concise reason may follow on that same line."
     );
-  } else if (stage.kind === "review" || stage.kind === "approval") {
+  } else if (stageType.completionContract === "approval") {
     lines.push(
       "- End with an independent line beginning APPROVED or REJECTED; a concise reason may follow on that same line."
     );
+  }
+  if (
+    goalRequiresExternalResearch(state.goal) &&
+    ["planning", "review", "approval"].includes(stageType.executor)
+  ) {
+    lines.push(
+      "- This recovery must independently use web search and include [RESEARCH_EVIDENCE], a direct SOURCE URL, VERIFIED_FACT or LIMITATION, and CONFIDENCE.",
+      "- If core reference mechanics remain unverified, output RESEARCH_BLOCKED instead of guessing or approving."
+    );
+    if (goalRequiresNamedReferenceVerification(state.goal)) {
+      lines.push(
+        "- Named-reference recovery requires [REFERENCE_IDENTITY] with exact title, creator, package/product ID, canonical URL, CANDIDATE_COUNT: 1, IDENTITY_MATCH: EXACT, and CONFIDENCE: HIGH.",
+        "- Provide IDENTITY and GAMEPLAY evidence for the same REFERENCE_ID from at least two distinct domains.",
+        "- Ambiguous, similar, different-product, or medium-confidence evidence must output RESEARCH_BLOCKED."
+      );
+    }
   }
   for (const rule of skills.enforcedRules) lines.push(`- ${rule}`);
   lines.push(
@@ -2370,21 +3138,19 @@ export function classifyExhaustedFailureDisposition(
 ): ExhaustedFailureDisposition {
   if (failure.kind === "orphaned_process") return "blocked";
   if (failure.kind === "cancelled") return "stopped";
-  if (["auth", "model_unavailable", "permission"].includes(failure.kind)) {
+  if (["auth", "model_unavailable", "permission", "role_violation"].includes(failure.kind)) {
     return "wait_for_user";
   }
   if (failure.kind === "spawn_error" && !failure.retryable) return "wait_for_user";
 
-  const observedSpend = attempts.some(
+  const observedSpendAttempts = attempts.filter(
     (attempt) =>
       (attempt.maxObservedTotalTokens ?? 0) > 0 ||
       (attempt.assistantTextBytes ?? 0) > 0
-  );
-  if (["transport_timeout", "network", "rate_limited", "process_exit"].includes(failure.kind)) {
-    return "recover_transport";
-  }
-  if (failure.retryable && !observedSpend) return "recover_transport";
-  return observedSpend ? "pause_stagnation" : "wait_for_user";
+  ).length;
+  if (failure.kind === "rate_limited") return "recover_transport";
+  if (failure.retryable && observedSpendAttempts < 2) return "recover_transport";
+  return observedSpendAttempts >= 2 ? "pause_stagnation" : "wait_for_user";
 }
 
 export function automaticRecoveryDelayMs(
@@ -2395,11 +3161,15 @@ export function automaticRecoveryDelayMs(
   return backoffMs[Math.min(Math.max(1, cycle) - 1, backoffMs.length - 1)];
 }
 
-function parseRetryBackoff(value: string | undefined, fallback: number[]): number[] {
+function parseRetryBackoff(
+  value: string | undefined,
+  fallback: number[],
+  optionName = "--retry-backoff"
+): number[] {
   if (!value || value === "true") return [...fallback];
   const parsed = value.split(",").map((part) => Number.parseInt(part.trim(), 10));
   if (parsed.length === 0 || parsed.some((item) => !Number.isFinite(item) || item <= 0)) {
-    throw new Error("--retry-backoff must be a comma-separated list of positive milliseconds.");
+    throw new Error(`${optionName} must be a comma-separated list of positive milliseconds.`);
   }
   return parsed;
 }
@@ -2422,7 +3192,8 @@ function applyResilienceOverrides(
     ),
     automaticRecoveryBackoffMs: parseRetryBackoff(
       parsed["automatic-recovery-backoff"],
-      current.automaticRecoveryBackoffMs
+      current.automaticRecoveryBackoffMs,
+      "--automatic-recovery-backoff"
     ),
     retryBackoffMs: parseRetryBackoff(parsed["retry-backoff"], current.retryBackoffMs),
     phaseRecoveryBudgetMs: parseIntSafe(
@@ -2534,7 +3305,7 @@ Usage:
   agent-loop init                                    Initialize the system in the current directory
   agent-loop models [--binary opencode] [--profile]  List available CLI models
   agent-loop run --goal "..." --target "..." [opts]  Start a new session
-  agent-loop resume --session <id> [opts]            Resume a paused session
+  agent-loop resume --session <id> [opts]            Resume a held session
   agent-loop revise-plan --session <id> --message "..."  Revise the plan with AI
 
 Options for 'run':
@@ -2542,8 +3313,7 @@ Options for 'run':
   --target <path>            Target project path (default: cwd)
   --full-access              Allow filesystem access outside the target without prompting
   --binary <name>            CLI binary name (default: opencode)
-  --profile <name>           CLI profile: opencode | kilo (auto-detected from --binary)
-  --pipeline <path>          Agent stages/roles pipeline JSON (default: <root>/agent_pipeline.json)
+  --profile <name>           Legacy default provider: opencode | kilo | codex | claude
   --max-iterations <n>       Max loop iterations (default: 20)
   --phase-timeout <ms>       Progress-renewable attempt window (default: 900000)
   --idle-timeout <ms>        Model no-progress timeout after connection (default: 300000)
@@ -2566,6 +3336,10 @@ Options for 'run':
   --qa-model <m>             Model for qa_lead agent
   --master-model <m>         Model for master agent
   --interrupter-model <m>    Model for interrupter agent
+  --model-mapping <json>     Arbitrary pipeline role-to-model mapping
+  --provider-mapping <json>  Arbitrary pipeline role-to-provider mapping
+  --roles <path>             Agent role definition file (default: <root>/agent_roles.json)
+  --loop <path>              Loop graph definition file (default: <root>/agent_loop.json)
   --session <id>             Pre-assigned session ID (optional; auto-generated if omitted)
   --root <path>              Orchestrator root dir (default: this file's dir)
 
@@ -2724,15 +3498,22 @@ class LoopOrchestrator {
         currentStage.countsIteration &&
         this.state.completedIterations >= this.state.maxIterations
       ) {
-        this.state.status = LoopStatus.FAILED;
+        this.state.status = LoopStatus.PAUSED;
+        this.state.statusReason =
+          `Completed implementation-to-verification cycle budget (${this.state.maxIterations}) was exhausted. ` +
+          "Resume only after reviewing unresolved requirements or revising the plan.";
+        await this.appendProgressNote(
+          `[Loop ${this.state.loopCount}] PAUSED: ${this.state.statusReason}`
+        );
         await this.saveState();
         await this.saveRegistry();
-        console.error(`[orchestrator] Max iterations (${this.state.maxIterations}) reached. Session FAILED.`);
+        console.warn(`[orchestrator] Max iterations (${this.state.maxIterations}) reached. Session PAUSED.`);
         return;
       }
 
       try {
-        switch (currentStage.kind) {
+        const currentStageType = stageTypeForStage(this.state.pipeline, currentStage);
+        switch (currentStageType.executor) {
           case "planning":
             await this.runPlanning(currentStage);
             break;
@@ -2824,7 +3605,7 @@ class LoopOrchestrator {
           await this.appendProgressNote(
             `[Loop ${this.state.loopCount}] ${this.state.phase}: Retry budget exhausted (${err.failure.kind}).`
           );
-          if (currentStage.kind === "interrupt") {
+          if (executorForStage(this.state.pipeline, currentStage) === "interrupt") {
             const operatorRequested = Boolean(this.state.interruptMessage);
             this.state.status = operatorRequested ? LoopStatus.STOPPED : LoopStatus.PAUSED;
             this.state.statusReason = operatorRequested
@@ -2913,7 +3694,7 @@ class LoopOrchestrator {
           await this.saveState();
           await this.saveRegistry();
         } else {
-          if (currentStage.kind !== "planning") {
+          if (executorForStage(this.state.pipeline, currentStage) !== "planning") {
             applyPipelineTarget(this.state, currentStage.onFailure);
           }
           await this.saveState();
@@ -2936,9 +3717,25 @@ class LoopOrchestrator {
       return;
     }
 
+    if (
+      goalRequiresExternalResearch(this.state.goal) &&
+      !this.state.toolAccess.webSearch.enabled
+    ) {
+      this.state.status = LoopStatus.WAITING_USER;
+      this.state.statusReason =
+        "The original goal explicitly requires internet research, but Web Search is disabled. Enable Web Search and resume the session.";
+      await this.appendProgressNote(
+        "[Loop 0] PLANNING: Waiting for Web Search because the original goal explicitly requires internet research."
+      );
+      await this.commitPhaseResult({});
+      return;
+    }
+
     const payload: HandoffPayload = {
       sessionId: this.state.sessionId,
-      refinedGoal: this.state.goal,
+      originalGoal: this.state.goal,
+      approvedPlan: null,
+      lockedReferenceIdentity: null,
       targetProjectPath: this.state.targetProjectPath,
       additionalAllowedPaths: this.state.additionalAllowedPaths,
       accessMode: this.state.accessMode,
@@ -2946,15 +3743,18 @@ class LoopOrchestrator {
       failureDigest: null,
       phase: stage.id,
       loopCount: 0,
+      toolAccess: this.state.toolAccess,
+      requirements: this.state.requirements,
     };
 
     const role = roleForStage(this.state.pipeline, stage);
-    const prompt = buildPrompt(role.id, payload, role, stage);
+    const stageType = stageTypeForStage(this.state.pipeline, stage);
+    const prompt = buildPrompt(role.id, payload, role, stage, stageType);
     const result = await this.executeAgent(
       role.id,
       prompt,
       undefined,
-      stage.kind,
+      stageType,
       role.modelRole,
       stage.planOptionsCount
     );
@@ -2964,6 +3764,28 @@ class LoopOrchestrator {
     }
 
     const output = extractOutput(result);
+    if (isResearchBlockedResponse(output)) {
+      this.state.referenceIdentity = null;
+      this.recordStageResult(stage, output, null);
+      this.state.status = LoopStatus.WAITING_USER;
+      this.state.statusReason =
+        "Internet research did not establish the named reference's core gameplay. Clarify the reference or provide a reliable source before resuming.";
+      await this.appendProgressNote(
+        "[Loop 0] PLANNING: Research evidence was insufficient; waiting for operator clarification instead of guessing."
+      );
+      await this.archiveLoop(0, stage.id, role.id, result, new Date(), new Date());
+      await this.commitPhaseResult({});
+      return;
+    }
+    if (goalRequiresNamedReferenceVerification(this.state.goal)) {
+      const identity = parseReferenceIdentity(output);
+      if (!identity) {
+        throw new Error("Planner completed without a valid locked reference identity.");
+      }
+      this.state.referenceIdentity = identity;
+    } else {
+      this.state.referenceIdentity = null;
+    }
     let choices = parsePlanChoices(output);
 
     const planPath = path.join(this.sessionDir, loopConfig.paths.sessionFileNames.plan);
@@ -3020,7 +3842,9 @@ class LoopOrchestrator {
     stage: PipelineStage,
     failureDigest: string | null
   ): Promise<void> {
-    const implementationGoal = this.state.refinedGoal || this.state.goal;
+    const implementationGoal = [this.state.goal, this.state.refinedGoal ?? ""]
+      .filter((value) => value.trim().length > 0)
+      .join("\n\n");
     const outsidePaths = this.state.accessMode === "full_access"
       ? []
       : findAbsolutePathsOutsideAllowedRoots(
@@ -3054,7 +3878,9 @@ class LoopOrchestrator {
     const notes = await this.readProgressNotes();
     const payload: HandoffPayload = {
       sessionId: this.state.sessionId,
-      refinedGoal: implementationGoal,
+      originalGoal: this.state.goal,
+      approvedPlan: this.state.refinedGoal,
+      lockedReferenceIdentity: this.state.referenceIdentity,
       targetProjectPath: this.state.targetProjectPath,
       additionalAllowedPaths: this.state.additionalAllowedPaths,
       accessMode: this.state.accessMode,
@@ -3063,16 +3889,19 @@ class LoopOrchestrator {
       phase: stage.id,
       loopCount: this.state.loopCount,
       planRevised,
+      toolAccess: this.state.toolAccess,
+      requirements: this.state.requirements,
     };
 
     const role = roleForStage(this.state.pipeline, stage);
-    const prompt = buildPrompt(role.id, payload, role, stage);
+    const stageType = stageTypeForStage(this.state.pipeline, stage);
+    const prompt = buildPrompt(role.id, payload, role, stage, stageType);
     const startedAt = new Date();
     const result = await this.executeAgent(
       role.id,
       prompt,
       undefined,
-      stage.kind,
+      stageType,
       role.modelRole
     );
     const endedAt = new Date();
@@ -3105,7 +3934,9 @@ class LoopOrchestrator {
         : null;
     const payload: HandoffPayload = {
       sessionId: this.state.sessionId,
-      refinedGoal: this.state.refinedGoal || this.state.goal,
+      originalGoal: this.state.goal,
+      approvedPlan: this.state.refinedGoal,
+      lockedReferenceIdentity: this.state.referenceIdentity,
       targetProjectPath: this.state.targetProjectPath,
       additionalAllowedPaths: this.state.additionalAllowedPaths,
       accessMode: this.state.accessMode,
@@ -3113,16 +3944,19 @@ class LoopOrchestrator {
       failureDigest: priorStageFailure,
       phase: stage.id,
       loopCount: this.state.loopCount,
+      toolAccess: this.state.toolAccess,
+      requirements: this.state.requirements,
     };
 
     const role = roleForStage(this.state.pipeline, stage);
-    const prompt = buildPrompt(role.id, payload, role, stage);
+    const stageType = stageTypeForStage(this.state.pipeline, stage);
+    const prompt = buildPrompt(role.id, payload, role, stage, stageType);
     const startedAt = new Date();
     const result = await this.executeAgent(
       role.id,
       prompt,
       undefined,
-      stage.kind,
+      stageType,
       role.modelRole
     );
     const endedAt = new Date();
@@ -3134,7 +3968,20 @@ class LoopOrchestrator {
     }
 
     const testerOutput = extractOutput(result);
-    const verdict = parseTesterVerdict(testerOutput) ?? "FAIL";
+    const assertedVerdict = parseTesterVerdict(testerOutput) ?? "FAIL";
+    const requirementCoverage = evaluateRequirementCoverage(
+      testerOutput,
+      this.state.requirements.items
+    );
+    const verdict = assertedVerdict === "PASS" && !requirementCoverage.allSatisfied
+      ? "FAIL"
+      : assertedVerdict;
+    if (assertedVerdict === "PASS" && verdict === "FAIL") {
+      this.state.lastFailureDigest =
+        `Tester PASS rejected by requirement gate. Missing evidence: ` +
+        `${requirementCoverage.missing.join(", ") || "none"}; unresolved: ` +
+        `${requirementCoverage.unresolved.join(", ") || "none"}.`;
+    }
     await atomicWriteJson(this.rooms[role.id].outputPayloadPath, {
       loopCount: this.state.loopCount,
       producedAt: endedAt.toISOString(),
@@ -3150,13 +3997,18 @@ class LoopOrchestrator {
 
   private async runVerification(stage: PipelineStage): Promise<void> {
     const evidence = Object.values(this.state.stageResults)
-      .filter((result) => result.kind === "test")
+      .filter((result) => {
+        const sourceStage = this.state.pipeline.stages.find((candidate) => candidate.id === result.stageId);
+        return sourceStage ? executorForStage(this.state.pipeline, sourceStage) === "test" : result.executor === "test";
+      })
       .map((result) => `[${result.stageId}] ${result.verdict ?? "UNKNOWN"}\n${result.output}`)
       .join("\n\n");
     const notes = await this.readProgressNotes();
     const payload: HandoffPayload = {
       sessionId: this.state.sessionId,
-      refinedGoal: this.state.refinedGoal || this.state.goal,
+      originalGoal: this.state.goal,
+      approvedPlan: this.state.refinedGoal,
+      lockedReferenceIdentity: this.state.referenceIdentity,
       targetProjectPath: this.state.targetProjectPath,
       additionalAllowedPaths: this.state.additionalAllowedPaths,
       accessMode: this.state.accessMode,
@@ -3164,25 +4016,43 @@ class LoopOrchestrator {
       failureDigest: null,
       phase: stage.id,
       loopCount: this.state.loopCount,
+      toolAccess: this.state.toolAccess,
+      requirements: this.state.requirements,
     };
     const role = roleForStage(this.state.pipeline, stage);
+    const stageType = stageTypeForStage(this.state.pipeline, stage);
     const reviewPrompt =
-      buildPrompt(role.id, payload, role, stage) +
+      buildPrompt(role.id, payload, role, stage, stageType) +
       `\n\n=== PRIOR TEST EVIDENCE (truncated) ===\n${stripAnsi(evidence).slice(-6000)}`;
     const startedAt = new Date();
     const result = await this.executeAgent(
       role.id,
       reviewPrompt,
       undefined,
-      stage.kind,
+      stageType,
       role.modelRole
     );
     const endedAt = new Date();
     await this.archiveLoop(this.state.loopCount, stage.id, role.id, result, startedAt, endedAt);
 
     const output = extractOutput(result);
+    if (isResearchBlockedResponse(output)) {
+      this.recordStageResult(stage, output, null);
+      this.state.status = LoopStatus.WAITING_USER;
+      this.state.statusReason =
+        "QA could not independently verify the named reference from web sources. Clarify the reference or provide a reliable source before resuming.";
+      await this.appendProgressNote(
+        `[Loop ${this.state.loopCount}] ${stage.id}: Research blocked; waiting for operator clarification.`
+      );
+      await this.commitPhaseResult({});
+      return;
+    }
     const verdict = parseMasterVerdict(output);
-    const approved = verdict === "approved";
+    const requirementCoverage = evaluateRequirementCoverage(
+      output,
+      this.state.requirements.items
+    );
+    const approved = verdict === "approved" && requirementCoverage.allSatisfied;
     this.recordStageResult(stage, output, approved ? "APPROVED" : "REJECTED");
     if (approved) {
       await this.appendProgressNote(`[Loop ${this.state.loopCount}] ${stage.id}: APPROVED by ${role.id}.`);
@@ -3191,7 +4061,12 @@ class LoopOrchestrator {
       return;
     }
 
-    const failureDigest = extractFailureDigest(`${output}\n${evidence}`);
+    const requirementGateFailure = verdict === "approved" && !requirementCoverage.allSatisfied
+      ? `QA APPROVED rejected by requirement gate. Missing evidence: ` +
+        `${requirementCoverage.missing.join(", ") || "none"}; unresolved: ` +
+        `${requirementCoverage.unresolved.join(", ") || "none"}.`
+      : "";
+    const failureDigest = requirementGateFailure || extractFailureDigest(`${output}\n${evidence}`);
     const entry: ErrorSignature = {
       signature: normalizeSignature(failureDigest),
       rawMessage: failureDigest,
@@ -3200,7 +4075,7 @@ class LoopOrchestrator {
     };
     const oscillation = pushAndCheckOscillation(this.state.errorQueue, entry);
     this.state.errorQueue = oscillation.queue;
-    if (oscillation.oscillation) {
+    if (oscillation.oscillation || this.state.convergence.stagnantCycles >= 1) {
       this.enterInterruptPhase();
     } else {
       applyPipelineTarget(this.state, stage.onFailure);
@@ -3215,7 +4090,9 @@ class LoopOrchestrator {
     const notes = await this.readProgressNotes();
     const payload: HandoffPayload = {
       sessionId: this.state.sessionId,
-      refinedGoal: this.state.refinedGoal || this.state.goal,
+      originalGoal: this.state.goal,
+      approvedPlan: this.state.refinedGoal,
+      lockedReferenceIdentity: this.state.referenceIdentity,
       targetProjectPath: this.state.targetProjectPath,
       additionalAllowedPaths: this.state.additionalAllowedPaths,
       accessMode: this.state.accessMode,
@@ -3223,16 +4100,19 @@ class LoopOrchestrator {
       failureDigest: null,
       phase: stage.id,
       loopCount: this.state.loopCount,
+      toolAccess: this.state.toolAccess,
+      requirements: this.state.requirements,
     };
 
     const role = roleForStage(this.state.pipeline, stage);
-    const prompt = buildPrompt(role.id, payload, role, stage);
+    const stageType = stageTypeForStage(this.state.pipeline, stage);
+    const prompt = buildPrompt(role.id, payload, role, stage, stageType);
     const startedAt = new Date();
     const result = await this.executeAgent(
       role.id,
       prompt,
       undefined,
-      stage.kind,
+      stageType,
       role.modelRole
     );
     const endedAt = new Date();
@@ -3240,10 +4120,32 @@ class LoopOrchestrator {
     await this.archiveLoop(this.state.loopCount, stage.id, role.id, result, startedAt, endedAt);
 
     const fullOutput = extractOutput(result);
+    if (isResearchBlockedResponse(fullOutput)) {
+      this.recordStageResult(stage, fullOutput, null);
+      this.state.status = LoopStatus.WAITING_USER;
+      this.state.statusReason =
+        "Final acceptance could not independently verify the named reference from web sources. Clarify the reference or provide a reliable source before resuming.";
+      await this.appendProgressNote(
+        `[Loop ${this.state.loopCount}] ${stage.id}: Research blocked; final approval withheld pending operator clarification.`
+      );
+      await this.commitPhaseResult({ masterApproved: false });
+      return;
+    }
     const verdictText = extractVerdictFromOutput(result);
     const verdict = parseMasterVerdict(verdictText);
-    const approved = result.exitCode === 0 && verdict === "approved";
-    this.recordStageResult(stage, fullOutput, approved ? "APPROVED" : "REJECTED");
+    const requirementCoverage = evaluateRequirementCoverage(
+      fullOutput,
+      this.state.requirements.items
+    );
+    const approved =
+      result.exitCode === 0 &&
+      verdict === "approved" &&
+      requirementCoverage.allSatisfied;
+    this.recordStageResult(
+      stage,
+      fullOutput,
+      approved ? "APPROVED" : verdict === "rejected" ? "REJECTED" : null
+    );
 
     console.log(`[orchestrator] Master verdict: ${verdict} (exitCode=${result.exitCode})`);
     console.log(`[orchestrator] Verdict text (last 200 chars): ${verdictText.slice(-200)}`);
@@ -3257,11 +4159,40 @@ class LoopOrchestrator {
         await this.saveRegistry();
         console.log(`[orchestrator] Session ${this.state.sessionId} achieved SUCCESS.`);
       }
+    } else if (verdict === "approved") {
+      const protocolFailure =
+        `Master APPROVED rejected by requirement gate. Missing evidence: ` +
+        `${requirementCoverage.missing.join(", ") || "none"}; unresolved: ` +
+        `${requirementCoverage.unresolved.join(", ") || "none"}.`;
+      await this.appendProgressNote(
+        `[Loop ${this.state.loopCount}] ${stage.id}: APPROVED rejected because mandatory requirement evidence was incomplete.`
+      );
+      this.state.statusReason = protocolFailure;
+      this.enterInterruptPhase();
+      await this.commitPhaseResult({ masterApproved: false, lastFailureDigest: protocolFailure });
+    } else if (verdict === "unknown") {
+      const protocolFailure =
+        "Master completed without an extractable APPROVED or REJECTED decision. " +
+        "Implementation will not be repeated for a decision-protocol failure.";
+      await this.appendProgressNote(
+        `[Loop ${this.state.loopCount}] ${stage.id}: INVALID DECISION; entering INTERRUPT instead of re-running implementation.`
+      );
+      const rejectEntry: ErrorSignature = {
+        signature: approvalDecisionSignature(verdictText),
+        rawMessage: protocolFailure,
+        timestamp: Date.now(),
+        phase: stage.id,
+      };
+      this.state.errorQueue = pushAndCheckOscillation(this.state.errorQueue, rejectEntry).queue;
+      this.state.statusReason = protocolFailure;
+      this.enterInterruptPhase();
+      await this.commitPhaseResult({ masterApproved: false, lastFailureDigest: protocolFailure });
     } else {
       await this.appendProgressNote(`[Loop ${this.state.loopCount}] ${stage.id}: REJECTED (${verdict}).`);
+      const rejectionDigest = stripAnsi(verdictText).trim().slice(-4000);
       const rejectEntry: ErrorSignature = {
-        signature: normalizeSignature(`master_reject:${verdictText.slice(0, 80)}`),
-        rawMessage: verdictText.slice(0, 200),
+        signature: approvalDecisionSignature(verdictText),
+        rawMessage: rejectionDigest.slice(0, 400),
         timestamp: Date.now(),
         phase: stage.id,
       };
@@ -3272,7 +4203,10 @@ class LoopOrchestrator {
       } else {
         applyPipelineTarget(this.state, stage.onFailure);
       }
-      await this.commitPhaseResult({ masterApproved: false });
+      await this.commitPhaseResult({
+        masterApproved: false,
+        lastFailureDigest: rejectionDigest || "Master rejected the implementation without additional details.",
+      });
     }
   }
 
@@ -3296,7 +4230,9 @@ class LoopOrchestrator {
 
     const payload: HandoffPayload = {
       sessionId: this.state.sessionId,
-      refinedGoal: this.state.refinedGoal || this.state.goal,
+      originalGoal: this.state.goal,
+      approvedPlan: this.state.refinedGoal,
+      lockedReferenceIdentity: this.state.referenceIdentity,
       targetProjectPath: this.state.targetProjectPath,
       additionalAllowedPaths: this.state.additionalAllowedPaths,
       accessMode: this.state.accessMode,
@@ -3306,16 +4242,19 @@ class LoopOrchestrator {
       loopCount: this.state.loopCount,
       interruptMessage: humanMessage,
       failureEvidence,
+      toolAccess: this.state.toolAccess,
+      requirements: this.state.requirements,
     };
 
     const role = roleForStage(this.state.pipeline, stage);
-    const prompt = buildPrompt(role.id, payload, role, stage);
+    const stageType = stageTypeForStage(this.state.pipeline, stage);
+    const prompt = buildPrompt(role.id, payload, role, stage, stageType);
     const startedAt = new Date();
     const result = await this.executeAgent(
       role.id,
       prompt,
       1,
-      stage.kind,
+      stageType,
       role.modelRole
     );
     const endedAt = new Date();
@@ -3400,11 +4339,11 @@ class LoopOrchestrator {
       accessMode: this.state.accessMode,
       pendingAccessRequest: this.state.pendingAccessRequest,
       detectedAbsolutePathsOutsideTarget: findAbsolutePathsOutsideTarget(
-        this.state.refinedGoal || this.state.goal,
+        [this.state.goal, this.state.refinedGoal ?? ""].join("\n\n"),
         this.state.targetProjectPath
       ),
       detectedAbsolutePathsOutsideAllowedRoots: findAbsolutePathsOutsideAllowedRoots(
-        this.state.refinedGoal || this.state.goal,
+        [this.state.goal, this.state.refinedGoal ?? ""].join("\n\n"),
         this.state.targetProjectPath,
         this.state.additionalAllowedPaths
       ),
@@ -3468,12 +4407,21 @@ class LoopOrchestrator {
   private async executeAgent(
     role: AgentRole,
     prompt: string,
-    maxAttemptsOverride?: number,
-    completionKind: PipelineStage["kind"] = "implementation",
+    maxAttemptsOverride: number | undefined,
+    stageType: PipelineStageType,
     modelRole: BuiltinModelRole = "implementer",
     planOptionsCount = 3
   ): Promise<PtyRunResult> {
     const pipelineRole = this.state.pipeline.roles.find((candidate) => candidate.id === role);
+    const readOnlyRole = isReadOnlyModelRole(modelRole);
+    const providerId =
+      pipelineRole?.provider ??
+      this.state.providerMapping?.[role] ??
+      this.state.providerMapping?.[modelRole] ??
+      this.state.cliProfile;
+    const provider = this.state.providerConfigs?.[providerId] ?? loopConfig.providers[providerId];
+    if (!provider) throw new Error(`No provider configured for role ${role}: ${providerId}`);
+    if (!provider.enabled) throw new Error(`Provider ${providerId} configured for role ${role} is disabled.`);
     const model =
       pipelineRole?.model ??
       this.state.modelMapping[modelRole] ??
@@ -3486,9 +4434,9 @@ class LoopOrchestrator {
       undefined;
     const maxAttempts =
       maxAttemptsOverride ??
-      (completionKind === "interrupt" ? 1 : this.state.resilience.maxAgentAttempts);
+      (stageType.executor === "interrupt" ? 1 : this.state.resilience.maxAgentAttempts);
     const maxCompletionRecoveryAttempts =
-      completionKind === "planning" || completionKind === "interrupt"
+      stageType.executor === "planning" || stageType.executor === "interrupt"
         ? 0
         : this.state.resilience.maxCompletionRecoveryAttempts;
     const totalAttemptSlots = maxAttempts + maxCompletionRecoveryAttempts;
@@ -3610,6 +4558,7 @@ class LoopOrchestrator {
               instructions: "",
             },
             stageById(this.state.pipeline, this.state.phase),
+            stageType,
             this.state,
             completionRecoveryNumber,
             maxCompletionRecoveryAttempts
@@ -3626,18 +4575,44 @@ class LoopOrchestrator {
       });
       await this.saveState();
 
-      const profile = resolveCliProfile(this.state.cliProfile, this.state.cliBinary);
-      const args = profile.buildRunArgs({
+      const selectedMcpServers = enabledMcpServers(this.state.toolAccess);
+      const runtimeMcpServers = resolveMcpServerSecrets(
+        selectedMcpServers,
+        CORE_SECRET_VALUES,
+        process.env
+      );
+      const useWebSearch = this.state.toolAccess.webSearch.enabled;
+      let claudeMcpConfigPath: string | undefined;
+      if (provider.adapter === "claude" && selectedMcpServers.length > 0) {
+        const runtimeDir = path.join(this.sessionDir, "runtime");
+        await fse.ensureDir(runtimeDir);
+        claudeMcpConfigPath = path.join(runtimeDir, `claude_mcp_${attemptId}.json`);
+        await atomicWriteSensitiveJson(claudeMcpConfigPath, claudeMcpDocument(runtimeMcpServers));
+      }
+      const invocation = buildProviderInvocation(provider, {
         model,
         targetProjectPath: this.state.targetProjectPath,
+        additionalAllowedPaths: this.state.additionalAllowedPaths,
         prompt: recoveryPrompt,
         variant,
         resumeSessionId: resumeThisAttempt ? cliSessionId ?? undefined : undefined,
+        fullAccess: this.state.accessMode === "full_access",
+        readOnly: readOnlyRole,
+        webSearch: useWebSearch,
+        webSearchMode: this.state.toolAccess.webSearch.mode,
+        mcpServers: selectedMcpServers,
+        claudeMcpConfigPath,
+        secretValues: CORE_SECRET_VALUES,
       });
+      const interactionWhitelist = (
+        provider.interactionWhitelist
+        ?? (provider.adapter === "kilo" ? KILO_PROFILE.interactionWhitelist : INTERACTION_WHITELIST)
+      ).filter((pattern) => !/(?:allow|permission|action required|run command)/i.test(pattern));
 
       console.log(
         `\n[${this.state.sessionId}] Phase=${this.state.phase} Role=${role} ` +
-        `Model=${model}${variant ? ` Variant=${variant}` : ""} Loop=${this.state.loopCount} ` +
+        `Provider=${providerId} Model=${model}${variant ? ` Variant=${variant}` : ""} ` +
+        `Web=${useWebSearch ? "on" : "off"} MCP=${selectedMcpServers.length} Loop=${this.state.loopCount} ` +
         (isCompletionRecovery
           ? `CompletionRecovery=${completionRecoveryNumber}/${maxCompletionRecoveryAttempts}`
           : `Attempt=${attemptNumber}/${maxAttempts}${resumeThisAttempt ? ` ResumeCLI=${cliSessionId}` : ""}`)
@@ -3647,8 +4622,8 @@ class LoopOrchestrator {
       let lastProgressPersistedAt = 0;
       const supervisor = new ProcessSupervisor();
       const supervised = await supervisor.run({
-        binary: resolveBinaryOnWindows(this.state.cliBinary),
-        args,
+        binary: resolveBinaryOnWindows(invocation.binary),
+        args: invocation.args,
         cwd: this.state.targetProjectPath,
         env: {
           ...Object.fromEntries(
@@ -3658,6 +4633,7 @@ class LoopOrchestrator {
           AGENT_LOOP_AGENT_ROLE: role,
           AGENT_LOOP_PHASE: this.state.phase,
           AGENT_LOOP_ATTEMPT_ID: attemptId,
+          ...invocation.env,
         },
         cols: loopConfig.defaults.ptyCols,
         rows: loopConfig.defaults.ptyRows,
@@ -3673,8 +4649,9 @@ class LoopOrchestrator {
         killTimeoutMs: this.state.resilience.killTimeoutMs,
         maxInMemoryOutputBytes: this.state.resilience.maxInMemoryOutputBytes,
         rawLogPath,
-        interactionWhitelist: profile.interactionWhitelist,
+        interactionWhitelist,
         destructivePrompts: loopConfig.destructivePrompts,
+        sensitiveValues: Object.values(CORE_SECRET_VALUES),
         pollControl: () => this.pollControlRequest(),
         onProgress: (progress) => {
           this.activePtyPid = progress.childPid;
@@ -3692,6 +4669,8 @@ class LoopOrchestrator {
             progressWrite = progressWrite.then(() => this.saveState()).catch(() => {});
           }
         },
+      }).finally(async () => {
+        if (claudeMcpConfigPath) await fse.remove(claudeMcpConfigPath).catch(() => {});
       });
       await progressWrite;
       this.activePtyPid = null;
@@ -3738,7 +4717,24 @@ class LoopOrchestrator {
 
       const completion =
         supervised.outcome === "succeeded"
-          ? validateAgentCompletion(completionKind, result, planOptionsCount)
+          ? validateAgentCompletion(
+              stageType.completionContract,
+              result,
+              planOptionsCount,
+              {
+                externalResearchRequired:
+                  goalRequiresExternalResearch(this.state.goal) &&
+                  ["planning", "review", "approval"].includes(stageType.executor),
+                namedReferenceRequired:
+                  goalRequiresNamedReferenceVerification(this.state.goal) &&
+                  ["planning", "review", "approval"].includes(stageType.executor),
+                expectedReferenceIdentity:
+                  ["review", "approval"].includes(stageType.executor)
+                    ? this.state.referenceIdentity
+                    : null,
+                forbidFileMutation: readOnlyRole,
+              }
+            )
           : { valid: false, reason: supervised.failureMessage };
       if (supervised.outcome === "succeeded" && completion.valid) {
         activeAttempt.status = "succeeded";
@@ -3746,7 +4742,7 @@ class LoopOrchestrator {
         activeAttempt.exitCode = result.exitCode;
         activeAttempt.cliSessionId = cliSessionId;
         this.state.activeAttempt = activeAttempt;
-        if (completionKind !== "interrupt") {
+        if (stageType.executor !== "interrupt") {
           this.state.lastFailure = null;
           this.state.automaticRecovery = null;
           this.state.statusReason = null;
@@ -3920,12 +4916,17 @@ class LoopOrchestrator {
       agentRole: role,
       model: (() => {
         const pipelineRole = this.state.pipeline.roles.find((candidate) => candidate.id === role);
-        return pipelineRole?.model ?? this.state.modelMapping[pipelineRole?.modelRole ?? role] ?? "unknown";
+        const providerId = pipelineRole?.provider
+          ?? this.state.providerMapping?.[role]
+          ?? this.state.providerMapping?.[pipelineRole?.modelRole ?? role]
+          ?? this.state.cliProfile;
+        const model = pipelineRole?.model ?? this.state.modelMapping[pipelineRole?.modelRole ?? role] ?? "unknown";
+        return `${providerId}:${model}`;
       })(),
       exitCode: result.exitCode,
       startedAt: startedAt.toISOString(),
       endedAt: endedAt.toISOString(),
-      output: result.output,
+      output: boundedHistoryOutput(result.output),
       result: result.timedOut ? "timeout" : result.exitCode === 0 ? "success" : "failure",
       signature: null,
       interruptMessage: this.state.interruptMessage ?? null,
@@ -3944,6 +4945,38 @@ class LoopOrchestrator {
     const fileName = `loop_${loopNum}_${phase.toLowerCase()}_${role}${attemptSuffix}.json`;
     const filePath = path.join(this.sessionDir, loopConfig.paths.loopHistoryDirName, fileName);
     await atomicWriteJson(filePath, entry);
+    await Promise.all([
+      this.pruneRetainedFiles(
+        path.join(this.sessionDir, loopConfig.paths.loopHistoryDirName),
+        ".json",
+        MAX_RETAINED_HISTORY_FILES
+      ),
+      this.pruneRetainedFiles(
+        path.join(this.sessionDir, loopConfig.paths.attemptLogsDirName),
+        ".log",
+        MAX_RETAINED_ATTEMPT_LOGS
+      ),
+    ]);
+  }
+
+  private async pruneRetainedFiles(
+    directory: string,
+    suffix: string,
+    maximumFiles: number
+  ): Promise<void> {
+    const names = (await fse.readdir(directory).catch(() => [] as string[]))
+      .filter((name) => name.endsWith(suffix));
+    if (names.length <= maximumFiles) return;
+    const candidates = await Promise.all(names.map(async (name) => {
+      const filePath = path.join(directory, name);
+      const stat = await fse.stat(filePath).catch(() => null);
+      return stat ? { filePath, modifiedAt: stat.mtimeMs } : null;
+    }));
+    const removable = candidates
+      .filter((candidate): candidate is { filePath: string; modifiedAt: number } => candidate !== null)
+      .sort((left, right) => left.modifiedAt - right.modifiedAt)
+      .slice(0, Math.max(0, names.length - maximumFiles));
+    await Promise.all(removable.map(({ filePath }) => fse.remove(filePath).catch(() => {})));
   }
 
   private async appendProgressNote(note: string): Promise<void> {
@@ -3980,13 +5013,35 @@ class LoopOrchestrator {
     output: string,
     verdict: StageResultState["verdict"]
   ): void {
+    const validRequirementIds = new Set(this.state.requirements.items.map((item) => item.id));
+    const requirementEvidence = parseRequirementEvidence(output)
+      .filter((record) => validRequirementIds.has(record.requirementId))
+      .map((record): RequirementEvidenceRecord => ({
+        ...record,
+        stageId: stage.id,
+        role: stage.role,
+        attemptId: this.state.activeAttempt?.attemptId ?? null,
+        recordedAt: new Date().toISOString(),
+      }));
+    if (requirementEvidence.length > 0) {
+      this.state.requirements.evidence = [
+        ...this.state.requirements.evidence,
+        ...requirementEvidence,
+      ].slice(-200);
+    }
     if (stage.id === this.state.pipeline.iterationCompletionStageId) {
       this.state.completedIterations++;
+      this.state.convergence = advanceConvergence(
+        this.state.convergence,
+        this.state.requirements,
+        this.state.loopCount
+      );
     }
     this.state.stageResults[stage.id] = {
       stageId: stage.id,
       role: stage.role,
       kind: stage.kind,
+      executor: executorForStage(this.state.pipeline, stage),
       completedAt: new Date().toISOString(),
       output,
       verdict,
@@ -4012,10 +5067,6 @@ class LoopOrchestrator {
     }
     Object.assign(this.state, patch);
     await this.saveState();
-  }
-
-  private currentRole(): AgentRole {
-    return stageById(this.state.pipeline, this.state.phase).role;
   }
 
   private async saveRegistry(): Promise<void> {
@@ -4079,6 +5130,8 @@ function createDefaultLoopState(
   goal: string,
   targetProjectPath: string,
   modelMapping: ModelMapping,
+  providerMapping: Record<string, string>,
+  providerConfigs: Record<string, ProviderConfig>,
   variantMapping: VariantMapping,
   cliBinary: string,
   cliProfile: string,
@@ -4109,10 +5162,13 @@ function createDefaultLoopState(
     accessMode,
     pendingAccessRequest: null,
     modelMapping,
+    providerMapping,
+    providerConfigs,
     variantMapping,
     errorQueue: [],
     agentStates,
     refinedGoal: null,
+    referenceIdentity: null,
     planningComplete: false,
     masterApproved: false,
     awaitingPlanApproval: false,
@@ -4134,6 +5190,8 @@ function createDefaultLoopState(
     pipeline,
     pipelineConfigPath,
     stageResults: {},
+    requirements: deriveRequirementLedger(goal, now),
+    convergence: { stagnantCycles: 0, history: [] },
     createdAt: now,
     updatedAt: now,
     maxIterations,
@@ -4141,6 +5199,7 @@ function createDefaultLoopState(
     idleTimeoutMs,
     cliBinary,
     cliProfile,
+    toolAccess: validateToolAccess(loopConfig.toolAccess),
   };
 }
 
@@ -4149,7 +5208,9 @@ function resolveModelMapping(
   availableModels: string[],
   fallback: string
 ): ModelMapping {
-  const pick = (key: string): string => {
+  const dynamic = parseJsonRecord(parsed["model-mapping"], "--model-mapping");
+  const pick = (key: string, role: string): string => {
+    if (dynamic[role]) return dynamic[role];
     const explicit = parsed[key];
     if (explicit && explicit.length > 0) return explicit;
     if (availableModels.length > 0) return availableModels[0];
@@ -4157,13 +5218,57 @@ function resolveModelMapping(
   };
 
   return {
-    planner: pick("planner-model"),
-    implementer: pick("implementer-model"),
-    tester: pick("tester-model"),
-    qa_lead: pick("qa-model"),
-    master: pick("master-model"),
-    interrupter: pick("interrupter-model"),
+    ...dynamic,
+    planner: pick("planner-model", "planner"),
+    implementer: pick("implementer-model", "implementer"),
+    tester: pick("tester-model", "tester"),
+    qa_lead: pick("qa-model", "qa_lead"),
+    master: pick("master-model", "master"),
+    interrupter: pick("interrupter-model", "interrupter"),
   };
+}
+
+function resolveProviderMapping(
+  parsed: Record<string, string>,
+  providers: Record<string, ProviderConfig>,
+  defaultProvider: string
+): Record<string, string> {
+  const dynamic = parseJsonRecord(parsed["provider-mapping"], "--provider-mapping");
+  const normalizedDefault = providers[defaultProvider]?.enabled
+    ? defaultProvider
+    : Object.keys(providers).find((id) => providers[id].enabled) ?? "opencode";
+  const roles = ["planner", "implementer", "tester", "qa_lead", "master", "interrupter"];
+  for (const role of roles) {
+    const flag = role === "qa_lead" ? "qa-provider" : `${role}-provider`;
+    dynamic[role] = parsed[flag] || dynamic[role] || normalizedDefault;
+  }
+  for (const [role, providerId] of Object.entries(dynamic)) {
+    if (!providers[providerId]) throw new Error(`Unknown provider '${providerId}' configured for role '${role}'.`);
+    if (!providers[providerId].enabled) throw new Error(`Provider '${providerId}' configured for role '${role}' is disabled.`);
+  }
+  return dynamic;
+}
+
+function alignAutomaticModelsWithProviders(
+  parsed: Record<string, string>,
+  modelMapping: ModelMapping,
+  providerMapping: Record<string, string>,
+  catalog: Record<string, ProviderCatalogEntry>
+): void {
+  const explicit = parseJsonRecord(parsed["model-mapping"], "--model-mapping");
+  const roleFlags: Record<string, string> = {
+    planner: "planner-model",
+    implementer: "implementer-model",
+    tester: "tester-model",
+    qa_lead: "qa-model",
+    master: "master-model",
+    interrupter: "interrupter-model",
+  };
+  for (const [role, providerId] of Object.entries(providerMapping)) {
+    if (explicit[role] || (roleFlags[role] && parsed[roleFlags[role]])) continue;
+    const providerDefault = catalog[providerId]?.models[0];
+    if (providerDefault) modelMapping[role] = providerDefault;
+  }
 }
 
 function resolveVariantMapping(parsed: Record<string, string>): VariantMapping {
@@ -4235,9 +5340,27 @@ async function reconcileSessionRegistry(rootDir: string): Promise<void> {
   });
 }
 
+async function ensureAgentConfigFiles(rootDir: string): Promise<void> {
+  const rolesPath = path.join(rootDir, "agent_roles.json");
+  const agentLoopPath = path.join(rootDir, "agent_loop.json");
+  if (!await fse.pathExists(rolesPath)) {
+    await atomicWriteJson(rolesPath, {
+      $schema: "./agent_roles.schema.json",
+      ...defaultAgentRolesDefinition(),
+    });
+  }
+  if (!await fse.pathExists(agentLoopPath)) {
+    await atomicWriteJson(agentLoopPath, {
+      $schema: "./agent_loop.schema.json",
+      ...defaultAgentLoopDefinition(),
+    });
+  }
+}
+
 async function cmdInit(rootDir: string): Promise<void> {
   const cfg = loopConfig.paths;
   await fse.ensureDir(path.join(rootDir, cfg.sessionsRoot));
+  await ensureAgentConfigFiles(rootDir);
   const registryPath = path.join(rootDir, cfg.registryFileName);
   const existing = await atomicReadJson<SessionRegistry>(registryPath);
   if (existing) {
@@ -4253,6 +5376,7 @@ async function cmdInit(rootDir: string): Promise<void> {
     sessionMetas: [],
     manualModelsOverride: null,
     modelVariants: null,
+    providerCatalog: {},
   };
   await atomicWriteJson(registryPath, registry);
   console.log(`Initialized agent-loop system at ${rootDir}`);
@@ -4260,32 +5384,27 @@ async function cmdInit(rootDir: string): Promise<void> {
   console.log(`Sessions dir: ${path.join(rootDir, loopConfig.paths.sessionsRoot)}`);
 }
 
-async function cmdModels(parsed: Record<string, string>, rootDir: string): Promise<void> {
-  const cliBinary = parsed.binary || loopConfig.defaults.cliBinary;
-  const profile = resolveCliProfile(parsed.profile ?? null, cliBinary);
+async function cmdModels(_parsed: Record<string, string>, rootDir: string): Promise<void> {
   const registryPath = path.join(rootDir, loopConfig.paths.registryFileName);
   const registry = await atomicReadJson<SessionRegistry>(registryPath);
-  const override = registry?.manualModelsOverride ?? null;
-  const models = await discoverCliModels(cliBinary, override, profile);
+  const providers = normalizeProviders(loopConfig.providers);
+  const catalog = await discoverProviderCatalog(providers, registry?.manualModelsOverride ?? null);
+  const models = flatCatalogModels(catalog);
 
   if (registry) {
     const modelVariantsConfig = await loadModelVariantsConfig(rootDir);
     await mergeAndWriteRegistryFields(registryPath, registry, {
       availableModels: models,
       modelsDiscoveredAt: new Date().toISOString(),
-      modelsDiscoveredCli: `${cliBinary} (${profile.name})`,
+      modelsDiscoveredCli: "all enabled providers",
       modelVariants: modelVariantsConfig ?? null,
+      providerCatalog: catalog,
     });
   }
 
-  if (models.length === 0) {
-    console.log(`No models discovered from '${cliBinary} ${profile.modelsArgs.join(" ")}'.`);
-    console.log(`Check that '${cliBinary}' is installed and authenticated (profile: ${profile.name}).`);
-  } else {
-    console.log(`Available models (${models.length}):`);
-    for (const m of models) {
-      console.log(`  ${m}`);
-    }
+  console.log(`Provider catalog (${Object.keys(catalog).length} providers, ${models.length} models):`);
+  for (const entry of Object.values(catalog)) {
+    console.log(`  ${entry.id}: ${entry.enabled ? entry.models.length : "disabled"}${entry.error ? ` (${entry.error})` : ""}`);
   }
 }
 
@@ -4318,25 +5437,32 @@ async function cmdRun(parsed: Record<string, string>, rootDir: string): Promise<
     console.error("Error: Failed to initialize or read session registry.");
     process.exit(1);
   }
+  await ensureAgentConfigFiles(rootDir);
   let reg: SessionRegistry = registry;
-
-  console.log(`[orchestrator] CLI profile: ${profile.name} | binary: ${cliBinary}`);
-  if (profile.defaultBinary !== cliBinary) {
-    const baseName = cliBinary.toLowerCase().replace(/\.(exe|cmd|bat)$/, "");
-    if (baseName !== profile.name) {
-      console.warn(
-        `[orchestrator] WARNING: CLI profile '${profile.name}' expects binary '${profile.defaultBinary}' but got '${cliBinary}'. ` +
-        `Arguments may not be compatible. Use --profile matching your binary, or use --binary ${profile.defaultBinary}.`
-      );
-    }
+  const providers = normalizeProviders(loopConfig.providers);
+  const defaultProviderId = providers[profile.name] ? profile.name : "opencode";
+  if (parsed.binary && parsed.binary !== "true" && providers[defaultProviderId]) {
+    providers[defaultProviderId] = {
+      ...providers[defaultProviderId],
+      binary: cliBinary,
+      modelsArgs: [...profile.modelsArgs],
+    };
   }
-  console.log(`[orchestrator] Discovering available models from '${cliBinary}'...`);
-  const models = await discoverCliModels(cliBinary, reg.manualModelsOverride, profile);
-  reg = await mergeAndWriteRegistryFields(registryPath, reg, {
-    availableModels: models,
-    modelsDiscoveredAt: new Date().toISOString(),
-    modelsDiscoveredCli: `${cliBinary} (${profile.name})`,
-  });
+  const cachedProviderCatalog = reusableProviderCatalog(reg, providers);
+  console.log(cachedProviderCatalog
+    ? `[orchestrator] Reusing the fresh provider model catalog.`
+    : `[orchestrator] Discovering models from all enabled providers...`);
+  const providerCatalog = cachedProviderCatalog
+    ?? await discoverProviderCatalog(providers, reg.manualModelsOverride);
+  const models = flatCatalogModels(providerCatalog);
+  if (!cachedProviderCatalog) {
+    reg = await mergeAndWriteRegistryFields(registryPath, reg, {
+      availableModels: models,
+      modelsDiscoveredAt: new Date().toISOString(),
+      modelsDiscoveredCli: "all enabled providers",
+      providerCatalog,
+    });
+  }
 
   if (models.length === 0) {
     console.warn(`[orchestrator] No models discovered. Using fallback model names. Specify models explicitly with --planner-model etc.`);
@@ -4345,15 +5471,20 @@ async function cmdRun(parsed: Record<string, string>, rootDir: string): Promise<
   }
 
   const fallbackModels = loopConfig.defaults.profileFallbackModels;
-  const profileFallback = fallbackModels[profile.name] ?? fallbackModels["_default"] ?? "anthropic/claude-sonnet-4-5";
+  const profileFallback = providerCatalog[defaultProviderId]?.models[0]
+    ?? fallbackModels[profile.name]
+    ?? fallbackModels["_default"]
+    ?? "anthropic/claude-sonnet-4-5";
   const fallbackModel = models.length > 0 ? models[0] : profileFallback;
   const modelMapping = resolveModelMapping(parsed, models, fallbackModel);
+  const providerMapping = resolveProviderMapping(parsed, providers, defaultProviderId);
+  alignAutomaticModelsWithProviders(parsed, modelMapping, providerMapping, providerCatalog);
   const variantMapping = resolveVariantMapping(parsed);
 
   console.log(`[orchestrator] Model mapping:`);
   for (const [role, model] of Object.entries(modelMapping)) {
     const vrnt = variantMapping[role as AgentRole] || "(default)";
-    console.log(`  ${role}: ${model} (variant: ${vrnt})`);
+    console.log(`  ${role}: ${providerMapping[role] ?? defaultProviderId}/${model} (variant: ${vrnt})`);
   }
 
   const modelVariantsConfig = await loadModelVariantsConfig(rootDir);
@@ -4379,11 +5510,44 @@ async function cmdRun(parsed: Record<string, string>, rootDir: string): Promise<
   const requestedPipelinePath =
     parsed.pipeline && parsed.pipeline !== "true"
       ? path.resolve(parsed.pipeline)
-      : path.join(rootDir, "agent_pipeline.json");
-  const pipelineConfigPath = await fse.pathExists(requestedPipelinePath)
-    ? requestedPipelinePath
-    : null;
-  const pipeline = await loadPipelineDefinition(pipelineConfigPath);
+      : null;
+  const explicitRolesPath =
+    parsed.roles && parsed.roles !== "true"
+      ? path.resolve(parsed.roles)
+      : null;
+  const explicitLoopPath =
+    parsed.loop && parsed.loop !== "true"
+      ? path.resolve(parsed.loop)
+      : null;
+  if (explicitRolesPath && !await fse.pathExists(explicitRolesPath)) {
+    throw new Error(`Agent roles file not found: ${explicitRolesPath}`);
+  }
+  if (explicitLoopPath && !await fse.pathExists(explicitLoopPath)) {
+    throw new Error(`Agent loop file not found: ${explicitLoopPath}`);
+  }
+  if (requestedPipelinePath && !await fse.pathExists(requestedPipelinePath)) {
+    throw new Error(`Legacy pipeline file not found: ${requestedPipelinePath}`);
+  }
+  const pipelineConfigPath =
+    requestedPipelinePath
+      ? requestedPipelinePath
+      : null;
+  const rolesConfigPath = explicitRolesPath ?? path.join(rootDir, "agent_roles.json");
+  const loopGraphConfigPath = explicitLoopPath ?? path.join(rootDir, "agent_loop.json");
+  const pipeline = pipelineConfigPath
+    ? await loadPipelineDefinition(pipelineConfigPath)
+    : await loadSeparatedPipelineDefinition(rolesConfigPath, loopGraphConfigPath);
+  for (const role of pipeline.roles) {
+    providerMapping[role.id] = role.provider
+      ?? providerMapping[role.id]
+      ?? providerMapping[role.modelRole]
+      ?? defaultProviderId;
+    if (!modelMapping[role.id]) {
+      modelMapping[role.id] = role.model
+        ?? providerCatalog[providerMapping[role.id]]?.models[0]
+        ?? modelMapping[role.modelRole];
+    }
+  }
   console.log(
     `[orchestrator] Pipeline '${pipeline.name}' with ${pipeline.stages.length} stages and ${pipeline.roles.length} roles.`
   );
@@ -4395,6 +5559,8 @@ async function cmdRun(parsed: Record<string, string>, rootDir: string): Promise<
     goal,
     targetProjectPath,
     modelMapping,
+    providerMapping,
+    providers,
     variantMapping,
     cliBinary,
     profile.name,
@@ -4739,27 +5905,16 @@ async function cmdRevisePlan(parsed: Record<string, string>, rootDir: string): P
     sessionId
   );
   const statePath = path.join(sessionDir, loopConfig.paths.sessionFileNames.state);
-  const state = await atomicReadJson<LoopState>(statePath);
-  if (!state) {
+  const stateRaw = await atomicReadJson<LoopState>(statePath);
+  if (!stateRaw) {
     console.error(`Error: No session found with ID ${sessionId}`);
     process.exit(1);
   }
+  const state = normalizeLoopState(stateRaw).state;
 
   const planPath = path.join(sessionDir, loopConfig.paths.sessionFileNames.plan);
   let currentPlan = "";
   try { currentPlan = await fse.readFile(planPath, "utf8"); } catch { /* empty */ }
-
-  const payload: HandoffPayload = {
-    sessionId: state.sessionId,
-    refinedGoal: state.refinedGoal || state.goal,
-    targetProjectPath: state.targetProjectPath,
-    additionalAllowedPaths: state.additionalAllowedPaths ?? [],
-    accessMode: state.accessMode ?? "ask",
-    progressNotes: "",
-    failureDigest: null,
-    phase: state.phase,
-    loopCount: state.loopCount,
-  };
 
   const prompt = `You are the planner agent. Revise the plan according to the user's request.
 
@@ -4771,23 +5926,48 @@ User Revision Request: ${message}
 Output the full revised plan as markdown only. Do not include the original prompt or any meta-commentary. Output ONLY the revised markdown plan.`;
 
   const planningStage =
-    state.pipeline.stages.find((stage) => stage.kind === "planning") ??
+    state.pipeline.stages.find((stage) => executorForStage(state.pipeline, stage) === "planning") ??
     stageById(state.pipeline, state.pipeline.startStageId);
   const planningRole = roleForStage(state.pipeline, planningStage);
-  const profile = resolveCliProfile(state.cliProfile, state.cliBinary);
-  const args = profile.buildRunArgs({
+  const providerId = planningRole.provider
+    ?? state.providerMapping?.[planningRole.id]
+    ?? state.providerMapping?.[planningRole.modelRole]
+    ?? state.cliProfile;
+  const provider = state.providerConfigs?.[providerId] ?? loopConfig.providers[providerId];
+  if (!provider?.enabled) throw new Error(`Planner provider '${providerId}' is missing or disabled.`);
+  const mcpServers = enabledMcpServers(state.toolAccess);
+  const runtimeMcpServers = resolveMcpServerSecrets(mcpServers, CORE_SECRET_VALUES, process.env);
+  let claudeMcpConfigPath: string | undefined;
+  if (provider.adapter === "claude" && mcpServers.length > 0) {
+    const runtimeDir = path.join(sessionDir, "runtime");
+    await fse.ensureDir(runtimeDir);
+    claudeMcpConfigPath = path.join(runtimeDir, `claude_mcp_plan_revision_${createId("config")}.json`);
+    await atomicWriteSensitiveJson(claudeMcpConfigPath, claudeMcpDocument(runtimeMcpServers));
+  }
+  const invocation = buildProviderInvocation(provider, {
     model: planningRole.model ?? state.modelMapping[planningRole.modelRole],
     targetProjectPath: state.targetProjectPath,
+    additionalAllowedPaths: state.additionalAllowedPaths,
     prompt,
     variant: planningRole.variant ?? state.variantMapping?.[planningRole.modelRole],
+    fullAccess: state.accessMode === "full_access",
+    readOnly: true,
+    webSearch: state.toolAccess.webSearch.enabled,
+    webSearchMode: state.toolAccess.webSearch.mode,
+    mcpServers,
+    claudeMcpConfigPath,
+    secretValues: CORE_SECRET_VALUES,
   });
   const supervised = await new ProcessSupervisor().run({
-    binary: resolveBinaryOnWindows(state.cliBinary),
-    args,
+    binary: resolveBinaryOnWindows(invocation.binary),
+    args: invocation.args,
     cwd: state.targetProjectPath,
-    env: Object.fromEntries(
-      Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined)
-    ),
+    env: {
+      ...Object.fromEntries(
+        Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined)
+      ),
+      ...invocation.env,
+    },
     cols: loopConfig.defaults.ptyCols,
     rows: loopConfig.defaults.ptyRows,
     useConpty: process.platform === "win32" && !!process.stdin?.isTTY,
@@ -4803,8 +5983,12 @@ Output the full revised plan as markdown only. Do not include the original promp
       loopConfig.paths.attemptLogsDirName,
       `plan_revision_${createId("attempt")}.log`
     ),
-    interactionWhitelist: profile.interactionWhitelist,
+    interactionWhitelist: (provider.interactionWhitelist ?? INTERACTION_WHITELIST)
+      .filter((pattern) => !/(?:allow|permission|action required|run command)/i.test(pattern)),
     destructivePrompts: loopConfig.destructivePrompts,
+    sensitiveValues: Object.values(CORE_SECRET_VALUES),
+  }).finally(async () => {
+    if (claudeMcpConfigPath) await fse.remove(claudeMcpConfigPath).catch(() => {});
   });
   const result: PtyRunResult = {
     ...supervised,
@@ -4860,6 +6044,7 @@ Output the full revised plan as markdown only. Do not include the original promp
     if (latest.planningComplete) {
       latest.planRevisionPending = true;
     }
+    latest.convergence = { stagnantCycles: 0, history: [] };
     latest.updatedAt = new Date().toISOString();
     committedLoopCount = latest.loopCount;
     await atomicWriteJson(statePath, latest);

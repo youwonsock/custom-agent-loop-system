@@ -1,0 +1,16 @@
+*.ts
+*.test.js
+*.map
+.github/
+.vscode/
+.goal/
+.kilo/
+test/
+vscode-extension/
+tsconfig.json
+개선 사항.txt
+sessions_registry.json*
+registry.lock*
+model_variants.json
+scripts/*
+!scripts/fix-pty-permissions.js

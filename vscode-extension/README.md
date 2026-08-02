@@ -1,60 +1,51 @@
-# Agent Loop Orchestrator
+# Agent Loop Orchestrator for VS Code
 
-VS Code controls the Custom Agent Loop System: an autonomous, multi-role coding
-loop in which implementation, testing, QA, and final approval agents
-cross-check one another until the configured goal is complete.
+버전 3.4.0은 플랫폼별 VSIX에 실행 가능한 Agent Loop 코어와 `node-pty` 네이티브 바이너리를 포함합니다. 별도 소스 저장소나 `dist` 경로는 필요하지 않지만 Node.js 18 이상과 인증된 에이전트 CLI(OpenCode, Kilo, Codex, Claude) 중 하나 이상은 PATH에 설치되어야 합니다.
 
-## Version 3.2
+## 설치
 
-- Configure any number of stages and specialized roles in
-  `agent_pipeline.json`.
-- Assign each role to a built-in model slot or an explicit model/variant.
-- Configure success/failure transitions, iteration boundaries, and optional
-  plan approval.
-- Review complete plan options as rendered Markdown previews in the center editor while
-  the Plan Review sidebar stays focused on option selection, revision, and
-  approval controls.
-- Inspect the active attempt, reconnect state, last meaningful progress,
-  retry time, failure category, and owner lease from the dashboard.
-- Recover stale `RUNNING` sessions after abnormal shutdown and automatically
-  resume due `RECOVERING` sessions.
-- Gracefully stop active sessions during normal VS Code shutdown.
-- Queue concurrent Stop and Interrupt requests without overwriting them.
-- Use Codex-style filesystem access controls: **Ask when needed** enters `WAITING_USER` with a
-  concrete approval request, while **Full access** can be granted per session.
-- Reserve `PAUSED` for repeated token-consuming non-convergence. Transient
-  token-free failures use delayed `RECOVERING`; explicit Stop uses `STOPPED`;
-  unsafe orphan ownership uses `BLOCKED`.
+```powershell
+npm install
+npm run package
+code --install-extension agent-loop-vscode-win32-x64-3.4.0.vsix --force
+```
 
-Use **Agent Loop: Open Pipeline Configuration** to open the root pipeline file,
-or set `agentLoop.pipelineConfigPath` to another JSON file.
+`npm run package`는 현재 OS/CPU용 target VSIX를 만듭니다. 다른 플랫폼용 배포물은 해당 플랫폼에서 패키징하십시오.
 
-## Requirements
+## UI
 
-- Node.js 18 or newer.
-- A built core at `<rootDir>/dist/loop_orchestrator.js`.
-- An authenticated coding CLI (`opencode` or `kilo` by default).
+- Models: 설치된 에이전트 CLI와 그 CLI에서 발견된 모델만 역할별로 선택합니다.
+- Stages: 파일 기반 역할·단계 구조를 확인합니다.
+- Tools: 모든 에이전트에 공통인 Web Search와 MCP 서버를 설정합니다.
+- Plan Review: 세 개의 전체 계획 문서를 중앙 Markdown 미리보기로 열고 승인·수정합니다.
+- Session dashboard: attempt 번호, 재연결, 최근 진행 경과, retry 시각, 실패 종류, lease/orphan 상태, 요구사항 충족도를 표시합니다.
 
-The extension blocks session startup when core TypeScript sources are newer
-than `dist` and tells you to run `npm run build`.
+기본 데이터는 VS Code 전역 저장소에 저장됩니다. `agentLoop.rootDir`은 데이터 위치를 직접 관리해야 할 때만 설정하고, 개발 중 외부 코어를 실행하려면 `agentLoop.orchestratorScript`를 지정하십시오.
 
-## Main settings
+## 접근과 비밀정보
 
-- `agentLoop.rootDir`
-- `agentLoop.orchestratorScript`
-- `agentLoop.pipelineConfigPath`
-- `agentLoop.cliBinary`
-- `agentLoop.cliProfile`
-- `agentLoop.maxIterations`
-- `agentLoop.phaseTimeoutMs`
-- `agentLoop.transportTimeoutMs`
-- `agentLoop.idleTimeoutMs`
-- `agentLoop.toolTimeoutMs`
-- `agentLoop.phaseRecoveryBudgetMs`
-- `agentLoop.maxAgentAttempts`
-- `agentLoop.maxCompletionRecoveryAttempts`
-- `agentLoop.maxAutomaticRecoveryCycles`
-- `agentLoop.automaticRecoveryBackoffMs`
-- `agentLoop.retryBackoffMs`
-- `agentLoop.heartbeatIntervalMs`
-- `agentLoop.leaseTtlMs`
+기본 `Ask when needed` 모드는 프로젝트 밖의 경로가 계획에 나타나면 구현 전에 구체적인 접근 승인을 요청합니다. `Full access`는 해당 세션 전체에만 적용됩니다. Stop은 최대 8초 동안 acknowledgement와 안전한 상태 전환을 기다린 뒤 필요한 경우에만 코어 프로세스를 종료합니다.
+
+MCP environment/header 값은 SecretStorage에 저장되고 설정 파일에는 `${secret:...}` 참조만 기록됩니다. `${env:NAME}` 참조도 지원합니다. 비밀은 코어 시작 프로세스에 한 번만 전달되고 즉시 환경에서 제거되며 PTY 로그와 assistant text에서 redaction됩니다.
+
+## 파일 기반 커스텀
+
+루프 그래프 UI는 제공하지 않습니다. 전역 데이터 루트의 다음 파일을 수정하면 새 세션에만 반영됩니다.
+
+- `agent_roles.json`
+- `agent_loop.json`
+- `loop_config.json`
+
+동일 디렉터리에 JSON schema도 자동 준비됩니다. 역할과 단계 이름은 추가할 수 있지만 실행 동작은 내장 executor와 completion contract enum에 한정됩니다.
+
+## 상태 원칙
+
+- `PAUSED`: 토큰을 사용한 반복 작업이 수렴하지 않아 비용 차단이 필요한 경우
+- `RECOVERING`: 토큰 사용 전의 일시적 transport 장애
+- `WAITING_USER`: 계획·권한·인증 등 사용자 결정 필요
+- `STOPPED`: 명시적 Stop 또는 정상 VS Code 종료
+- `BLOCKED`: orphan/소유권 안전을 확인할 수 없어 실행 금지
+
+정상 deactivate는 활성 세션을 병렬로 graceful `STOPPED` 처리하며, 비정상 종료로 `RUNNING`이 남은 경우에만 lease를 검증해 자동 복구합니다.
+
+자세한 실행 계약과 보호장치는 상위 [README](../README.md)를 참고하십시오.

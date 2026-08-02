@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  assessSessionDeletionSafety,
   decideRecoveryAction,
   elapsedSince,
   evaluateLease,
@@ -8,6 +9,15 @@ import {
   shouldAutoRecover,
   shouldGracefullyStop,
 } from "./resilience";
+
+test("session deletion requires terminal state, safe ownership, and dead children", () => {
+  assert.equal(assessSessionDeletionSafety("RUNNING", "active", []).safe, false);
+  assert.equal(assessSessionDeletionSafety("RECOVERING", "missing", []).safe, false);
+  assert.equal(assessSessionDeletionSafety("STOPPED", "unverifiable", []).safe, false);
+  assert.equal(assessSessionDeletionSafety("PAUSED", "recoverable", ["alive"]).safe, false);
+  assert.equal(assessSessionDeletionSafety("PAUSED", "recoverable", ["unknown"]).safe, false);
+  assert.equal(assessSessionDeletionSafety("STOPPED", "missing", ["dead"]).safe, true);
+});
 
 const lease = {
   ownerId: "owner",
@@ -47,6 +57,7 @@ test("abnormal RUNNING and due RECOVERING states are automatically recovered", (
     false
   );
   assert.equal(shouldGracefullyStop("RUNNING"), true);
+  assert.equal(shouldGracefullyStop("RECOVERING"), true);
   assert.equal(shouldGracefullyStop("SUCCESS"), false);
 });
 

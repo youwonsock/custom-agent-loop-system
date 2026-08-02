@@ -13,6 +13,67 @@ import {
 } from "./resilience";
 
 type AnyObj = Record<string, unknown>;
+const MIN_RAW_LOG_BYTES = 8 * 1024 * 1024;
+const MAX_RAW_LOG_BYTES = 32 * 1024 * 1024;
+const REDACTION_MARKER = "[REDACTED]";
+
+function fixedLengthRedaction(length: number): string {
+  if (length <= REDACTION_MARKER.length) return REDACTION_MARKER.slice(0, length);
+  return REDACTION_MARKER + "*".repeat(length - REDACTION_MARKER.length);
+}
+
+class StreamingRedactor {
+  private carry = "";
+  private readonly patterns: string[];
+  private readonly maximumPatternLength: number;
+
+  constructor(sensitiveValues: readonly string[]) {
+    const patterns = new Set<string>();
+    for (const secret of sensitiveValues.filter(Boolean)) {
+      patterns.add(secret);
+      const jsonEscaped = JSON.stringify(secret).slice(1, -1);
+      if (jsonEscaped !== secret) patterns.add(jsonEscaped);
+    }
+    this.patterns = [...patterns].sort((left, right) => right.length - left.length);
+    this.maximumPatternLength = this.patterns[0]?.length ?? 0;
+  }
+
+  push(chunk: string): string {
+    if (this.patterns.length === 0) return chunk;
+    const combined = this.carry + chunk;
+    const safeBoundary = Math.max(0, combined.length - (this.maximumPatternLength - 1));
+    return this.consume(combined, safeBoundary);
+  }
+
+  flush(): string {
+    if (this.patterns.length === 0) return "";
+    const combined = this.carry;
+    return this.consume(combined, combined.length);
+  }
+
+  private consume(combined: string, safeBoundary: number): string {
+    let index = 0;
+    let output = "";
+    while (index < safeBoundary) {
+      const match = this.patterns.find((pattern) => combined.startsWith(pattern, index));
+      if (match) {
+        output += fixedLengthRedaction(match.length);
+        index += match.length;
+      } else {
+        output += combined[index];
+        index += 1;
+      }
+    }
+    this.carry = combined.slice(index);
+    return output;
+  }
+}
+
+function utf8Prefix(value: string, maximumBytes: number): string {
+  const bytes = Buffer.from(value, "utf8");
+  if (bytes.length <= maximumBytes) return value;
+  return bytes.subarray(0, Math.max(0, maximumBytes)).toString("utf8").replace(/\uFFFD$/, "");
+}
 
 export interface SupervisorProgress {
   childPid: number;
@@ -42,6 +103,8 @@ export interface ProcessSupervisorOptions {
   rawLogPath: string;
   interactionWhitelist: string[];
   destructivePrompts: string[];
+  /** In-memory credentials that must never reach attempt logs or completion text. */
+  sensitiveValues?: string[];
   pollControl?: () => Promise<ClaimedControlRequest | null>;
   onProgress?: (progress: SupervisorProgress) => Promise<void> | void;
 }
@@ -100,6 +163,16 @@ export function stripTerminalControlSequences(value: string): string {
     .replace(/[\x00-\x08\x0e-\x1f\x7f]/g, "");
 }
 
+export function isInteractiveAccessPrompt(value: string): boolean {
+  const normalized = stripTerminalControlSequences(value).replace(/\s+/g, " ").trim();
+  if (!normalized) return false;
+  return (
+    /(?:allow|grant)\b.{0,120}(?:\[y\/n\]|\(y\/n\)|yes\/no)/i.test(normalized) ||
+    /(?:permission|access)\s+(?:is\s+)?(?:required|requested|needed)/i.test(normalized) ||
+    /do you want to allow\b/i.test(normalized)
+  );
+}
+
 function appendRing(current: string, chunk: string, maxBytes: number): string {
   const combined = current + chunk;
   if (Buffer.byteLength(combined, "utf8") <= maxBytes) return combined;
@@ -134,20 +207,46 @@ function isStructurallyCompleteJson(value: string): boolean {
   return !inString && depth === 0;
 }
 
-function extractAssistantText(event: AnyObj): string | null {
-  if (event.type !== "text") return null;
-  const part = event.part as Record<string, unknown> | undefined;
-  if (part && typeof part.text === "string") return part.text;
-  for (const key of ["text", "content", "message"]) {
-    if (typeof event[key] === "string") return event[key] as string;
+export function extractAssistantText(event: AnyObj): string | null {
+  const eventType = typeof event.type === "string" ? event.type : "";
+  if (eventType === "text") {
+    const part = event.part as Record<string, unknown> | undefined;
+    if (part && typeof part.text === "string") return part.text;
+    for (const key of ["text", "content", "message"]) {
+      if (typeof event[key] === "string") return event[key] as string;
+    }
   }
+
+  // Codex CLI JSONL: only completed agent_message items count as assistant text.
+  if (eventType === "item.completed") {
+    const item = event.item as Record<string, unknown> | undefined;
+    if (item?.type === "agent_message" && typeof item.text === "string") return item.text;
+  }
+
+  // Claude Code stream-json: assistant.message.content contains typed blocks.
+  if (eventType === "assistant") {
+    const message = event.message as Record<string, unknown> | undefined;
+    const content = Array.isArray(message?.content) ? message.content : [];
+    const textBlocks = content
+      .filter((block): block is Record<string, unknown> => Boolean(block) && typeof block === "object")
+      .filter((block) => block.type === "text" && typeof block.text === "string")
+      .map((block) => String(block.text));
+    return textBlocks.length > 0 ? textBlocks.join("\n") : null;
+  }
+  // Some Claude versions omit an assistant event in print mode. The result is a
+  // legitimate final assistant field, unlike prompt/tool payloads.
+  if (eventType === "result" && typeof event.result === "string") return event.result;
   return null;
 }
 
-function findSessionId(value: unknown, depth = 0): string | null {
+export function findSessionId(value: unknown, depth = 0): string | null {
   if (!value || typeof value !== "object" || depth > 4) return null;
   for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
-    if ((key === "sessionID" || key === "sessionId") && typeof child === "string" && child.length > 0) {
+    if (
+      ["sessionID", "sessionId", "session_id", "thread_id"].includes(key) &&
+      typeof child === "string" &&
+      child.length > 0
+    ) {
       return child;
     }
     const nested = findSessionId(child, depth + 1);
@@ -175,12 +274,33 @@ function activityForEvent(
   if (["text", "tool_result", "step_start", "step_finish"].includes(type)) {
     return "model_generation";
   }
+  if (type === "item.started" || type === "item.completed") {
+    const item = event.item as Record<string, unknown> | undefined;
+    const itemType = typeof item?.type === "string" ? item.type : "";
+    const isTool = ["command_execution", "file_change", "mcp_tool_call", "web_search"].includes(itemType);
+    return type === "item.started" && isTool ? "tool_execution" : "model_generation";
+  }
+  if (type === "assistant") {
+    const message = event.message as Record<string, unknown> | undefined;
+    const content = Array.isArray(message?.content) ? message.content : [];
+    return content.some(
+      (block) => Boolean(block) && typeof block === "object" && (block as AnyObj).type === "tool_use"
+    ) ? "tool_execution" : "model_generation";
+  }
+  if (["user", "result", "thread.started", "turn.started", "turn.completed"].includes(type)) {
+    return "model_generation";
+  }
   return null;
 }
 
 function progressIdentity(event: AnyObj, assistantText: string | null): string | null {
   const type = typeof event.type === "string" ? event.type : "";
-  if (!["text", "tool_use", "tool_result", "step_start", "step_finish"].includes(type)) return null;
+  const recognized = [
+    "text", "tool_use", "tool_result", "step_start", "step_finish",
+    "item.started", "item.completed", "assistant", "user", "result",
+    "thread.started", "turn.started", "turn.completed",
+  ];
+  if (!recognized.includes(type)) return null;
   if (type === "tool_use") {
     const part = event.part as Record<string, unknown> | undefined;
     const id = [event.id, event.callID, part?.id, part?.callID]
@@ -196,11 +316,18 @@ function progressIdentity(event: AnyObj, assistantText: string | null): string |
   }
   const part = event.part as Record<string, unknown> | undefined;
   if (part && typeof part.id === "string") return `${type}:${part.id}`;
+  const item = event.item as Record<string, unknown> | undefined;
+  if (item && typeof item.id === "string") {
+    const status = typeof item.status === "string" ? item.status : "";
+    return `${type}:${item.id}:${status}`;
+  }
+  const message = event.message as Record<string, unknown> | undefined;
+  if (message && typeof message.id === "string") return `${type}:${message.id}`;
   if (assistantText) {
     const normalized = assistantText.replace(/\s+/g, " ").trim();
     if (normalized.length > 0) return `${type}:${normalized.slice(-500)}`;
   }
-  if (type === "tool_use" || type === "step_start" || type === "step_finish") {
+  if (["tool_use", "step_start", "step_finish", "item.started", "item.completed", "result"].includes(type)) {
     return `${type}:${JSON.stringify(event).slice(0, 500)}`;
   }
   return null;
@@ -248,6 +375,28 @@ export class ProcessSupervisor {
     const startedAt = new Date().toISOString();
     await fsp.mkdir(path.dirname(options.rawLogPath), { recursive: true });
     const rawLog = fs.createWriteStream(options.rawLogPath, { flags: "a", encoding: "utf8" });
+    const sensitiveValues = [...new Set((options.sensitiveValues ?? []).filter(Boolean))]
+      .sort((left, right) => right.length - left.length);
+    const redactor = new StreamingRedactor(sensitiveValues);
+    const maximumRawLogBytes = Math.max(
+      MIN_RAW_LOG_BYTES,
+      Math.min(MAX_RAW_LOG_BYTES, options.maxInMemoryOutputBytes * 16)
+    );
+    let rawLogBytesWritten = 0;
+    let rawLogTruncated = false;
+    const writeRawLog = (value: string): void => {
+      if (!value || rawLogTruncated) return;
+      const remaining = maximumRawLogBytes - rawLogBytesWritten;
+      const prefix = utf8Prefix(value, remaining);
+      if (prefix) {
+        rawLog.write(prefix);
+        rawLogBytesWritten += Buffer.byteLength(prefix, "utf8");
+      }
+      if (Buffer.byteLength(value, "utf8") > remaining) {
+        rawLog.write("\n[AGENT_LOOP_LOG_TRUNCATED]\n");
+        rawLogTruncated = true;
+      }
+    };
 
     let child: pty.IPty;
     try {
@@ -360,10 +509,11 @@ export class ProcessSupervisor {
       if (resolved) return;
       resolved = true;
       clearRuntimeTimers();
+      const finalSafeData = redactor.flush();
+      if (finalSafeData) handleSafeData(finalSafeData);
       const remainder = lineBuffer.flush();
       if (remainder) processLine(remainder);
-      rawLog.end();
-      resolveResult!({
+      const finalResult: SupervisorResult = {
         pid,
         outcome,
         failureKind,
@@ -384,7 +534,10 @@ export class ProcessSupervisor {
         rawLogPath: options.rawLogPath,
         controlRequest,
         autoInjected,
-      });
+      };
+      // Do not publish the attempt result until the log stream has flushed. This
+      // keeps archive byte counts and immediate post-attempt diagnostics reliable.
+      rawLog.end(() => resolveResult!(finalResult));
     };
 
     const terminate = async (
@@ -517,7 +670,7 @@ export class ProcessSupervisor {
       if (foundSessionId) cliSessionId = foundSessionId;
       const text = extractAssistantText(event);
       if (text && text.trim().length > 0) {
-        assistantParts.push(text);
+        if (!assistantParts.includes(text)) assistantParts.push(text);
         while (Buffer.byteLength(assistantParts.join("\n"), "utf8") > options.maxInMemoryOutputBytes) {
           assistantParts.shift();
         }
@@ -551,6 +704,15 @@ export class ProcessSupervisor {
       }
 
       const lower = trimmed.toLowerCase();
+      if (isInteractiveAccessPrompt(trimmed)) {
+        void terminate(
+          "process_exit",
+          "permission",
+          `Provider requested interactive filesystem/tool access: ${trimmed.slice(0, 500)}`,
+          false
+        );
+        return;
+      }
       const destructive = options.destructivePrompts.some((value) =>
         lower.includes(value.toLowerCase())
       );
@@ -571,17 +733,26 @@ export class ProcessSupervisor {
       }
     }
 
-    child.onData((data) => {
-      if (resolved) return;
-      rawLog.write(data);
-      outputTail = appendRing(outputTail, data, options.maxInMemoryOutputBytes);
+    const handleSafeData = (safeData: string): void => {
+      writeRawLog(safeData);
+      outputTail = appendRing(outputTail, safeData, options.maxInMemoryOutputBytes);
       lastOutputAt = new Date().toISOString();
-      const cleanedData = stripTerminalControlSequences(data);
+      const cleanedData = stripTerminalControlSequences(safeData);
       if (cleanedData.trim().length > 0) establishTransport();
       for (const line of lineBuffer.push(cleanedData)) {
         processLine(line);
       }
       notifyProgress();
+    };
+
+    child.onData((data) => {
+      if (resolved) return;
+      // Normalize terminal control sequences before streaming redaction. Some PTY
+      // implementations inject cursor-control bytes between writes; redacting the
+      // normalized stream prevents a split credential from being reconstructed by
+      // the assistant-event parser even when those bytes bisect the secret.
+      const safeData = redactor.push(stripTerminalControlSequences(data));
+      if (safeData) handleSafeData(safeData);
     });
 
     child.onExit((event) => {

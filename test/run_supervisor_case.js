@@ -36,9 +36,13 @@ void (async () => {
       rawLogPath: path.join(dir, "attempt.log"),
       interactionWhitelist: [],
       destructivePrompts: [],
+      sensitiveValues: mode === "secret-echo" || mode === "split-secret-echo" ? ["top-secret"] : [],
     });
+    const rawLog = await fs.readFile(path.join(dir, "attempt.log"), "utf8");
     process.stdout.write(JSON.stringify({
       outcome: result.outcome,
+      failureKind: result.failureKind,
+      failureMessage: result.failureMessage,
       exitCode: result.exitCode,
       assistantText: result.assistantText,
       cliSessionId: result.cliSessionId,
@@ -47,6 +51,7 @@ void (async () => {
         (total, event) => total + Buffer.byteLength(JSON.stringify(event), "utf8"),
         0
       ),
+      rawLogIncludesSecret: rawLog.includes("top-secret"),
     }));
   } finally {
     await new Promise((resolve) => setTimeout(resolve, 25));

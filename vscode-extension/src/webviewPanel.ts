@@ -4,12 +4,13 @@ import * as vscode from "vscode";
 import {
   WebviewMessage,
   WebviewStatePayload,
-  SessionRegistry,
   LoopState,
   LoopHistoryEntry,
   FinalSummary,
   ModelMapping,
   VariantMapping,
+  ProviderMapping,
+  SystemSettings,
   AccessMode,
   ExtensionConfig,
   readExtensionConfig,
@@ -26,6 +27,7 @@ export class LoopWebviewPanel {
   private logBuffers: Map<string, string> = new Map();
   private readonly maxLogBuffer = 50000;
   private lastOpenedPlanDocument: string | null = null;
+  private providerCatalogRefresh: Promise<void> | null = null;
 
   private constructor(
     private readonly context: vscode.ExtensionContext,
@@ -44,6 +46,7 @@ export class LoopWebviewPanel {
   }
 
   show(): void {
+    void this.ensureProviderCatalog();
     if (this.panel) {
       this.panel.reveal(vscode.ViewColumn.Active, false);
       return;
@@ -78,6 +81,33 @@ export class LoopWebviewPanel {
     }, undefined, this.context.subscriptions);
 
     this.refresh();
+  }
+
+  private async ensureProviderCatalog(): Promise<void> {
+    if (this.providerCatalogRefresh) return this.providerCatalogRefresh;
+    const operation = (async () => {
+      const registry = await this.store.readRegistry();
+      const entries = Object.values(registry.providerCatalog ?? {});
+      const discoveredAtMs = Date.parse(registry.modelsDiscoveredAt ?? "");
+      const catalogIsStale =
+        !Number.isFinite(discoveredAtMs) || Date.now() - discoveredAtMs > 5 * 60 * 1000;
+      const needsDiscovery =
+        catalogIsStale ||
+        entries.length === 0 ||
+        entries.some((entry) => typeof entry.available !== "boolean");
+      if (!needsDiscovery) return;
+      const result = await this.client.discoverModels();
+      if (result.exitCode !== 0) {
+        console.warn(`[agentLoop] Automatic provider discovery failed: ${result.stderr}`);
+      }
+      await this.refresh();
+    })();
+    this.providerCatalogRefresh = operation;
+    try {
+      await operation;
+    } finally {
+      if (this.providerCatalogRefresh === operation) this.providerCatalogRefresh = null;
+    }
   }
 
   postNewSession(opts: { goal: string; targetProjectPath: string }): void {
@@ -121,7 +151,7 @@ export class LoopWebviewPanel {
         break;
       case "stopSession":
         await this.requestStopSession(msg.sessionId);
-        vscode.window.showInformationMessage(`Agent Loop: Session ${msg.sessionId} paused.`);
+        vscode.window.showInformationMessage(`Agent Loop: Session ${msg.sessionId} stopped.`);
         await this.refresh();
         break;
       case "discoverModels":
@@ -132,7 +162,7 @@ export class LoopWebviewPanel {
         const currentProfile = cfg.get<string>("cliProfile", "opencode");
         if (msg.profile && msg.profile !== currentProfile) {
           await cfg.update("cliProfile", msg.profile, vscode.ConfigurationTarget.Global);
-          const profileDefaults: Record<string, string> = { opencode: "opencode", kilo: "kilo" };
+          const profileDefaults: Record<string, string> = { opencode: "opencode", kilo: "kilo", codex: "codex", claude: "claude" };
           const expectedBinary = profileDefaults[msg.profile];
           if (expectedBinary) {
             const currentBinary = cfg.get<string>("cliBinary", "opencode");
@@ -143,6 +173,9 @@ export class LoopWebviewPanel {
         }
         break;
       }
+      case "saveSystemSettings":
+        await this.handleSaveSystemSettings(msg.settings);
+        break;
       case "selectSession":
         this.selectedSessionId = msg.sessionId;
         await this.refresh();
@@ -153,7 +186,7 @@ export class LoopWebviewPanel {
             const currentProfile = cfg.get<string>("cliProfile", "opencode");
             if (bundle.state.cliProfile !== currentProfile) {
               await cfg.update("cliProfile", bundle.state.cliProfile, vscode.ConfigurationTarget.Global);
-              const profileDefaults: Record<string, string> = { opencode: "opencode", kilo: "kilo" };
+              const profileDefaults: Record<string, string> = { opencode: "opencode", kilo: "kilo", codex: "codex", claude: "claude" };
               const expectedBinary = profileDefaults[bundle.state.cliProfile];
               if (expectedBinary) {
                 const currentBinary = cfg.get<string>("cliBinary", "opencode");
@@ -228,7 +261,7 @@ export class LoopWebviewPanel {
     this.postMessage({ command: "focusComposer" });
   }
 
-  private async handleNewSession(msg: { goal: string; targetProjectPath: string; accessMode: AccessMode; cliProfile?: string; modelMapping: Partial<ModelMapping>; variantMapping?: Partial<VariantMapping> }): Promise<void> {
+  private async handleNewSession(msg: { goal: string; targetProjectPath: string; accessMode: AccessMode; modelMapping: Partial<ModelMapping>; providerMapping?: Partial<ProviderMapping>; variantMapping?: Partial<VariantMapping> }): Promise<void> {
     if (!msg.goal || msg.goal.trim().length === 0) {
       vscode.window.showErrorMessage("Goal is required.");
       return;
@@ -236,28 +269,13 @@ export class LoopWebviewPanel {
     const target = msg.targetProjectPath && msg.targetProjectPath.length > 0
       ? msg.targetProjectPath
       : vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? process.cwd();
-    if (msg.cliProfile) {
-      const cfg = vscode.workspace.getConfiguration("agentLoop");
-      await cfg.update("cliProfile", msg.cliProfile, vscode.ConfigurationTarget.Global);
-      const profileDefaults: Record<string, string> = {
-        opencode: "opencode",
-        kilo: "kilo",
-      };
-      const expectedBinary = profileDefaults[msg.cliProfile];
-      if (expectedBinary) {
-        const currentBinary = cfg.get<string>("cliBinary", "opencode");
-        if (currentBinary !== expectedBinary && (currentBinary === "opencode" || currentBinary === "kilo")) {
-          await cfg.update("cliBinary", expectedBinary, vscode.ConfigurationTarget.Global);
-        }
-      }
-    }
-
     try {
       const sessionId = await this.client.startNewSession({
         goal: msg.goal,
         targetProjectPath: target,
         accessMode: msg.accessMode === "full_access" ? "full_access" : "ask",
         modelMapping: msg.modelMapping,
+        providerMapping: msg.providerMapping,
         variantMapping: msg.variantMapping,
       });
       this.selectedSessionId = sessionId;
@@ -279,7 +297,7 @@ export class LoopWebviewPanel {
         );
         return;
       }
-      const sessionId = await this.client.resumeSession(msg.sessionId);
+      await this.client.resumeSession(msg.sessionId);
       this.selectedSessionId = msg.sessionId;
       this.attachLogListener(msg.sessionId);
       vscode.window.showInformationMessage(`Agent Loop: Resumed session ${msg.sessionId}`);
@@ -295,6 +313,8 @@ export class LoopWebviewPanel {
       const result = await this.client.discoverModels();
       const registry = await this.store.readRegistry();
       const discoveredCount = (registry.availableModels || []).length;
+      const availableProviderCount = Object.values(registry.providerCatalog ?? {})
+        .filter((provider) => provider.enabled && provider.available).length;
       if (result.exitCode !== 0) {
         const stderrHint = result.stderr ? ` Stderr: ${result.stderr.slice(0, 400)}` : "";
         vscode.window.showWarningMessage(
@@ -308,7 +328,9 @@ export class LoopWebviewPanel {
           (result.stderr ? `\nStderr: ${result.stderr.slice(0, 300)}` : "")
         );
       } else {
-        vscode.window.showInformationMessage(`Agent Loop: Discovered ${discoveredCount} models.`);
+        vscode.window.showInformationMessage(
+          `Agent Loop: Found ${availableProviderCount} installed provider(s) and ${discoveredCount} model(s).`
+        );
       }
       await this.refresh();
     } catch (err) {
@@ -326,13 +348,12 @@ export class LoopWebviewPanel {
     );
     if (confirm !== "Delete") return;
 
-    const stateBeforeDelete = await this.store.readState(sessionId);
-    if (stateBeforeDelete?.status === "RUNNING") {
-      try {
-        await this.requestStopSession(sessionId);
-      } catch {
-        // best effort
-      }
+    const preparation = await this.client.prepareSessionDeletion(sessionId);
+    if (!preparation.safe) {
+      vscode.window.showWarningMessage(
+        `Agent Loop: Session cannot be deleted safely yet. ${preparation.reason}`
+      );
+      return;
     }
 
     const result = await this.store.deleteSession(sessionId);
@@ -476,6 +497,7 @@ export class LoopWebviewPanel {
     const rootDir = await this.store.getRootDir();
     const variantDefaults = await loadLoopVariantDefaults(rootDir);
     const cliProfiles = await loadCliProfilesConfig(rootDir);
+    const systemSettings = await this.store.readSystemSettings();
 
     const payload: WebviewStatePayload = {
       registry,
@@ -492,6 +514,7 @@ export class LoopWebviewPanel {
       variantMapping: state?.variantMapping ?? {},
       variantDefaults,
       cliProfiles,
+      systemSettings,
       runtimeLeaseStatus,
     };
 
@@ -508,6 +531,17 @@ export class LoopWebviewPanel {
       preserveFocus,
     });
     await vscode.commands.executeCommand("markdown.showPreview", document.uri);
+  }
+
+  private async handleSaveSystemSettings(settings: SystemSettings): Promise<void> {
+    try {
+      await this.store.saveSystemSettings(settings);
+      vscode.window.showInformationMessage("Agent Loop: Provider, MCP/web, and pipeline settings saved.");
+      await this.handleDiscoverModels();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      vscode.window.showErrorMessage(`Failed to save Agent Loop settings: ${message}`);
+    }
   }
 
   private async handleResolveAccessRequest(msg: { sessionId: string; decision: "allow_requested" | "full_access" }): Promise<void> {

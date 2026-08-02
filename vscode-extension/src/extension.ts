@@ -1,6 +1,4 @@
 import * as vscode from "vscode";
-import * as path from "node:path";
-import * as fs from "node:fs/promises";
 import { readExtensionConfig, SessionMeta, ExtensionConfig } from "./types";
 import { StateStore, setGlobalContext } from "./stateStore";
 import { LoopClient } from "./loopClient";
@@ -32,7 +30,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   store.startPolling(config.pollIntervalMs);
 
-  const sessionExplorerProvider = new SessionExplorerProvider(store, client);
+  const sessionExplorerProvider = new SessionExplorerProvider(store);
 
   const updateNoSessionsContext = async () => {
     try {
@@ -117,11 +115,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       await store!.ensureInitialized();
       const registry = await store!.readRegistry();
       const runningMetaIds = registry.sessionMetas
-        .filter((m) => m.status === "RUNNING")
+        .filter((m) => m.status === "RUNNING" || m.status === "RECOVERING")
         .map((m) => m.sessionId);
       const candidateIds = [...new Set([...client!.getActiveSessionIds(), ...runningMetaIds])];
       if (candidateIds.length === 0) {
-        vscode.window.showInformationMessage("Agent Loop: No active sessions to stop.");
+        vscode.window.showInformationMessage("Agent Loop: No active or recovering sessions to stop.");
         return;
       }
       const picked = await vscode.window.showQuickPick(
@@ -163,12 +161,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         "Delete"
       );
       if (confirm !== "Delete") return;
-      const stateBeforeDelete = await store!.readState(sessionId);
-      if (stateBeforeDelete?.status === "RUNNING") {
-        try {
-          const panel = LoopWebviewPanel.getInstance(context, store!, client!, config);
-          await panel.requestStopSession(sessionId);
-        } catch { /* best effort */ }
+      const preparation = await client!.prepareSessionDeletion(sessionId);
+      if (!preparation.safe) {
+        vscode.window.showWarningMessage(
+          `Agent Loop: Session cannot be deleted safely yet. ${preparation.reason}`
+        );
+        return;
       }
       const result = await store!.deleteSession(sessionId);
       if (result.error) {
@@ -185,23 +183,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
     vscode.commands.registerCommand("agentLoop.refresh", async () => {
       sessionExplorerProvider.refresh();
-    }),
-
-    vscode.commands.registerCommand("agentLoop.openPipelineConfig", async () => {
-      const liveConfig = readExtensionConfig();
-      const root = await store!.getRootDir();
-      const configPath = liveConfig.pipelineConfigPath
-        ? path.resolve(liveConfig.pipelineConfigPath)
-        : path.join(root, "agent_pipeline.json");
-      try {
-        await fs.access(configPath);
-        const document = await vscode.workspace.openTextDocument(vscode.Uri.file(configPath));
-        await vscode.window.showTextDocument(document, { preview: false });
-      } catch {
-        vscode.window.showErrorMessage(
-          `Agent Loop pipeline configuration not found: ${configPath}`
-        );
-      }
     })
   );
 
@@ -210,8 +191,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       if (e.affectsConfiguration("agentLoop")) {
         const freshConfig = readExtensionConfig();
         config = freshConfig;
-        if (store) { (store as any).config = freshConfig; }
-        if (client) { (client as any).config = freshConfig; }
+        store?.updateConfig(freshConfig);
+        client?.updateConfig(freshConfig);
         if (store && client) {
           startRecoveryMonitor(store, client, freshConfig.heartbeatIntervalMs);
         }
@@ -345,8 +326,7 @@ class SessionExplorerProvider implements vscode.TreeDataProvider<SessionNode> {
   readonly onDidChangeTreeData = this.emitter.event;
 
   constructor(
-    private readonly store: StateStore,
-    private readonly client: LoopClient
+    private readonly store: StateStore
   ) {
     this.store.onChange(() => this.refresh());
   }

@@ -2,7 +2,7 @@
   "name": "agent-loop-vscode",
   "displayName": "Agent Loop Orchestrator",
   "description": "VS Code extension that controls the Custom Agent Loop System CLI to autonomously achieve coding goals via a multi-model multi-session orchestrator.",
-  "version": "3.2.8",
+  "version": "3.4.0",
   "publisher": "custom-agent-loop",
   "license": "MIT",
   "repository": {
@@ -23,7 +23,6 @@
     "onCommand:agentLoop.resumeSession",
     "onCommand:agentLoop.discoverModels",
     "onCommand:agentLoop.stopSession",
-    "onCommand:agentLoop.openPipelineConfig",
     "onView:agentLoopExplorer"
   ],
   "main": "./out/extension.js",
@@ -68,12 +67,6 @@
         "title": "Agent Loop: Refresh",
         "category": "Agent Loop",
         "icon": "$(refresh)"
-      },
-      {
-        "command": "agentLoop.openPipelineConfig",
-        "title": "Agent Loop: Open Pipeline Configuration",
-        "category": "Agent Loop",
-        "icon": "$(settings-gear)"
       }
     ],
     "viewsContainers": {
@@ -138,7 +131,9 @@
           "type": "string",
           "enum": [
             "opencode",
-            "kilo"
+            "kilo",
+            "codex",
+            "claude"
           ],
           "default": "opencode",
           "description": "CLI profile determining command-line interface conventions (run args, model discovery). Auto-detected from cliBinary if unset."
@@ -157,11 +152,6 @@
           "type": "string",
           "default": "",
           "description": "Path to the compiled loop_orchestrator.js. Empty = auto-detect relative to rootDir."
-        },
-        "agentLoop.pipelineConfigPath": {
-          "type": "string",
-          "default": "",
-          "description": "Path to agent_pipeline.json. Empty uses agent_pipeline.json in the orchestrator root."
         },
         "agentLoop.maxIterations": {
           "type": "number",
@@ -224,7 +214,11 @@
             "type": "number",
             "minimum": 1
           },
-          "default": [60000, 300000, 900000],
+          "default": [
+            60000,
+            300000,
+            900000
+          ],
           "description": "Delay per automatic transient-recovery cycle in milliseconds. The last value is reused for additional cycles."
         },
         "agentLoop.retryBackoffMs": {
@@ -278,13 +272,14 @@
     }
   },
   "scripts": {
-    "vscode:prepublish": "npm --prefix .. run build && npm run compile",
+    "vscode:prepublish": "npm --prefix .. run build && node ../scripts/bundle-core-for-vsix.js && npm run compile",
+    "precompile": "node ../scripts/sync-runtime-defaults.js",
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
     "typecheck": "tsc -p ./ --noEmit",
     "test": "npm run compile && node --test out/*.test.js",
-    "prepack": "npm --prefix .. run build && npm run compile",
-    "package": "vsce package"
+    "prepack": "npm --prefix .. run build && node ../scripts/bundle-core-for-vsix.js && npm run compile",
+    "package": "node ../scripts/package-vsix.js"
   },
   "devDependencies": {
     "@types/node": "^20.11.0",

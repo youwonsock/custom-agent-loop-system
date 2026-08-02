@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import runtimeDefaults from "./generated_runtime_defaults.json";
 
 export type LoopStatus =
   | "RUNNING"
@@ -24,7 +25,7 @@ export type FailureKind =
   | "transport_timeout" | "idle_timeout" | "phase_timeout" | "spawn_error"
   | "tool_timeout"
   | "process_exit" | "incomplete_response" | "network" | "rate_limited"
-  | "auth" | "model_unavailable" | "permission" | "cancelled"
+  | "auth" | "model_unavailable" | "permission" | "role_violation" | "cancelled"
   | "orphaned_process" | "unknown";
 
 export interface ModelMapping {
@@ -38,13 +39,67 @@ export interface ModelMapping {
 }
 
 export type VariantMapping = Partial<Record<AgentRole, string>>;
+export type ProviderMapping = Record<AgentRole, string>;
+export type ProviderAdapter = "opencode" | "kilo" | "codex" | "claude";
 
-export type PipelineStageKind = "planning" | "implementation" | "test" | "review" | "approval" | "interrupt";
+export interface ProviderConfig {
+  label: string;
+  adapter: ProviderAdapter;
+  binary: string;
+  enabled: boolean;
+  modelsArgs: string[];
+  fallbackModels: string[];
+  interactionWhitelist?: string[];
+}
+
+export interface ProviderCatalogEntry {
+  id: string;
+  label: string;
+  adapter: ProviderAdapter;
+  binary: string;
+  enabled: boolean;
+  available: boolean;
+  models: string[];
+  modelLabels?: Record<string, string>;
+  modelVariants?: Record<string, string[]>;
+  discoveredAt: string | null;
+  error: string | null;
+}
+
+export interface McpServerConfig {
+  id: string;
+  name: string;
+  enabled: boolean;
+  type: "local" | "remote";
+  command?: string;
+  args?: string[];
+  url?: string;
+  environment?: Record<string, string>;
+  headers?: Record<string, string>;
+  timeoutMs?: number;
+  allowedTools?: string[];
+}
+
+export interface ToolAccessConfig {
+  webSearch: { enabled: boolean; mode: "cached" | "live" };
+  mcpServers: McpServerConfig[];
+}
+
+export type PipelineStageExecutor = "planning" | "implementation" | "test" | "review" | "approval" | "interrupt";
+export type PipelineCompletionContract = "phase_done" | "plan_options" | "verdict" | "approval";
+export interface PipelineStageType {
+  id: string;
+  label: string;
+  executor: PipelineStageExecutor;
+  completionContract: PipelineCompletionContract;
+  description: string;
+}
 export interface PipelineRole {
   id: string;
   modelRole: "planner" | "implementer" | "tester" | "qa_lead" | "master" | "interrupter";
   description: string;
   instructions: string;
+  provider?: string;
   model?: string;
   variant?: string;
 }
@@ -52,7 +107,7 @@ export interface PipelineStage {
   id: string;
   name: string;
   role: string;
-  kind: PipelineStageKind;
+  kind: string;
   instructions: string;
   onSuccess: string;
   onFailure: string;
@@ -67,7 +122,22 @@ export interface PipelineDefinition {
   interruptStageId: string;
   reentryStageId: string;
   iterationCompletionStageId: string;
+  stageTypes?: PipelineStageType[];
   roles: PipelineRole[];
+  stages: PipelineStage[];
+}
+export interface AgentRolesDefinition {
+  version: 1;
+  roles: PipelineRole[];
+}
+export interface AgentLoopDefinition {
+  version: 1;
+  name: string;
+  startStageId: string;
+  interruptStageId: string;
+  reentryStageId: string;
+  iterationCompletionStageId: string;
+  stageTypes?: PipelineStageType[];
   stages: PipelineStage[];
 }
 
@@ -172,6 +242,39 @@ export interface AutomaticRecoveryState {
   reason: string;
 }
 
+export type RequirementEvidenceStatus = "SATISFIED" | "PARTIAL" | "FAILED" | "BLOCKED";
+export interface RequirementLedger {
+  version: 1;
+  derivedAt: string;
+  items: Array<{
+    id: string;
+    text: string;
+    category: "deliverable" | "behavior" | "constraint" | "research";
+    mandatory: true;
+    source: "original_goal";
+  }>;
+  evidence: Array<{
+    requirementId: string;
+    stageId: string;
+    role: string;
+    status: RequirementEvidenceStatus;
+    summary: string;
+    attemptId: string | null;
+    recordedAt: string;
+  }>;
+}
+
+export interface ConvergenceState {
+  stagnantCycles: number;
+  history: Array<{
+    loopCount: number;
+    score: number;
+    signature: string;
+    unresolvedRequirementIds: string[];
+    recordedAt: string;
+  }>;
+}
+
 export interface LoopState {
   stateVersion: number;
   sessionId: string;
@@ -185,9 +288,20 @@ export interface LoopState {
   accessMode: AccessMode;
   pendingAccessRequest: PendingAccessRequest | null;
   modelMapping: ModelMapping;
+  providerMapping: ProviderMapping;
+  providerConfigs: Record<string, ProviderConfig>;
   errorQueue: ErrorSignature[];
   agentStates: Record<AgentRole, AgentState>;
   refinedGoal: string | null;
+  referenceIdentity: {
+    title: string;
+    creator: string;
+    packageId: string;
+    canonicalUrl: string;
+    candidateCount: number;
+    identityMatch: "EXACT" | "AMBIGUOUS" | "SIMILAR" | "UNKNOWN";
+    confidence: "HIGH" | "MEDIUM" | "LOW";
+  } | null;
   planningComplete: boolean;
   masterApproved: boolean;
   createdAt: string;
@@ -198,6 +312,7 @@ export interface LoopState {
   cliBinary: string;
   cliProfile: string;
   variantMapping: VariantMapping;
+  toolAccess: ToolAccessConfig;
   awaitingPlanApproval: boolean;
   planApproved: boolean;
   planPath: string | null;
@@ -221,11 +336,14 @@ export interface LoopState {
     stageId: string;
     role: string;
     kind: string;
+    executor?: PipelineStageExecutor;
     completedAt: string;
     output: string;
     verdict: "PASS" | "FAIL" | "APPROVED" | "REJECTED" | null;
     attemptId: string | null;
   }>;
+  requirements: RequirementLedger;
+  convergence: ConvergenceState;
 }
 
 export interface PlanChoice {
@@ -252,6 +370,7 @@ export interface SessionRegistry {
   sessionMetas: SessionMeta[];
   manualModelsOverride: string[] | null;
   modelVariants: Record<string, string[]> | null;
+  providerCatalog?: Record<string, ProviderCatalogEntry>;
 }
 
 export interface LoopHistoryEntry {
@@ -288,7 +407,7 @@ export interface SessionBundle {
 
 export type WebviewMessage =
   | { command: "requestState" }
-  | { command: "newSession"; goal: string; targetProjectPath: string; accessMode: AccessMode; cliProfile?: string; modelMapping: Partial<ModelMapping>; variantMapping?: Partial<VariantMapping> }
+  | { command: "newSession"; goal: string; targetProjectPath: string; accessMode: AccessMode; modelMapping: Partial<ModelMapping>; providerMapping?: Partial<ProviderMapping>; variantMapping?: Partial<VariantMapping> }
   | { command: "resumeSession"; sessionId: string }
   | { command: "resolveAccessRequest"; sessionId: string; decision: "allow_requested" | "full_access" }
   | { command: "setAccessMode"; sessionId: string; accessMode: AccessMode }
@@ -300,6 +419,7 @@ export type WebviewMessage =
   | { command: "openFinalSummary"; sessionId: string }
   | { command: "deleteSession"; sessionId: string }
   | { command: "setCliProfile"; profile: string }
+  | { command: "saveSystemSettings"; settings: SystemSettings }
   | { command: "openSessionFolder"; sessionId: string }
   | { command: "interruptSession"; sessionId: string; message: string }
   | { command: "selectPlanChoice"; sessionId: string; choiceId: number }
@@ -347,6 +467,7 @@ export interface WebviewStatePayload {
   variantMapping: VariantMapping;
   variantDefaults: Record<string, string[]>;
   cliProfiles: Record<string, { defaultBinary: string }>;
+  systemSettings: SystemSettings;
   runtimeLeaseStatus: string | null;
 }
 
@@ -373,7 +494,6 @@ export interface ExtensionConfig {
   heartbeatIntervalMs: number;
   leaseTtlMs: number;
   maxInMemoryOutputBytes: number;
-  pipelineConfigPath: string;
 }
 
 export interface LoopPathsConfig {
@@ -410,7 +530,15 @@ export interface LoopPathsConfig {
 export interface LoopConfig {
   paths: LoopPathsConfig;
   cliProfiles?: Record<string, { defaultBinary: string; modelsArgs: string[] }>;
+  providers?: Record<string, ProviderConfig>;
+  toolAccess?: ToolAccessConfig;
   variantDefaults?: Record<string, string[]>;
+}
+
+export interface SystemSettings {
+  providers: Record<string, ProviderConfig>;
+  toolAccess: ToolAccessConfig;
+  pipeline: PipelineDefinition;
 }
 
 function defaultLoopPaths(): LoopPathsConfig {
@@ -515,10 +643,12 @@ function normalizePathSetting(value: string | undefined): string {
   return v;
 }
 
-const KNOWN_CLI_BINARIES = new Set(["opencode", "kilo"]);
+const KNOWN_CLI_BINARIES = new Set(["opencode", "kilo", "codex", "claude"]);
 const PROFILE_DEFAULT_BINARY: Record<string, string> = {
   opencode: "opencode",
   kilo: "kilo",
+  codex: "codex",
+  claude: "claude",
 };
 
 export function readExtensionConfig(): ExtensionConfig {
@@ -542,27 +672,26 @@ export function readExtensionConfig(): ExtensionConfig {
     rootDir: normalizePathSetting(cfg.get<string>("rootDir", "")),
     nodeBinary: normalizePathSetting(cfg.get<string>("nodeBinary", "node")) || "node",
     orchestratorScript: normalizePathSetting(cfg.get<string>("orchestratorScript", "")),
-    maxIterations: cfg.get<number>("maxIterations", 20),
-    phaseTimeoutMs: cfg.get<number>("phaseTimeoutMs", 900000),
-    idleTimeoutMs: cfg.get<number>("idleTimeoutMs", 300000),
-    toolTimeoutMs: cfg.get<number>("toolTimeoutMs", 600000),
-    pollIntervalMs: cfg.get<number>("pollIntervalMs", 500),
-    transportTimeoutMs: cfg.get<number>("transportTimeoutMs", 120000),
-    phaseRecoveryBudgetMs: cfg.get<number>("phaseRecoveryBudgetMs", 2880000),
-    maxAgentAttempts: cfg.get<number>("maxAgentAttempts", 3),
-    maxCompletionRecoveryAttempts: cfg.get<number>("maxCompletionRecoveryAttempts", 1),
-    maxAutomaticRecoveryCycles: cfg.get<number>("maxAutomaticRecoveryCycles", 3),
+    maxIterations: cfg.get<number>("maxIterations", runtimeDefaults.maxIterations),
+    phaseTimeoutMs: cfg.get<number>("phaseTimeoutMs", runtimeDefaults.phaseTimeoutMs),
+    idleTimeoutMs: cfg.get<number>("idleTimeoutMs", runtimeDefaults.idleTimeoutMs),
+    toolTimeoutMs: cfg.get<number>("toolTimeoutMs", runtimeDefaults.toolTimeoutMs),
+    pollIntervalMs: cfg.get<number>("pollIntervalMs", runtimeDefaults.pollIntervalMs),
+    transportTimeoutMs: cfg.get<number>("transportTimeoutMs", runtimeDefaults.transportTimeoutMs),
+    phaseRecoveryBudgetMs: cfg.get<number>("phaseRecoveryBudgetMs", runtimeDefaults.phaseRecoveryBudgetMs),
+    maxAgentAttempts: cfg.get<number>("maxAgentAttempts", runtimeDefaults.maxAgentAttempts),
+    maxCompletionRecoveryAttempts: cfg.get<number>("maxCompletionRecoveryAttempts", runtimeDefaults.maxCompletionRecoveryAttempts),
+    maxAutomaticRecoveryCycles: cfg.get<number>("maxAutomaticRecoveryCycles", runtimeDefaults.maxAutomaticRecoveryCycles),
     automaticRecoveryBackoffMs: cfg.get<number[]>(
       "automaticRecoveryBackoffMs",
-      [60000, 300000, 900000]
+      [...runtimeDefaults.automaticRecoveryBackoffMs]
     ),
-    retryBackoffMs: cfg.get<number[]>("retryBackoffMs", [5000, 30000]),
-    terminationGraceMs: cfg.get<number>("terminationGraceMs", 3000),
-    killTimeoutMs: cfg.get<number>("killTimeoutMs", 5000),
-    heartbeatIntervalMs: cfg.get<number>("heartbeatIntervalMs", 5000),
-    leaseTtlMs: cfg.get<number>("leaseTtlMs", 20000),
-    maxInMemoryOutputBytes: cfg.get<number>("maxInMemoryOutputBytes", 1048576),
-    pipelineConfigPath: normalizePathSetting(cfg.get<string>("pipelineConfigPath", "")),
+    retryBackoffMs: cfg.get<number[]>("retryBackoffMs", [...runtimeDefaults.retryBackoffMs]),
+    terminationGraceMs: cfg.get<number>("terminationGraceMs", runtimeDefaults.terminationGraceMs),
+    killTimeoutMs: cfg.get<number>("killTimeoutMs", runtimeDefaults.killTimeoutMs),
+    heartbeatIntervalMs: cfg.get<number>("heartbeatIntervalMs", runtimeDefaults.heartbeatIntervalMs),
+    leaseTtlMs: cfg.get<number>("leaseTtlMs", runtimeDefaults.leaseTtlMs),
+    maxInMemoryOutputBytes: cfg.get<number>("maxInMemoryOutputBytes", runtimeDefaults.maxInMemoryOutputBytes),
   };
   validateExtensionConfig(result);
   return result;

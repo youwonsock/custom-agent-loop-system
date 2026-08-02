@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Agent Role Definitions",
+  "type": "object",
+  "required": ["version", "roles"],
+  "properties": {
+    "$schema": { "type": "string" },
+    "version": { "const": 1 },
+    "roles": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["id", "modelRole", "description", "instructions"],
+        "properties": {
+          "id": { "$ref": "#/$defs/id" },
+          "modelRole": { "enum": ["planner", "implementer", "tester", "qa_lead", "master", "interrupter"] },
+          "description": { "type": "string" },
+          "instructions": { "type": "string" },
+          "provider": { "$ref": "#/$defs/id" },
+          "model": { "type": "string", "minLength": 1 },
+          "variant": { "type": "string", "minLength": 1 }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "$defs": {
+    "id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$" }
+  },
+  "additionalProperties": false
+}

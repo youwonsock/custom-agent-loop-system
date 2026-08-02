@@ -124,7 +124,25 @@ export function decideRecoveryAction(
 }
 
 export function shouldGracefullyStop(stateStatus: LoopStatus): boolean {
-  return stateStatus === "RUNNING";
+  return stateStatus === "RUNNING" || stateStatus === "RECOVERING";
+}
+
+export function assessSessionDeletionSafety(
+  stateStatus: LoopStatus | null,
+  disposition: LeaseDisposition,
+  childLiveness: readonly ProcessLiveness[]
+): { safe: boolean; reason: string | null } {
+  if (stateStatus === "RUNNING" || stateStatus === "RECOVERING") {
+    return { safe: false, reason: `Session is ${stateStatus}.` };
+  }
+  if (["active", "expired_owner_alive", "unverifiable"].includes(disposition)) {
+    return { safe: false, reason: `Session ownership is ${disposition}.` };
+  }
+  const unsafeChild = childLiveness.find((liveness) => liveness !== "dead");
+  if (unsafeChild) {
+    return { safe: false, reason: `A session child process is ${unsafeChild}.` };
+  }
+  return { safe: true, reason: null };
 }
 
 /** @deprecated Use shouldGracefullyStop. */
