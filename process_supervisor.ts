@@ -17,6 +17,7 @@ const MIN_RAW_LOG_BYTES = 8 * 1024 * 1024;
 const MAX_RAW_LOG_BYTES = 32 * 1024 * 1024;
 const REDACTION_MARKER = "[REDACTED]";
 const EXIT_DATA_DRAIN_MS = 100;
+const EMPTY_RESULT_EXIT_DATA_DRAIN_MS = 1_000;
 const RAW_LOG_CLOSE_TIMEOUT_MS = 5_000;
 
 async function openRawLogStream(filePath: string): Promise<fs.WriteStream> {
@@ -662,6 +663,11 @@ export class ProcessSupervisor {
       resolveResult = resolve;
     });
 
+    const exitDataDrainMs = (): number =>
+      events.length === 0 && assistantParts.length === 0 && cliSessionId === null
+        ? EMPTY_RESULT_EXIT_DATA_DRAIN_MS
+        : EXIT_DATA_DRAIN_MS;
+
     const finish = (
       outcome: AttemptStatus,
       failureKind: FailureKind | null,
@@ -735,7 +741,7 @@ export class ProcessSupervisor {
       // Some PTY implementations report exit before dispatching their final
       // data callback. Termination paths need the same bounded drain as natural
       // exits so session IDs, tool events, and completion text are not dropped.
-      if (exitSeen) await delay(EXIT_DATA_DRAIN_MS);
+      if (exitSeen) await delay(exitDataDrainMs());
       finish(intendedOutcome, intendedFailure, message, cancelled);
     };
 
@@ -949,7 +955,7 @@ export class ProcessSupervisor {
           event.exitCode === 0 ? null : `Process exited with code ${event.exitCode}`,
           false
         );
-      }, EXIT_DATA_DRAIN_MS);
+      }, exitDataDrainMs());
     });
 
     armInitialTransportTimer();
