@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import path from "node:path";
 import {
   DEFAULT_PROVIDERS,
   assertMcpCredentialsAreReferenced,
@@ -22,6 +23,13 @@ const localMcp = {
   environment: { API_KEY: "secret" },
   allowedTools: ["search"],
 };
+
+const providerFixtureRoot = path.join(process.cwd(), "provider-runtime-fixtures");
+const providerTargetPath = path.join(providerFixtureRoot, "repo");
+const providerAdditionalPath = path.join(providerFixtureRoot, "additional");
+const providerOutsidePath = path.join(providerFixtureRoot, "outside");
+const providerSharedPath = path.join(providerFixtureRoot, "shared");
+const providerMcpConfigPath = path.join(providerFixtureRoot, "tmp", "mcp.json");
 
 test("provider registry includes OpenCode, Kilo, Codex, and Claude and accepts custom instances", () => {
   const providers = normalizeProviders({
@@ -59,8 +67,8 @@ test("built-in provider overrides are normalized and reject invalid adapters or 
 test("Codex invocation maps live web search, resume, sandbox, and MCP configuration", () => {
   const invocation = buildProviderInvocation(DEFAULT_PROVIDERS.codex, {
     model: "gpt-5.6-sol",
-    targetProjectPath: "C:\\repo",
-    additionalAllowedPaths: ["C:\\Users\\a\\Downloads\\Test"],
+    targetProjectPath: providerTargetPath,
+    additionalAllowedPaths: [providerAdditionalPath],
     prompt: "continue",
     variant: "xhigh",
     resumeSessionId: "thread-1",
@@ -75,7 +83,7 @@ test("Codex invocation maps live web search, resume, sandbox, and MCP configurat
   assert.ok(invocation.args.indexOf("--search") < invocation.args.indexOf("exec"));
   assert.ok(invocation.args.includes("workspace-write"));
   assert.ok(invocation.args.includes("--add-dir"));
-  assert.ok(invocation.args.includes("C:\\Users\\a\\Downloads\\Test"));
+  assert.ok(invocation.args.includes(providerAdditionalPath));
   assert.ok(invocation.args.includes("resume"));
   assert.ok(invocation.args.some((arg) => arg.includes("model_reasoning_effort") && arg.includes("xhigh")));
   assert.ok(invocation.args.some((arg) => arg.includes("mcp_servers.docs.command")));
@@ -106,7 +114,7 @@ test("MCP secret and environment references resolve only at invocation time", ()
 test("Codex remote MCP headers use environment references and never expose values in args", () => {
   const invocation = buildProviderInvocation(DEFAULT_PROVIDERS.codex, {
     model: "gpt-5.6-sol",
-    targetProjectPath: "C:\\repo",
+    targetProjectPath: providerTargetPath,
     prompt: "inspect",
     fullAccess: false,
     webSearch: false,
@@ -130,7 +138,7 @@ test("Codex read-only roles fail closed while inherited MCP cannot be isolated",
   assert.throws(
     () => buildProviderInvocation(DEFAULT_PROVIDERS.codex, {
       model: "gpt-5.6-sol",
-      targetProjectPath: "C:\\repo",
+      targetProjectPath: providerTargetPath,
       prompt: "inspect only",
       fullAccess: true,
       readOnly: true,
@@ -144,8 +152,8 @@ test("Codex read-only roles fail closed while inherited MCP cannot be isolated",
 test("OpenCode-family access policies map approved roots and never bypass read-only roles", () => {
   const readOnly = buildProviderInvocation(DEFAULT_PROVIDERS.opencode, {
     model: "open/model",
-    targetProjectPath: "C:\\repo",
-    additionalAllowedPaths: ["C:\\outside"],
+    targetProjectPath: providerTargetPath,
+    additionalAllowedPaths: [providerOutsidePath],
     prompt: "inspect",
     fullAccess: true,
     readOnly: true,
@@ -161,12 +169,13 @@ test("OpenCode-family access policies map approved roots and never bypass read-o
   assert.equal(openConfig.permission.list, "allow");
   assert.equal(openConfig.permission.edit, "deny");
   assert.equal(openConfig.permission.bash, "deny");
-  assert.equal(openConfig.permission["external_directory"]["C:/outside/**"], "allow");
+  const outsidePermission = `${providerOutsidePath.replace(/\\/g, "/")}/**`;
+  assert.equal(openConfig.permission["external_directory"][outsidePermission], "allow");
   assert.equal(openConfig.mcp, undefined);
 
   const kiloReadOnly = buildProviderInvocation(DEFAULT_PROVIDERS.kilo, {
     model: "anthropic/model",
-    targetProjectPath: "C:\\repo",
+    targetProjectPath: providerTargetPath,
     prompt: "inspect",
     fullAccess: true,
     readOnly: true,
@@ -181,7 +190,7 @@ test("OpenCode-family access policies map approved roots and never bypass read-o
 
   const askMode = buildProviderInvocation(DEFAULT_PROVIDERS.kilo, {
     model: "anthropic/model",
-    targetProjectPath: "C:\\repo",
+    targetProjectPath: providerTargetPath,
     prompt: "work",
     fullAccess: false,
     webSearch: false,
@@ -190,7 +199,7 @@ test("OpenCode-family access policies map approved roots and never bypass read-o
   assert.equal(askMode.args.includes("--auto"), false);
   const fullAccess = buildProviderInvocation(DEFAULT_PROVIDERS.kilo, {
     model: "anthropic/model",
-    targetProjectPath: "C:\\repo",
+    targetProjectPath: providerTargetPath,
     prompt: "work",
     fullAccess: true,
     webSearch: false,
@@ -202,20 +211,20 @@ test("OpenCode-family access policies map approved roots and never bypass read-o
 test("Claude invocation maps stream JSON, web tools, resume, and generated MCP document", () => {
   const invocation = buildProviderInvocation(DEFAULT_PROVIDERS.claude, {
     model: "sonnet",
-    targetProjectPath: "C:\\repo",
-    additionalAllowedPaths: ["C:\\shared"],
+    targetProjectPath: providerTargetPath,
+    additionalAllowedPaths: [providerSharedPath],
     prompt: "work",
     resumeSessionId: "claude-session",
     fullAccess: true,
     webSearch: true,
     mcpServers: [localMcp],
-    claudeMcpConfigPath: "C:\\tmp\\mcp.json",
+    claudeMcpConfigPath: providerMcpConfigPath,
   });
   assert.ok(invocation.args.includes("stream-json"));
   assert.ok(invocation.args.includes("--resume"));
   assert.ok(invocation.args.includes("--mcp-config"));
   assert.ok(invocation.args.includes("--add-dir"));
-  assert.ok(invocation.args.includes("C:\\shared"));
+  assert.ok(invocation.args.includes(providerSharedPath));
   assert.ok(invocation.args.some((arg) => arg.includes("WebSearch") && arg.includes("mcp__docs__search")));
   assert.deepEqual(claudeMcpDocument([localMcp]), {
     mcpServers: { docs: { command: "npx", args: ["-y", "docs-mcp"], env: { API_KEY: "secret" } } },
@@ -225,13 +234,13 @@ test("Claude invocation maps stream JSON, web tools, resume, and generated MCP d
 test("Claude read-only roles expose only an explicit safe tool allowlist", () => {
   const invocation = buildProviderInvocation(DEFAULT_PROVIDERS.claude, {
     model: "sonnet",
-    targetProjectPath: "C:\\repo",
+    targetProjectPath: providerTargetPath,
     prompt: "inspect only",
     fullAccess: true,
     readOnly: true,
     webSearch: true,
     mcpServers: [localMcp],
-    claudeMcpConfigPath: "C:\\tmp\\mcp.json",
+    claudeMcpConfigPath: providerMcpConfigPath,
   });
   const toolsIndex = invocation.args.indexOf("--tools");
   assert.ok(toolsIndex >= 0);
@@ -249,7 +258,7 @@ test("Claude read-only roles expose only an explicit safe tool allowlist", () =>
 test("OpenCode and Kilo receive runtime MCP and web search configuration without file edits", () => {
   const open = buildProviderInvocation(DEFAULT_PROVIDERS.opencode, {
     model: "open/model",
-    targetProjectPath: "C:\\repo",
+    targetProjectPath: providerTargetPath,
     prompt: "work",
     fullAccess: true,
     webSearch: true,
@@ -260,7 +269,7 @@ test("OpenCode and Kilo receive runtime MCP and web search configuration without
 
   const kilo = buildProviderInvocation(DEFAULT_PROVIDERS.kilo, {
     model: "anthropic/model",
-    targetProjectPath: "C:\\repo",
+    targetProjectPath: providerTargetPath,
     prompt: "work",
     fullAccess: true,
     webSearch: true,

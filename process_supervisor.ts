@@ -16,7 +16,7 @@ type AnyObj = Record<string, unknown>;
 const MIN_RAW_LOG_BYTES = 8 * 1024 * 1024;
 const MAX_RAW_LOG_BYTES = 32 * 1024 * 1024;
 const REDACTION_MARKER = "[REDACTED]";
-const EXIT_DATA_DRAIN_MS = 25;
+const EXIT_DATA_DRAIN_MS = 100;
 const RAW_LOG_CLOSE_TIMEOUT_MS = 5_000;
 
 async function openRawLogStream(filePath: string): Promise<fs.WriteStream> {
@@ -732,6 +732,10 @@ export class ProcessSupervisor {
         );
         return;
       }
+      // Some PTY implementations report exit before dispatching their final
+      // data callback. Termination paths need the same bounded drain as natural
+      // exits so session IDs, tool events, and completion text are not dropped.
+      if (exitSeen) await delay(EXIT_DATA_DRAIN_MS);
       finish(intendedOutcome, intendedFailure, message, cancelled);
     };
 
