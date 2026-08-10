@@ -46,6 +46,15 @@ async function waitFor<T>(
   throw new Error(`Timed out after ${timeoutMs}ms waiting for integration state.`);
 }
 
+async function removeTestRoot(root: string): Promise<void> {
+  await fsp.rm(root, {
+    recursive: true,
+    force: true,
+    maxRetries: 10,
+    retryDelay: 100,
+  });
+}
+
 function execFileAsync(
   file: string,
   args: string[],
@@ -131,7 +140,7 @@ test("run rejects an equal mutable root before spawning the provider", async () 
     await assert.rejects(fsp.access(path.join(root, "provider-spawned.txt")));
     await assert.rejects(fsp.access(path.join(root, ".goal")));
   } finally {
-    await fsp.rm(root, { recursive: true, force: true });
+    await removeTestRoot(root);
   }
 });
 
@@ -199,7 +208,7 @@ test("resolved MCP secrets are redacted from every persisted execution artifact"
     assert.equal(`${result.stdout}\n${result.stderr}\n${corpus}`.includes(secret), false);
     assert.match(corpus, /\[REDACTED\]/);
   } finally {
-    await fsp.rm(root, { recursive: true, force: true });
+    await removeTestRoot(root);
   }
 });
 
@@ -313,7 +322,7 @@ test("dist CLI composes separate role and loop files to execute a custom pipelin
     assert.equal(state.completedIterations, 1);
     assert.deepEqual(Object.keys(state.stageResults).sort(), ["APPROVE", "BUILD", "TEST"]);
   } finally {
-    await fsp.rm(root, { recursive: true, force: true });
+    await removeTestRoot(root);
   }
 });
 
@@ -384,7 +393,7 @@ test("clean incomplete exit gets one fresh bounded completion recovery session",
     assert.equal(state.totalAgentAttempts, 2);
     assert.equal(state.activeAttempt.mode, "completion_recovery");
   } finally {
-    await fsp.rm(root, { recursive: true, force: true });
+    await removeTestRoot(root);
   }
 });
 
@@ -562,7 +571,7 @@ test("default planning waits for the user with full center-editor Markdown artif
     assert.equal(stateAfterRejectedResume.status, "WAITING_USER");
     assert.equal(stateAfterRejectedResume.recoveryCount, ownedState.recoveryCount);
   } finally {
-    await fsp.rm(root, { recursive: true, force: true });
+    await removeTestRoot(root);
   }
 });
 
@@ -633,7 +642,7 @@ test("insufficient named-reference research waits for the user after one plannin
     assert.equal(state.awaitingPlanApproval, false);
     await assert.rejects(fsp.access(path.join(sessionDir, "plan_choices.json")));
   } finally {
-    await fsp.rm(root, { recursive: true, force: true });
+    await removeTestRoot(root);
   }
 });
 
@@ -708,7 +717,7 @@ test("network failure reconnects once with the persisted CLI session", async () 
     assert.equal(state.status, "SUCCESS");
     assert.equal(state.totalAgentAttempts, 2);
   } finally {
-    await fsp.rm(root, { recursive: true, force: true });
+    await removeTestRoot(root);
   }
 });
 
@@ -787,7 +796,7 @@ test("model generation timeout keeps its failure kind and reconnects the persist
     assert.match(progress, /idle_timeout/);
     assert.match(progress, /using the existing CLI session/);
   } finally {
-    await fsp.rm(root, { recursive: true, force: true });
+    await removeTestRoot(root);
   }
 });
 
@@ -893,7 +902,7 @@ test("token-free transient exhaustion schedules recovery without spending interr
     assert.equal(recoveredState.automaticRecovery, null);
     assert.equal(recoveredState.recoveryCount, 0, "automatic recovery is not a manual recovery cycle");
   } finally {
-    await fsp.rm(root, { recursive: true, force: true });
+    await removeTestRoot(root);
   }
 });
 
@@ -1020,7 +1029,7 @@ test("implementation preflight waits for approval, then resumes with requested o
     assert.equal(fullAccessState.accessMode, "full_access");
     assert.equal(fullAccessState.pendingAccessRequest, null);
   } finally {
-    await fsp.rm(root, { recursive: true, force: true });
+    await removeTestRoot(root);
     await fsp.rm(outsideRoot, { recursive: true, force: true });
   }
 });
@@ -1134,6 +1143,6 @@ test("STOP cancels a persisted retry backoff before another attempt starts", asy
     assert.equal(ack.result, "completed");
     assert.ok(ack.completedAt);
   } finally {
-    await fsp.rm(root, { recursive: true, force: true });
+    await removeTestRoot(root);
   }
 });

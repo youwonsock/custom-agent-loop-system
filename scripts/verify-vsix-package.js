@@ -4,7 +4,9 @@ const fs = require("node:fs");
 const crypto = require("node:crypto");
 const os = require("node:os");
 const path = require("node:path");
+const { pipeline } = require("node:stream/promises");
 const { spawn, spawnSync } = require("node:child_process");
+const yauzl = require("yauzl");
 
 const root = path.resolve(__dirname, "..");
 const extensionRoot = path.join(root, "vscode-extension");
@@ -317,14 +319,26 @@ function writeVsixSbom(extensionPath, manifest) {
   fs.writeFileSync(`${vsixPath}.cdx.json`, `${JSON.stringify(sbom, null, 2)}\n`, "utf8");
 }
 
-function extractArchive(archivePath, destination) {
-  const result = spawnSync("tar", ["-xf", archivePath, "-C", destination], {
-    encoding: "utf8",
-    windowsHide: true,
+async function extractArchive(archivePath, destination) {
+  const destinationRoot = path.resolve(destination);
+  const destinationPrefix = `${destinationRoot}${path.sep}`;
+  const zipfile = await yauzl.openPromise(archivePath, {
+    strictFileNames: true,
+    validateEntrySizes: true,
   });
-  if (result.error) fail(`Unable to execute tar: ${result.error.message}`);
-  if (result.status !== 0) {
-    fail(`Unable to unpack ${archivePath}: ${result.stderr || result.stdout}`);
+
+  for await (const entry of zipfile.eachEntry()) {
+    const entryPath = path.resolve(destinationRoot, ...entry.fileName.split("/"));
+    if (entryPath !== destinationRoot && !entryPath.startsWith(destinationPrefix)) {
+      fail(`VSIX entry escapes the extraction root: ${entry.fileName}`);
+    }
+    if (entry.fileName.endsWith("/")) {
+      await fs.promises.mkdir(entryPath, { recursive: true });
+      continue;
+    }
+    await fs.promises.mkdir(path.dirname(entryPath), { recursive: true });
+    const input = await zipfile.openReadStreamPromise(entry);
+    await pipeline(input, fs.createWriteStream(entryPath, { flags: "wx" }));
   }
 }
 
@@ -444,7 +458,7 @@ async function main() {
   let verified = false;
   try {
     process.stdout.write(`[verify-vsix] Unpacking ${path.basename(vsixPath)}\n`);
-    extractArchive(vsixPath, temporaryRoot);
+    await extractArchive(vsixPath, temporaryRoot);
     const extensionPath = path.join(temporaryRoot, "extension");
     const unpackedPackagePath = path.join(extensionPath, "package.json");
     const bundleManifestPath = path.join(extensionPath, "core", "bundle-manifest.json");
