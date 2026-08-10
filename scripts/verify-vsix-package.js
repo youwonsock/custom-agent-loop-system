@@ -337,8 +337,18 @@ async function extractArchive(archivePath, destination) {
       continue;
     }
     await fs.promises.mkdir(path.dirname(entryPath), { recursive: true });
+    const archivedMode = (entry.externalFileAttributes >>> 16) & 0o777;
     const input = await zipfile.openReadStreamPromise(entry);
-    await pipeline(input, fs.createWriteStream(entryPath, { flags: "wx" }));
+    await pipeline(
+      input,
+      fs.createWriteStream(entryPath, {
+        flags: "wx",
+        mode: archivedMode || undefined,
+      })
+    );
+    if (process.platform !== "win32" && archivedMode !== 0) {
+      await fs.promises.chmod(entryPath, archivedMode);
+    }
   }
 }
 
