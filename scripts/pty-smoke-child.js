@@ -9,7 +9,10 @@ let output = "";
 let settled = false;
 const child = nodePty.spawn(
   process.execPath,
-  ["-e", "process.stdout.write('AGENT_LOOP_PTY_OK\\n')"],
+  [
+    "-e",
+    "process.stdout.write('AGENT_LOOP_PTY_OK\\n'); setTimeout(() => process.exit(0), 250)",
+  ],
   {
     name: "xterm-256color",
     cols: 80,
@@ -35,8 +38,8 @@ child.onExit(({ exitCode }) => {
   settled = true;
   clearTimeout(timer);
   // node-pty may deliver the final onData callback immediately after onExit on
-  // some platforms. Give the event queue one bounded drain window before
-  // asserting on the captured output.
+  // some platforms. The producer stays alive briefly after writing and the
+  // verifier also gives the event queue one bounded drain window.
   setTimeout(() => {
     if (exitCode !== 0) {
       process.stderr.write(`Bundled node-pty child exited with ${exitCode}.\n`);
@@ -48,5 +51,5 @@ child.onExit(({ exitCode }) => {
     }
     process.stdout.write("Bundled node-pty lifecycle completed.\n");
     process.exit(0);
-  }, 50);
+  }, 250);
 });
