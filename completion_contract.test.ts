@@ -216,6 +216,16 @@ test("supervisor timeout classifications are not overwritten by completion valid
   assert.equal(phaseFailure.kind, "phase_timeout");
   assert.equal(phaseFailure.retryable, true);
 
+  const unixIdleTimeout = result("", "", 0);
+  unixIdleTimeout.failureKind = "idle_timeout";
+  unixIdleTimeout.failureMessage = "Model generation produced no meaningful progress";
+  const zeroExitFailure = classifyAgentFailure(
+    unixIdleTimeout,
+    "Assistant response did not contain [PHASE_DONE] on its own line."
+  );
+  assert.equal(zeroExitFailure.kind, "idle_timeout");
+  assert.equal(zeroExitFailure.retryable, true);
+
   const completedWithoutSentinel = classifyAgentFailure(
     result("implementation text"),
     "Assistant response did not contain [PHASE_DONE] on its own line."

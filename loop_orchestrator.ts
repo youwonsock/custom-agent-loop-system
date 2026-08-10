@@ -2785,7 +2785,11 @@ export function classifyAgentFailure(result: PtyRunResult, completionReason: str
   ) {
     kind = "role_violation";
     retryable = false;
-  } else if (completionReason && result.exitCode === 0) {
+  } else if (
+    completionReason &&
+    result.exitCode === 0 &&
+    (kind === "unknown" || kind === "process_exit")
+  ) {
     kind = "incomplete_response";
   } else if (kind === "unknown" || kind === "process_exit") {
     if (
