@@ -729,7 +729,7 @@ test("model generation timeout keeps its failure kind and reconnects the persist
         "fs.writeFileSync(countPath, String(count));",
         "fs.appendFileSync(argsPath, JSON.stringify(process.argv.slice(2)) + '\\n');",
         "const emit = (text) => console.log(JSON.stringify({type:'text',id:'evt-'+count,sessionID:'transport-cli-session',part:{id:'part-'+count,text}}));",
-        "if (count === 1) { emit('starting remote model stream'); setInterval(() => {}, 1000); }",
+        "if (count === 1) { emit('starting remote model stream'); setTimeout(() => console.log(''), 250); setInterval(() => {}, 1000); }",
         "else { emit('Recovered after transport timeout\\n[PHASE_DONE]'); }",
       ].join("\n"),
       "utf8"
@@ -798,6 +798,7 @@ test("token-free transient exhaustion schedules recovery without spending interr
         "  console.log(JSON.stringify({type:'text',id:'brief',part:{id:'brief-part',text:'Evidence-based briefing\\n[PHASE_DONE]'}}));",
         "} else {",
         "  console.log(JSON.stringify({type:'tool_use',id:'tool-event',sessionID:'evidence-cli-session',part:{type:'tool',tool:'bash',state:{status:'completed',input:{command:'Write-Output progress'}}}}));",
+        "  setTimeout(() => console.log(''), 250);",
         "  setInterval(() => {}, 1000);",
         "}",
       ].join("\n"),

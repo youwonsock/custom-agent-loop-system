@@ -58,7 +58,9 @@ switch (mode) {
       });
     }
     assistant("Completed after event flood.\n[PHASE_DONE]", "event-flood-complete");
-    process.exit(0);
+    // Keep the producer alive briefly so this ring-buffer test does not also
+    // depend on platform-specific PTY close/drain ordering under CI load.
+    setTimeout(() => process.exit(0), 250);
     break;
   case "no-output":
     setInterval(() => {}, 1000);
