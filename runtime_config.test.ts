@@ -77,11 +77,20 @@ test("malformed config and inline MCP credentials fail loudly instead of using d
 test("runtime config rejects data paths that escape the configured root", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "agent-loop-config-path-"));
   try {
-    for (const sessionsRoot of ["../outside", "C:\\outside", "/outside"]) {
+    for (const sessionsRoot of [
+      "../outside",
+      "C:\\outside",
+      "/outside",
+      "C:drive-relative",
+      "safe/file.txt:stream",
+      "safe/CON",
+      "safe/trailing. ",
+      "safe/control\u0001name",
+    ]) {
       await fs.writeFile(path.join(root, "loop_config.json"), JSON.stringify({
         paths: { sessionsRoot },
       }), "utf8");
-      await assert.rejects(loadLoopConfig(root), /must stay relative|unsafe path segment/);
+      await assert.rejects(loadLoopConfig(root), /must stay relative|unsafe path segment|non-portable/);
     }
     await fs.writeFile(path.join(root, "loop_config.json"), JSON.stringify({
       paths: { ownerLockFileName: "nested/session_owner.lock" },

@@ -1,4 +1,3 @@
-import * as path from "node:path";
 import * as fs from "node:fs";
 import * as vscode from "vscode";
 import {
@@ -27,7 +26,6 @@ export class LoopWebviewPanel {
   private logBuffers: Map<string, string> = new Map();
   private readonly maxLogBuffer = 50000;
   private lastOpenedPlanDocument: string | null = null;
-  private providerCatalogRefresh: Promise<void> | null = null;
 
   private constructor(
     private readonly context: vscode.ExtensionContext,
@@ -46,7 +44,6 @@ export class LoopWebviewPanel {
   }
 
   show(): void {
-    void this.ensureProviderCatalog();
     if (this.panel) {
       this.panel.reveal(vscode.ViewColumn.Active, false);
       return;
@@ -81,33 +78,6 @@ export class LoopWebviewPanel {
     }, undefined, this.context.subscriptions);
 
     this.refresh();
-  }
-
-  private async ensureProviderCatalog(): Promise<void> {
-    if (this.providerCatalogRefresh) return this.providerCatalogRefresh;
-    const operation = (async () => {
-      const registry = await this.store.readRegistry();
-      const entries = Object.values(registry.providerCatalog ?? {});
-      const discoveredAtMs = Date.parse(registry.modelsDiscoveredAt ?? "");
-      const catalogIsStale =
-        !Number.isFinite(discoveredAtMs) || Date.now() - discoveredAtMs > 5 * 60 * 1000;
-      const needsDiscovery =
-        catalogIsStale ||
-        entries.length === 0 ||
-        entries.some((entry) => typeof entry.available !== "boolean");
-      if (!needsDiscovery) return;
-      const result = await this.client.discoverModels();
-      if (result.exitCode !== 0) {
-        console.warn(`[agentLoop] Automatic provider discovery failed: ${result.stderr}`);
-      }
-      await this.refresh();
-    })();
-    this.providerCatalogRefresh = operation;
-    try {
-      await operation;
-    } finally {
-      if (this.providerCatalogRefresh === operation) this.providerCatalogRefresh = null;
-    }
   }
 
   postNewSession(opts: { goal: string; targetProjectPath: string }): void {
@@ -150,8 +120,13 @@ export class LoopWebviewPanel {
         await this.handleSetAccessMode(msg);
         break;
       case "stopSession":
-        await this.requestStopSession(msg.sessionId);
-        vscode.window.showInformationMessage(`Agent Loop: Session ${msg.sessionId} stopped.`);
+        if (await this.requestStopSession(msg.sessionId)) {
+          vscode.window.showInformationMessage(`Agent Loop: Session ${msg.sessionId} stopped.`);
+        } else {
+          vscode.window.showWarningMessage(
+            `Agent Loop: Session ${msg.sessionId} could not be verified as stopped.`
+          );
+        }
         await this.refresh();
         break;
       case "discoverModels":
@@ -217,16 +192,21 @@ export class LoopWebviewPanel {
         break;
       }
       case "interruptSession": {
-        const sessionDir = await this.store.getSessionDir(msg.sessionId);
         const cfg = await this.store.getPathsConfig();
         await this.client.interruptSession(msg.sessionId, msg.message);
-        const statePath = path.join(sessionDir, cfg.sessionFileNames.state);
+        const statePath = await this.store.resolveSessionRuntimePath(
+          msg.sessionId,
+          cfg.sessionFileNames.state,
+          "Session state file"
+        );
         let planPath: string | null = null;
         let fallbackContent: string | null = null;
         try {
           const stateRaw = await fs.promises.readFile(statePath, "utf8");
           const loopState: LoopState = JSON.parse(stateRaw);
-          planPath = loopState.planPath || path.join(sessionDir, cfg.sessionFileNames.plan);
+          planPath = loopState.planPath
+            ? await this.store.resolveSessionRuntimePath(msg.sessionId, loopState.planPath, "Plan file")
+            : await this.store.getPlanMdPath(msg.sessionId);
           fallbackContent = loopState.refinedGoal || loopState.goal || "";
         } catch {
           // state file may not exist yet
@@ -376,8 +356,8 @@ export class LoopWebviewPanel {
     await this.refresh();
   }
 
-  async requestStopSession(sessionId: string): Promise<void> {
-    await this.client.stopSession(sessionId);
+  async requestStopSession(sessionId: string): Promise<boolean> {
+    return this.client.stopSession(sessionId);
   }
 
   registerSessionListeners(sessionId: string): void {
@@ -452,12 +432,24 @@ export class LoopWebviewPanel {
       history = bundle.history;
       finalSummary = bundle.finalSummary;
 
-      const planDocumentPath =
+      const configuredPlanDocumentPath =
         state?.awaitingPlanApproval &&
         state.selectedPlanChoiceId === null &&
         state.planOverviewPath
           ? state.planOverviewPath
           : state?.planPath ?? null;
+      let planDocumentPath: string | null = null;
+      if (configuredPlanDocumentPath) {
+        try {
+          planDocumentPath = await this.store.resolveSessionRuntimePath(
+            this.selectedSessionId,
+            configuredPlanDocumentPath,
+            "Plan document"
+          );
+        } catch (err) {
+          console.warn(`[agentLoop] Refused unsafe plan document path: ${String(err)}`);
+        }
+      }
       const planDocumentKey =
         state?.status === "WAITING_USER" && planDocumentPath
           ? `${this.selectedSessionId}:${planDocumentPath}`
@@ -537,7 +529,7 @@ export class LoopWebviewPanel {
     try {
       await this.store.saveSystemSettings(settings);
       vscode.window.showInformationMessage("Agent Loop: Provider, MCP/web, and pipeline settings saved.");
-      await this.handleDiscoverModels();
+      await this.refresh();
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       vscode.window.showErrorMessage(`Failed to save Agent Loop settings: ${message}`);
@@ -576,11 +568,14 @@ export class LoopWebviewPanel {
     }
   }
 
-  private async openProgressNotes(sessionId: string): Promise<void> {
+  async openProgressNotes(sessionId: string): Promise<void> {
     try {
-      const sessionDir = await this.store.getSessionDir(sessionId);
       const cfg = await this.store.getPathsConfig();
-      const notesPath = path.join(sessionDir, cfg.sessionFileNames.progressNotes);
+      const notesPath = await this.store.resolveSessionRuntimePath(
+        sessionId,
+        cfg.sessionFileNames.progressNotes,
+        "Progress notes file"
+      );
       const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(notesPath));
       await vscode.window.showTextDocument(doc, { preview: true });
     } catch (err) {
@@ -591,9 +586,12 @@ export class LoopWebviewPanel {
 
   private async openFinalSummary(sessionId: string): Promise<void> {
     try {
-      const sessionDir = await this.store.getSessionDir(sessionId);
       const cfg = await this.store.getPathsConfig();
-      const summaryPath = path.join(sessionDir, cfg.sessionFileNames.finalSummary);
+      const summaryPath = await this.store.resolveSessionRuntimePath(
+        sessionId,
+        cfg.sessionFileNames.finalSummary,
+        "Final summary file"
+      );
       const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(summaryPath));
       await vscode.window.showTextDocument(doc, { preview: true });
     } catch (err) {

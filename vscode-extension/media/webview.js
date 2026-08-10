@@ -19,8 +19,13 @@
     runtimeLeaseStatus: null,
   };
 
-  let logBuffer = "";
+  const logBuffers = Object.create(null);
   const maxLogSize = 100000;
+
+  function selectedLogBuffer() {
+    const sessionId = state.selectedSessionId;
+    return sessionId ? (logBuffers[sessionId] || "") : "";
+  }
 
   let agentRoles = ["planner", "implementer", "tester", "qa_lead", "master", "interrupter"];
   const agentRoleLabels = {
@@ -513,8 +518,9 @@
       ? escapeHtml(state.progressNotes)
       : '<span class="notes-empty">(no notes yet)</span>';
 
-    const logContent = logBuffer
-      ? `<div class="log-content">${escapeHtml(logBuffer)}</div>`
+    const currentLogBuffer = selectedLogBuffer();
+    const logContent = currentLogBuffer
+      ? `<div class="log-content">${escapeHtml(currentLogBuffer)}</div>`
       : '<div class="log-empty">(no log output yet)</div>';
 
     const canResume = st && ["PAUSED", "WAITING_USER", "RECOVERING", "STOPPED", "BLOCKED"].includes(st.status) &&
@@ -1042,6 +1048,13 @@
 
     if (msg.command === "stateUpdate") {
       state = msg.payload;
+      const knownSessionIds = new Set(
+        (state.registry?.sessionMetas || []).map((meta) => meta.sessionId)
+      );
+      if (state.selectedSessionId) knownSessionIds.add(state.selectedSessionId);
+      for (const sessionId of Object.keys(logBuffers)) {
+        if (!knownSessionIds.has(sessionId)) delete logBuffers[sessionId];
+      }
       const configuredRoles = state.systemSettings?.pipeline?.roles || [];
       if (configuredRoles.length > 0) {
         agentRoles = configuredRoles.map((role) => role.id);
@@ -1062,14 +1075,15 @@
       }
       requestRender();
     } else if (msg.command === "logAppend") {
+      const sessionId = msg.sessionId;
+      if (!sessionId) return;
       const text = msg.entry.text;
-      logBuffer += text;
-      if (logBuffer.length > maxLogSize) {
-        logBuffer = logBuffer.slice(-maxLogSize);
-      }
+      const nextBuffer = ((logBuffers[sessionId] || "") + text).slice(-maxLogSize);
+      logBuffers[sessionId] = nextBuffer;
+      if (sessionId !== state.selectedSessionId) return;
       const logEl = document.querySelector(".log-content");
       if (logEl) {
-        logEl.textContent = logBuffer;
+        logEl.textContent = nextBuffer;
         scrollLogToBottom();
       } else if (!isInteracting) {
         tryRender();

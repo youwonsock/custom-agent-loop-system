@@ -1,7 +1,15 @@
 {
   "name": "custom-agent-loop-system",
-  "version": "3.4.0",
+  "version": "3.4.1",
   "description": "Dynamic multi-model multi-session orchestrator that controls an interactive coding CLI (opencode) as child processes to autonomously achieve goals.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/youwonsock/Custom_AgentLoopSystem.git"
+  },
+  "bugs": {
+    "url": "https://github.com/youwonsock/Custom_AgentLoopSystem/issues"
+  },
+  "homepage": "https://github.com/youwonsock/Custom_AgentLoopSystem#readme",
   "type": "commonjs",
   "main": "dist/loop_orchestrator.js",
   "bin": {
@@ -16,6 +24,10 @@
     "smoke": "npm run build && node dist/loop_orchestrator.js --help",
     "bundle:extension-core": "npm run build && node scripts/bundle-core-for-vsix.js",
     "pack:check": "npm run build && node scripts/verify-npm-package.js",
+    "verify:vsix": "node scripts/verify-vsix-package.js",
+    "checksum:artifacts": "node scripts/checksum-artifacts.js",
+    "sbom": "node scripts/generate-sbom.js",
+    "generated:check": "node scripts/check-generated-files.js",
     "prestart": "npm run build",
     "start": "node dist/loop_orchestrator.js",
     "preinit": "npm run build",

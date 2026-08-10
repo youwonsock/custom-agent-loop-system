@@ -6,6 +6,12 @@ import * as vscode from "vscode";
 import { AccessMode, ExtensionConfig, ModelMapping, ProviderMapping, VariantMapping, readExtensionConfig } from "./types";
 import { StateStore, getGlobalContext } from "./stateStore";
 import { processLiveness, shouldGracefullyStop } from "./resilience";
+import {
+  launchTrusted,
+  requireWorkspaceTrust,
+  WorkspaceProcessLaunch,
+} from "./workspaceExecutionPolicy";
+import { assertPathOutsideBases } from "./pathSafety";
 
 export interface NewSessionOptions {
   goal: string;
@@ -34,6 +40,8 @@ export class LoopClient {
   private recoveryWakeup: (() => void) | null = null;
   private recoveryCancellations = new Set<string>();
   private activePlanRevisions = new Set<string>();
+  private startingSessions = new Set<string>();
+  private auxiliaryProcesses = new Set<ChildProcess>();
 
   constructor(
     private config: ExtensionConfig,
@@ -128,8 +136,27 @@ export class LoopClient {
     };
   }
 
+  private assertWorkspaceTrusted(action: string): void {
+    requireWorkspaceTrust(vscode.workspace.isTrusted, action);
+  }
+
+  private async assertIsolatedDataRoot(root: string, targetProjectPath?: string): Promise<void> {
+    const protectedBases = [
+      ...(vscode.workspace.workspaceFolders ?? []).map((folder) => folder.uri.fsPath),
+      ...(targetProjectPath?.trim() ? [targetProjectPath] : []),
+    ];
+    try {
+      await assertPathOutsideBases(root, protectedBases, "Agent Loop data root");
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      throw new Error(`${reason} Clear "agentLoop.rootDir" to use VS Code global storage.`);
+    }
+  }
+
   async discoverModels(): Promise<{ models: string[]; exitCode: number | null; stderr: string; command: string }> {
+    this.assertWorkspaceTrusted("discover models");
     const root = await this.store.getRootDir();
+    await this.assertIsolatedDataRoot(root);
     let script: string;
     try {
       script = await this.resolveOrchestratorScript();
@@ -141,11 +168,21 @@ export class LoopClient {
     const args = ["models", "--root", root];
     const cmdStr = `${this.config.nodeBinary} ${script} ${args.join(" ")}`;
     return new Promise<{ models: string[]; exitCode: number | null; stderr: string; command: string }>((resolve) => {
-      const child = spawn(this.config.nodeBinary, [script, ...args], {
-        cwd: root,
-        env: process.env,
-      });
+      const child = launchTrusted(vscode.workspace.isTrusted, "discoverModels", () =>
+        spawn(this.config.nodeBinary, [script, ...args], {
+          cwd: root,
+          env: process.env,
+        })
+      );
+      this.auxiliaryProcesses.add(child);
       let stderr = "";
+      let settled = false;
+      const finish = (exitCode: number | null, message = stderr): void => {
+        if (settled) return;
+        settled = true;
+        this.auxiliaryProcesses.delete(child);
+        resolve({ models: [], exitCode, stderr: message.slice(0, 2000), command: cmdStr });
+      };
       child.stdout.on("data", (_chunk: Buffer) => {
         // Intentionally not parsing stdout here. The orchestrator writes discovered models
         // to sessions_registry.json. The caller should re-read the registry after this resolves.
@@ -153,19 +190,20 @@ export class LoopClient {
       child.stderr.on("data", (chunk: Buffer) => {
         stderr += chunk.toString();
       });
-      child.on("error", (err) => {
+      child.once("error", (err) => {
         vscode.window.showErrorMessage(`Failed to run model discovery: ${err.message}`);
-        resolve({ models: [], exitCode: -1, stderr: err.message, command: cmdStr });
+        finish(-1, err.message);
       });
-      child.on("exit", (code) => {
-        resolve({ models: [], exitCode: code, stderr: stderr.slice(0, 2000), command: cmdStr });
-      });
+      child.once("exit", (code) => finish(code));
+      child.once("close", (code) => finish(code));
     });
   }
 
   async startNewSession(opts: NewSessionOptions): Promise<string> {
+    this.assertWorkspaceTrusted("start a session");
     const sessionId = generateSessionId();
     const root = await this.store.getRootDir();
+    await this.assertIsolatedDataRoot(root, opts.targetProjectPath);
     const script = await this.resolveOrchestratorScript();
     const cfg = this.liveConfig();
 
@@ -215,8 +253,10 @@ export class LoopClient {
     if (opts.variantMapping?.interrupter) args.push("--interrupter-variant", opts.variantMapping.interrupter);
 
     const env = await this.coreProcessEnvironment();
-    this.spawnSession(args, root, sessionId, env);
-    void this.store.syncRegistrySessionStatus(sessionId, "RUNNING");
+    await this.spawnSession(args, root, sessionId, env, "newSession");
+    void this.store.syncRegistrySessionStatus(sessionId, "RUNNING").catch((err) => {
+      console.error(`[LoopClient] Failed to synchronize session ${sessionId}:`, err);
+    });
     return sessionId;
   }
 
@@ -225,30 +265,39 @@ export class LoopClient {
     recovery = false,
     accessDecision?: "allow_requested" | "full_access"
   ): Promise<string> {
+    this.assertWorkspaceTrusted(recovery ? "recover a session" : "resume a session");
     if (recovery && this.recoveryCancellations.has(sessionId)) return sessionId;
     if (!recovery) this.recoveryCancellations.delete(sessionId);
-    const runtime = await this.store.inspectLease(sessionId);
-    if (
-      this.isRunning(sessionId) ||
-      runtime.disposition === "active" ||
-      runtime.disposition === "expired_owner_alive" ||
-      runtime.disposition === "unverifiable"
-    ) {
-      throw new Error(`Session ${sessionId} is already running.`);
+    if (this.startingSessions.has(sessionId)) {
+      throw new Error(`Session ${sessionId} is already starting.`);
     }
-    const root = await this.store.getRootDir();
-    const script = await this.resolveOrchestratorScript();
+    this.startingSessions.add(sessionId);
+    try {
+      const runtime = await this.store.inspectLease(sessionId);
+      const activeChild = this.activeProcesses.get(sessionId);
+      if (
+        (activeChild !== undefined && activeChild.exitCode === null && activeChild.signalCode === null) ||
+        runtime.disposition === "active" ||
+        runtime.disposition === "expired_owner_alive" ||
+        runtime.disposition === "unverifiable"
+      ) {
+        throw new Error(`Session ${sessionId} is already running.`);
+      }
+      const root = await this.store.getRootDir();
+      const state = await this.store.readState(sessionId);
+      await this.assertIsolatedDataRoot(root, state?.targetProjectPath);
+      const script = await this.resolveOrchestratorScript();
 
-    const args: string[] = [
-      script,
-      "resume",
-      "--session", sessionId,
-      "--root", root,
-    ];
-    if (recovery) args.push("--recovery");
-    if (!recovery) {
-      const cfg = this.liveConfig();
-      args.push(
+      const args: string[] = [
+        script,
+        "resume",
+        "--session", sessionId,
+        "--root", root,
+      ];
+      if (recovery) args.push("--recovery");
+      if (!recovery) {
+        const cfg = this.liveConfig();
+        args.push(
         "--max-iterations", String(cfg.maxIterations),
         "--phase-timeout", String(cfg.phaseTimeoutMs),
         "--idle-timeout", String(cfg.idleTimeoutMs),
@@ -265,15 +314,27 @@ export class LoopClient {
         "--heartbeat-interval", String(cfg.heartbeatIntervalMs),
         "--lease-ttl", String(cfg.leaseTtlMs),
         "--max-output-bytes", String(cfg.maxInMemoryOutputBytes)
-      );
-    }
-    if (accessDecision === "allow_requested") args.push("--approve-access");
-    if (accessDecision === "full_access") args.push("--full-access");
+        );
+      }
+      if (accessDecision === "allow_requested") args.push("--approve-access");
+      if (accessDecision === "full_access") args.push("--full-access");
 
-    const env = await this.coreProcessEnvironment();
-    this.spawnSession(args, root, sessionId, env);
-    void this.store.syncRegistrySessionStatus(sessionId, "RUNNING");
-    return sessionId;
+      const env = await this.coreProcessEnvironment();
+      if (recovery && this.recoveryCancellations.has(sessionId)) return sessionId;
+      await this.spawnSession(
+        args,
+        root,
+        sessionId,
+        env,
+        recovery ? "recoverSession" : "resumeSession"
+      );
+      void this.store.syncRegistrySessionStatus(sessionId, "RUNNING").catch((err) => {
+        console.error(`[LoopClient] Failed to synchronize session ${sessionId}:`, err);
+      });
+      return sessionId;
+    } finally {
+      this.startingSessions.delete(sessionId);
+    }
   }
 
   async interruptSession(sessionId: string, message: string): Promise<void> {
@@ -290,12 +351,17 @@ export class LoopClient {
     args: string[],
     cwd: string,
     sessionId: string,
-    env: NodeJS.ProcessEnv
-  ): string {
-    const child = spawn(this.config.nodeBinary, args, {
-      cwd,
-      env,
-    });
+    env: NodeJS.ProcessEnv,
+    launchKind: WorkspaceProcessLaunch
+  ): Promise<string> {
+    this.assertWorkspaceTrusted("spawn an orchestrator process");
+    const child = launchTrusted(vscode.workspace.isTrusted, launchKind, () =>
+      spawn(this.config.nodeBinary, args, {
+        cwd,
+        env,
+        detached: process.platform !== "win32",
+      })
+    );
 
     this.activeProcesses.set(sessionId, child);
 
@@ -309,26 +375,50 @@ export class LoopClient {
       this.emitLog(sessionId, { timestamp: new Date().toISOString(), stream: "stderr", text });
     });
 
-    child.on("error", (err) => {
-      vscode.window.showErrorMessage(`Agent loop process error: ${err.message}`);
-    });
-
-    child.on("exit", (code, signal) => {
-      this.activeProcesses.delete(sessionId);
-      const listeners = this.exitListeners.get(sessionId);
-      if (listeners) {
-        listeners(code, signal);
+    return new Promise<string>((resolve, reject) => {
+      let startupSettled = false;
+      let finalized = false;
+      const finalize = (
+        code: number | null,
+        signal: NodeJS.Signals | null,
+        error?: Error
+      ): void => {
+        if (finalized) return;
+        finalized = true;
+        if (this.activeProcesses.get(sessionId) === child) {
+          this.activeProcesses.delete(sessionId);
+        }
+        this.stopFollowingExternalSession(sessionId);
+        const listener = this.exitListeners.get(sessionId);
         this.exitListeners.delete(sessionId);
-      }
-      this.emitLog(sessionId, {
-        timestamp: new Date().toISOString(),
-        stream: "stderr",
-        text: `\n[process exited] code=${code ?? "null"} signal=${signal ?? "null"}\n`,
-      });
-      this.recoveryWakeup?.();
-    });
+        try {
+          listener?.(code, signal);
+        } catch (err) {
+          console.error(`[LoopClient] Exit listener failed for ${sessionId}:`, err);
+        }
+        this.emitLog(sessionId, {
+          timestamp: new Date().toISOString(),
+          stream: "stderr",
+          text: error
+            ? `\n[process error] ${error.message}\n`
+            : `\n[process exited] code=${code ?? "null"} signal=${signal ?? "null"}\n`,
+        });
+        if (!startupSettled) {
+          startupSettled = true;
+          reject(error ?? new Error(`Agent loop process exited before startup (code=${code ?? "null"}).`));
+        }
+        this.recoveryWakeup?.();
+      };
 
-    return sessionId;
+      child.once("spawn", () => {
+        if (startupSettled) return;
+        startupSettled = true;
+        resolve(sessionId);
+      });
+      child.once("error", (err) => finalize(null, null, err));
+      child.once("exit", (code, signal) => finalize(code, signal));
+      child.once("close", (code, signal) => finalize(code, signal));
+    });
   }
 
   async stopSession(sessionId: string): Promise<boolean> {
@@ -373,6 +463,7 @@ export class LoopClient {
         "completed",
         "Session stopped by the extension after the core did not acknowledge STOP."
       );
+      return true;
     }
     return false;
   }
@@ -437,7 +528,15 @@ export class LoopClient {
     await this.gracefullyStopAll();
   }
 
-  private async forceTerminateProcessTree(pid: number, timeoutMs: number): Promise<void> {
+  private async forceTerminateProcessTree(pid: number, timeoutMs: number): Promise<boolean> {
+    const deadline = Date.now() + Math.max(1, timeoutMs);
+    const waitUntilDead = async (waitDeadline: number): Promise<boolean> => {
+      while (Date.now() < waitDeadline) {
+        if (processLiveness(pid) === "dead") return true;
+        await new Promise((resolve) => setTimeout(resolve, Math.min(100, Math.max(1, waitDeadline - Date.now()))));
+      }
+      return processLiveness(pid) === "dead";
+    };
     if (process.platform === "win32") {
       await new Promise<void>((resolve) => {
         const child = execFile(
@@ -448,22 +547,32 @@ export class LoopClient {
         );
         child.on("error", () => resolve());
       });
-      return;
+      return waitUntilDead(deadline);
     }
-    try { process.kill(pid, "SIGTERM"); } catch { return; }
-    await new Promise((resolve) => setTimeout(resolve, Math.min(1000, timeoutMs)));
-    if (processLiveness(pid) === "alive") {
-      try { process.kill(pid, "SIGKILL"); } catch { /* already exited */ }
-    }
+    const signalTree = (signal: NodeJS.Signals): void => {
+      try {
+        process.kill(-pid, signal);
+        return;
+      } catch {
+        // Processes launched by an older extension may not lead a process group.
+      }
+      try { process.kill(pid, signal); } catch { /* already exited */ }
+    };
+    signalTree("SIGTERM");
+    const gracefulDeadline = Math.min(deadline, Date.now() + Math.min(1_000, Math.max(1, timeoutMs / 2)));
+    if (await waitUntilDead(gracefulDeadline)) return true;
+    signalTree("SIGKILL");
+    return waitUntilDead(deadline);
   }
 
   isRunning(sessionId: string): boolean {
     const child = this.activeProcesses.get(sessionId);
-    return !!child && child.exitCode === null && child.signalCode === null;
+    return this.startingSessions.has(sessionId) ||
+      (!!child && child.exitCode === null && child.signalCode === null);
   }
 
   getActiveSessionIds(): string[] {
-    return Array.from(this.activeProcesses.keys());
+    return Array.from(new Set([...this.activeProcesses.keys(), ...this.startingSessions]));
   }
 
   setRecoveryWakeup(listener: (() => void) | null): void {
@@ -484,9 +593,14 @@ export class LoopClient {
           this.stopFollowingExternalSession(sessionId);
           return;
         }
-        const logPath = state.activeAttempt?.outputLogPath ?? null;
-        if (!logPath) return;
+        const configuredLogPath = state.activeAttempt?.outputLogPath ?? null;
+        if (!configuredLogPath) return;
         if (!this.logListeners.has(sessionId)) return;
+        const logPath = await this.store.resolveSessionRuntimePath(
+          sessionId,
+          configuredLogPath,
+          "Attempt output log"
+        );
         if (currentPath !== logPath) {
           currentPath = logPath;
           offset = 0;
@@ -509,7 +623,14 @@ export class LoopClient {
         } finally {
           await handle.close();
         }
-      })().catch(() => {}).finally(() => {
+      })().catch((err) => {
+        this.emitLog(sessionId, {
+          timestamp: new Date().toISOString(),
+          stream: "stderr",
+          text: `\n[log tail stopped] ${err instanceof Error ? err.message : String(err)}\n`,
+        });
+        this.stopFollowingExternalSession(sessionId);
+      }).finally(() => {
         reading = false;
       });
     }, 500);
@@ -523,6 +644,7 @@ export class LoopClient {
   }
 
   async revisePlan(sessionId: string, message: string): Promise<{ exitCode: number | null; stdout: string }> {
+    this.assertWorkspaceTrusted("revise a plan");
     if (this.activePlanRevisions.has(sessionId)) {
       throw new Error(`A plan revision is already running for session ${sessionId}.`);
     }
@@ -540,18 +662,25 @@ export class LoopClient {
     try {
       const env = await this.coreProcessEnvironment();
       return await new Promise((resolve) => {
-        const child = spawn(this.config.nodeBinary, args, { cwd: root, env });
+        const child = launchTrusted(vscode.workspace.isTrusted, "revisePlan", () =>
+          spawn(this.config.nodeBinary, args, { cwd: root, env })
+        );
+        this.auxiliaryProcesses.add(child);
         let stdout = "";
         let settled = false;
         const finish = (exitCode: number | null, output: string) => {
           if (settled) return;
           settled = true;
+          this.auxiliaryProcesses.delete(child);
           resolve({ exitCode, stdout: output });
         };
-        child.stdout.on("data", (c: Buffer) => { stdout += c.toString(); });
+        child.stdout.on("data", (c: Buffer) => {
+          stdout = (stdout + c.toString()).slice(-this.liveConfig().maxInMemoryOutputBytes);
+        });
         child.stderr.on("data", (_c: Buffer) => { /* core reports the failure through its exit code */ });
-        child.on("error", (err) => finish(-1, err.message));
-        child.on("exit", (code) => finish(code, stdout));
+        child.once("error", (err) => finish(-1, err.message));
+        child.once("exit", (code) => finish(code, stdout));
+        child.once("close", (code) => finish(code, stdout));
       });
     } finally {
       this.activePlanRevisions.delete(sessionId);
@@ -586,6 +715,11 @@ export class LoopClient {
     for (const sessionId of this.externalTails.keys()) {
       this.stopFollowingExternalSession(sessionId);
     }
+    for (const child of this.auxiliaryProcesses) {
+      child.kill();
+    }
+    this.auxiliaryProcesses.clear();
+    this.startingSessions.clear();
     this.logListeners.clear();
     this.exitListeners.clear();
   }

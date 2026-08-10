@@ -4,15 +4,21 @@ import { execFile } from "node:child_process";
 import * as path from "node:path";
 
 interface CaseResult {
+  pid: number;
   outcome: string;
   failureKind: string | null;
   failureMessage: string | null;
   exitCode: number;
+  timedOut: boolean;
+  cancelled: boolean;
   assistantText: string;
   cliSessionId: string | null;
   eventsCount: number;
   eventBytes: number;
   rawLogIncludesSecret: boolean;
+  autoInjectedCount: number;
+  providerSpawned: boolean;
+  childLiveness: string;
 }
 
 function runFake(
@@ -112,9 +118,72 @@ test("interactive access prompts fail fast instead of being auto-approved or tim
   assert.match(result.failureMessage ?? "", /interactive filesystem\/tool access/i);
 });
 
+test("generic text confirmations are denied without injecting an affirmative response", async () => {
+  const result = await runFake("confirmation-prompt", {
+    transport: 500,
+    idle: 2_000,
+    phase: 3_000,
+  });
+  assert.equal(result.outcome, "process_exit");
+  assert.equal(result.failureKind, "permission");
+  assert.match(result.failureMessage ?? "", /automatic approval is disabled/i);
+  assert.equal(result.autoInjectedCount, 0);
+  assert.equal(result.assistantText.includes("Unsafe confirmation was accepted"), false);
+});
+
+test("control queue polling errors stop the provider instead of being ignored", async () => {
+  const result = await runFake("control-poll-error", {
+    transport: 500,
+    idle: 2_000,
+    phase: 3_000,
+  });
+  assert.equal(result.outcome, "process_exit");
+  assert.equal(result.failureKind, "permission");
+  assert.match(result.failureMessage ?? "", /control queue polling failed/i);
+  assert.match(result.failureMessage ?? "", /simulated EIO/);
+});
+
+test("raw log open failures fail before the provider is spawned", async () => {
+  const result = await runFake("raw-log-directory");
+  assert.equal(result.pid, -1);
+  assert.equal(result.outcome, "spawn_error");
+  assert.equal(result.failureKind, "permission");
+  assert.match(result.failureMessage ?? "", /Raw log could not be opened/i);
+  assert.equal(result.timedOut, false);
+  assert.equal(result.cancelled, false);
+  assert.equal(result.providerSpawned, false);
+});
+
+test("raw log write failures terminate the provider without an unhandled stream error", async () => {
+  const result = await runFake("raw-log-runtime-error", {
+    transport: 1_000,
+    idle: 2_000,
+    phase: 3_000,
+  });
+  assert.equal(result.outcome, "spawn_error");
+  assert.equal(result.failureKind, "permission");
+  assert.match(result.failureMessage ?? "", /Raw log I\/O failure.*ENOSPC/i);
+  assert.equal(result.timedOut, false);
+  assert.equal(result.cancelled, false);
+  assert.equal(result.providerSpawned, true);
+  assert.equal(result.childLiveness, "dead");
+});
+
+test("raw log finalization failures cannot preserve a nominal provider success", async () => {
+  const result = await runFake("raw-log-final-error");
+  assert.equal(result.outcome, "spawn_error");
+  assert.equal(result.failureKind, "permission");
+  assert.equal(result.exitCode, -1);
+  assert.match(result.failureMessage ?? "", /Raw log I\/O failure.*EIO/i);
+  assert.equal(result.timedOut, false);
+  assert.equal(result.cancelled, false);
+  assert.equal(result.providerSpawned, true);
+  assert.equal(result.childLiveness, "dead");
+});
+
 test("initial transport timeout stops after connection and model generation gets its own budget", async () => {
   const result = await runFake("delayed-model", {
-    transport: 100,
+    transport: 750,
     idle: 500,
     tool: 700,
     phase: 1_000,
@@ -125,7 +194,7 @@ test("initial transport timeout stops after connection and model generation gets
 
 test("meaningful progress renews the phase window up to the absolute recovery deadline", async () => {
   const result = await runFake("continuous-progress", {
-    transport: 100,
+    transport: 750,
     idle: 250,
     tool: 250,
     phase: 200,

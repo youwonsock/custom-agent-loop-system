@@ -70,6 +70,35 @@ switch (mode) {
     process.stdout.write("Allow access to C:\\outside? [y/n]\n");
     setInterval(() => {}, 1000);
     break;
+  case "confirmation-prompt":
+    process.stdout.write("Continue? [y/n]\n");
+    process.stdin.on("data", (chunk) => {
+      if (/y/i.test(String(chunk))) {
+        assistant("Unsafe confirmation was accepted.\n[PHASE_DONE]", "auto-y-result");
+        process.exit(0);
+      }
+    });
+    setInterval(() => {}, 1000);
+    break;
+  case "control-poll-error":
+    emit({ type: "step_start", id: "control-poll-error", sessionID: "control-session" });
+    setInterval(() => {}, 1000);
+    break;
+  case "raw-log-directory":
+    require("node:fs").writeFileSync("provider-spawned.txt", "unsafe");
+    assistant("Provider should not have started.\n[PHASE_DONE]", "raw-log-directory");
+    process.exit(0);
+    break;
+  case "raw-log-runtime-error":
+    require("node:fs").writeFileSync("provider-spawned.txt", "started");
+    assistant("Trigger the injected raw log failure.", "raw-log-runtime-error");
+    setInterval(() => {}, 1000);
+    break;
+  case "raw-log-final-error":
+    require("node:fs").writeFileSync("provider-spawned.txt", "started");
+    assistant("Provider completed before raw log finalization.\n[PHASE_DONE]", "raw-log-final-error");
+    process.exit(0);
+    break;
   case "delayed-model":
     emit({ type: "step_start", id: "delayed-model-step", sessionID: "delayed-model-session" });
     setTimeout(() => {

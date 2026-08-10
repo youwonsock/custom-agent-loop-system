@@ -13,7 +13,6 @@ import {
   FinalSummary,
   SessionMeta,
   AgentRole,
-  readExtensionConfig,
   loadLoopPathsConfig,
   LoopPathsConfig,
   ControlRequest,
@@ -40,10 +39,16 @@ import {
 } from "./resilience";
 import generatedAgentRoles from "./generated_agent_roles.json";
 import generatedAgentLoop from "./generated_agent_loop.json";
+import { resolveConfiguredDataRoot, resolveContainedPath } from "./pathSafety";
+import {
+  assertSecureRemoteMcpTransport,
+  legacyMcpSecretStorageKey,
+  namespacedMcpSecretStorageKey,
+  protectMcpCredentialValue,
+  SECRET_REFERENCE,
+} from "./mcpSecurityPolicy";
 
 let globalContext: vscode.ExtensionContext | undefined;
-const SECRET_REFERENCE = /^\$\{secret:([^}]+)\}$/;
-const ENV_REFERENCE = /^\$\{env:[A-Za-z_][A-Za-z0-9_]*\}$/;
 export const CORE_SECRET_VALUES_ENV = "AGENT_LOOP_SECRET_VALUES";
 
 const STAGE_EXECUTORS: PipelineStageExecutor[] = [
@@ -158,15 +163,6 @@ function emptySessionRegistry(): SessionRegistry {
   };
 }
 
-function mcpSecretStorageKey(
-  serverId: string,
-  scope: "environment" | "headers",
-  fieldName: string
-): string {
-  const digest = createHash("sha256").update(fieldName).digest("hex").slice(0, 24);
-  return `agentLoop.mcp.${serverId}.${scope}.${digest}`;
-}
-
 function secretReferences(toolAccess?: ToolAccessConfig): Set<string> {
   const references = new Set<string>();
   for (const server of toolAccess?.mcpServers ?? []) {
@@ -180,29 +176,20 @@ function secretReferences(toolAccess?: ToolAccessConfig): Set<string> {
   return references;
 }
 
-function hasLiteralMcpCredentials(toolAccess?: ToolAccessConfig): boolean {
-  for (const server of toolAccess?.mcpServers ?? []) {
-    for (const values of [server.environment, server.headers]) {
-      for (const value of Object.values(values ?? {})) {
-        if (!SECRET_REFERENCE.test(value) && !ENV_REFERENCE.test(value)) return true;
-      }
-    }
-  }
-  return false;
-}
-
 export class StateStore {
   private registryCache: SessionRegistry | null = null;
   private stateCache: Map<string, LoopState> = new Map();
   private pollTimer: NodeJS.Timeout | null = null;
   private listeners: Array<() => void> = [];
   private pathsCache: LoopPathsConfig | null = null;
+  private secretNamespaceCache: string | null = null;
 
   constructor(private config: ExtensionConfig) {}
 
   updateConfig(config: ExtensionConfig): void {
     this.config = config;
     this.pathsCache = null;
+    this.secretNamespaceCache = null;
     this.registryCache = null;
     this.stateCache.clear();
     this.notifyListeners();
@@ -216,12 +203,13 @@ export class StateStore {
   }
 
   async getRootDir(): Promise<string> {
-    const liveRootDir = readExtensionConfig().rootDir;
-    if (liveRootDir && liveRootDir.length > 0) {
-      return path.resolve(liveRootDir);
-    }
     if (this.config.rootDir && this.config.rootDir.length > 0) {
-      return path.resolve(this.config.rootDir);
+      return resolveConfiguredDataRoot(this.config.rootDir);
+    }
+    if (globalContext) {
+      const storagePath = globalContext.globalStorageUri.fsPath;
+      await fs.mkdir(storagePath, { recursive: true });
+      return storagePath;
     }
     const envRoot = process.env.AGENT_LOOP_ROOT;
     if (envRoot && envRoot.length > 0) {
@@ -233,11 +221,6 @@ export class StateStore {
       } catch {
         // env var stale, continue
       }
-    }
-    if (globalContext) {
-      const storagePath = globalContext.globalStorageUri.fsPath;
-      await fs.mkdir(storagePath, { recursive: true });
-      return storagePath;
     }
     for (const folder of vscode.workspace.workspaceFolders ?? []) {
       const distScript = path.join(folder.uri.fsPath, "dist", "loop_orchestrator.js");
@@ -275,41 +258,45 @@ export class StateStore {
   getRegistryPath = async (): Promise<string> => {
     const root = await this.getRootDir();
     const cfg = await this.getPathsConfig();
-    return path.join(root, cfg.registryFileName);
+    return resolveContainedPath(root, cfg.registryFileName, "Session registry");
   };
 
   getSessionDir = async (sessionId: string): Promise<string> => {
     assertSafeSessionId(sessionId);
     const root = await this.getRootDir();
     const cfg = await this.getPathsConfig();
-    const sessionsRoot = path.resolve(root, cfg.sessionsRoot);
-    const resolved = path.resolve(sessionsRoot, sessionId);
-    const relative = path.relative(sessionsRoot, resolved);
-    if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
-      throw new Error(`Session path escapes sessions root: ${sessionId}`);
-    }
-    return resolved;
+    const sessionsRoot = await resolveContainedPath(root, cfg.sessionsRoot, "Sessions root");
+    return resolveContainedPath(sessionsRoot, sessionId, "Session directory");
+  };
+
+  resolveSessionRuntimePath = async (
+    sessionId: string,
+    configuredPath: string,
+    label = "Session runtime path"
+  ): Promise<string> => {
+    return resolveContainedPath(await this.getSessionDir(sessionId), configuredPath, label);
   };
 
   getPlanChoicesPath = async (sessionId: string): Promise<string> => {
     const dir = await this.getSessionDir(sessionId);
     const cfg = await this.getPathsConfig();
-    return path.join(dir, cfg.sessionFileNames.planChoices);
+    return resolveContainedPath(dir, cfg.sessionFileNames.planChoices, "Plan choices file");
   };
 
   getPlanMdPath = async (sessionId: string): Promise<string> => {
     const dir = await this.getSessionDir(sessionId);
     const cfg = await this.getPathsConfig();
-    return path.join(dir, cfg.sessionFileNames.plan);
+    return resolveContainedPath(dir, cfg.sessionFileNames.plan, "Plan file");
   };
 
   getPlanOverviewPath = async (sessionId: string): Promise<string> => {
     const sessionDir = await this.getSessionDir(sessionId);
     const cfg = await this.getPathsConfig();
     const state = await this.readState(sessionId);
-    return this.resolveContainedSessionFile(
+    return resolveContainedPath(
       sessionDir,
-      state?.planOverviewPath || cfg.sessionFileNames.planOverview
+      state?.planOverviewPath || cfg.sessionFileNames.planOverview,
+      "Plan overview file"
     );
   };
 
@@ -322,7 +309,7 @@ export class StateStore {
     const configured =
       choice.markdownPath ??
       path.join(cfg.sessionFileNames.planOptionsDir, `option_${choice.id}.md`);
-    return this.resolveContainedSessionFile(sessionDir, configured);
+    return resolveContainedPath(sessionDir, configured, "Plan option file");
   };
 
   async readPlanChoices(sessionId: string): Promise<PlanChoice[] | null> {
@@ -353,7 +340,7 @@ export class StateStore {
       providers?: Record<string, ProviderConfig>;
       toolAccess?: ToolAccessConfig;
     }>(loopConfigPath) ?? {};
-    if (globalContext && hasLiteralMcpCredentials(loopConfig.toolAccess)) {
+    if (globalContext && loopConfig.toolAccess) {
       const lockPath = path.join(root, "settings_write.lock");
       await this.withFileLock(lockPath, async () => {
         const latest = await this.readJsonAtomic<{
@@ -361,9 +348,12 @@ export class StateStore {
           toolAccess?: ToolAccessConfig;
           [key: string]: unknown;
         }>(loopConfigPath) ?? {};
-        if (latest.toolAccess && hasLiteralMcpCredentials(latest.toolAccess)) {
+        if (latest.toolAccess) {
+          const before = JSON.stringify(latest.toolAccess);
           latest.toolAccess = await this.protectMcpCredentials(latest.toolAccess);
-          await this.writeJsonAtomic(loopConfigPath, latest);
+          if (JSON.stringify(latest.toolAccess) !== before) {
+            await this.writeJsonAtomic(loopConfigPath, latest);
+          }
         }
         loopConfig = latest;
       });
@@ -423,7 +413,13 @@ export class StateStore {
       });
     });
     if (globalContext) {
-      await Promise.allSettled([...removedSecrets].map((key) => globalContext!.secrets.delete(key)));
+      const namespace = await this.getSecretNamespace();
+      const currentPrefix = `agentLoop.mcp.v2.${namespace}.`;
+      await Promise.allSettled(
+        [...removedSecrets]
+          .filter((key) => key.startsWith(currentPrefix))
+          .map((key) => globalContext!.secrets.delete(key))
+      );
     }
     this.registryCache = null;
     this.notifyListeners();
@@ -448,7 +444,32 @@ export class StateStore {
     return { [CORE_SECRET_VALUES_ENV]: JSON.stringify(values) };
   }
 
+  private async getSecretNamespace(): Promise<string> {
+    if (this.secretNamespaceCache) return this.secretNamespaceCache;
+    const root = await this.getRootDir();
+    const canonicalRoot = await fs.realpath(root).catch(() => path.resolve(root));
+    const normalizedRoot = process.platform === "win32"
+      ? canonicalRoot.toLocaleLowerCase("en-US")
+      : canonicalRoot;
+    const rootDigest = createHash("sha256").update(normalizedRoot).digest("hex").slice(0, 24);
+    if (!globalContext) {
+      this.secretNamespaceCache = rootDigest;
+      return rootDigest;
+    }
+    const stateKey = `agentLoop.secretNamespace.${rootDigest}`;
+    const stored = globalContext.globalState.get<string>(stateKey);
+    if (stored && /^[a-f0-9]{32}$/.test(stored)) {
+      this.secretNamespaceCache = stored;
+      return stored;
+    }
+    const created = randomBytes(16).toString("hex");
+    await globalContext.globalState.update(stateKey, created);
+    this.secretNamespaceCache = created;
+    return created;
+  }
+
   private async protectMcpCredentials(toolAccess: ToolAccessConfig): Promise<ToolAccessConfig> {
+    const namespace = await this.getSecretNamespace();
     const protectMap = async (
       serverId: string,
       scope: "environment" | "headers",
@@ -456,16 +477,14 @@ export class StateStore {
     ): Promise<Record<string, string>> => {
       const protectedValues: Record<string, string> = {};
       for (const [fieldName, value] of Object.entries(values ?? {})) {
-        if (SECRET_REFERENCE.test(value) || ENV_REFERENCE.test(value)) {
-          protectedValues[fieldName] = value;
-          continue;
-        }
-        if (!globalContext) {
-          throw new Error("VS Code SecretStorage is unavailable; MCP credentials cannot be saved safely.");
-        }
-        const secretKey = mcpSecretStorageKey(serverId, scope, fieldName);
-        await globalContext.secrets.store(secretKey, value);
-        protectedValues[fieldName] = `\${secret:${secretKey}}`;
+        const currentKey = namespacedMcpSecretStorageKey(namespace, serverId, scope, fieldName);
+        const legacyKey = legacyMcpSecretStorageKey(serverId, scope, fieldName);
+        protectedValues[fieldName] = await protectMcpCredentialValue(
+          value,
+          currentKey,
+          legacyKey,
+          globalContext?.secrets
+        );
       }
       return protectedValues;
     };
@@ -504,8 +523,13 @@ export class StateStore {
       if (server.type === "local" && !server.command?.trim()) {
         throw new Error(`Local MCP server ${server.id} needs a command.`);
       }
-      if (server.type === "remote" && !/^https?:\/\//i.test(server.url ?? "")) {
-        throw new Error(`Remote MCP server ${server.id} needs an http(s) URL.`);
+      if (server.type === "remote") {
+        assertSecureRemoteMcpTransport(
+          server.id,
+          server.url,
+          server.environment,
+          server.headers
+        );
       }
       if (server.timeoutMs !== undefined && (!Number.isFinite(server.timeoutMs) || server.timeoutMs <= 0)) {
         throw new Error(`MCP server ${server.id} timeout must be positive.`);
@@ -619,8 +643,10 @@ export class StateStore {
   ): Promise<LoopState> {
     const cfg = await this.getPathsConfig();
     const sessionDir = await this.getSessionDir(sessionId);
-    const statePath = path.join(sessionDir, cfg.sessionFileNames.state);
-    const lockPath = path.join(sessionDir, cfg.stateLockFileName);
+    const [statePath, lockPath] = await Promise.all([
+      resolveContainedPath(sessionDir, cfg.sessionFileNames.state, "Session state file"),
+      resolveContainedPath(sessionDir, cfg.stateLockFileName, "Session state lock"),
+    ]);
     const updated = await this.withFileLock(lockPath, async () => {
       const state = await this.readJsonAtomic<LoopState>(statePath);
       if (!state) throw new Error(`Session state not found: ${sessionId}`);
@@ -667,7 +693,8 @@ export class StateStore {
   ): Promise<ControlRequest> {
     const cfg = await this.getPathsConfig();
     const sessionDir = await this.getSessionDir(sessionId);
-    const requestDir = path.join(sessionDir, cfg.controlDirName, "requests");
+    const controlDir = await resolveContainedPath(sessionDir, cfg.controlDirName, "Session control directory");
+    const requestDir = await resolveContainedPath(controlDir, "requests", "Control request directory");
     await fs.mkdir(requestDir, { recursive: true });
     const request: ControlRequest = {
       requestId: `control_${Date.now().toString(36)}_${randomBytes(6).toString("hex")}`,
@@ -675,15 +702,20 @@ export class StateStore {
       createdAt: new Date().toISOString(),
       message: message?.trim() || null,
     };
-    await this.writeJsonAtomic(path.join(requestDir, `${request.requestId}.json`), request);
+    await this.writeJsonAtomic(
+      await resolveContainedPath(requestDir, `${request.requestId}.json`, "Control request file"),
+      request
+    );
     return request;
   }
 
   async readControlAck(sessionId: string, requestId: string): Promise<ControlAck | null> {
     const cfg = await this.getPathsConfig();
     const sessionDir = await this.getSessionDir(sessionId);
+    const controlDir = await resolveContainedPath(sessionDir, cfg.controlDirName, "Session control directory");
+    const ackDir = await resolveContainedPath(controlDir, "acks", "Control acknowledgement directory");
     return this.readJsonAtomic<ControlAck>(
-      path.join(sessionDir, cfg.controlDirName, "acks", `${requestId}.json`)
+      await resolveContainedPath(ackDir, `${requestId}.json`, "Control acknowledgement file")
     );
   }
 
@@ -695,8 +727,13 @@ export class StateStore {
   ): Promise<void> {
     const cfg = await this.getPathsConfig();
     const sessionDir = await this.getSessionDir(sessionId);
-    const controlDir = path.join(sessionDir, cfg.controlDirName);
-    const ackPath = path.join(controlDir, "acks", `${request.requestId}.json`);
+    const controlDir = await resolveContainedPath(sessionDir, cfg.controlDirName, "Session control directory");
+    const [ackDir, requestDir, processingDir] = await Promise.all([
+      resolveContainedPath(controlDir, "acks", "Control acknowledgement directory"),
+      resolveContainedPath(controlDir, "requests", "Control request directory"),
+      resolveContainedPath(controlDir, "processing", "Control processing directory"),
+    ]);
+    const ackPath = await resolveContainedPath(ackDir, `${request.requestId}.json`, "Control acknowledgement file");
     const existing = await this.readJsonAtomic<ControlAck>(ackPath);
     await this.writeJsonAtomic(ackPath, {
       requestId: request.requestId,
@@ -707,8 +744,10 @@ export class StateStore {
       message,
     } satisfies ControlAck);
     await Promise.all([
-      fs.rm(path.join(controlDir, "requests", `${request.requestId}.json`), { force: true }),
-      fs.rm(path.join(controlDir, "processing", `${request.requestId}.json`), { force: true }),
+      resolveContainedPath(requestDir, `${request.requestId}.json`, "Control request file")
+        .then((target) => fs.rm(target, { force: true })),
+      resolveContainedPath(processingDir, `${request.requestId}.json`, "Control processing file")
+        .then((target) => fs.rm(target, { force: true })),
     ]);
   }
 
@@ -744,13 +783,13 @@ export class StateStore {
   }> {
     const cfg = await this.getPathsConfig();
     const sessionDir = await this.getSessionDir(sessionId);
+    const [leasePath, ownerLockPath] = await Promise.all([
+      resolveContainedPath(sessionDir, cfg.leaseFileName, "Session lease file"),
+      resolveContainedPath(sessionDir, cfg.ownerLockFileName, "Session owner lock"),
+    ]);
     const [lease, ownerLock] = await Promise.all([
-      this.readJsonAtomic<SessionLease>(
-        path.join(sessionDir, cfg.leaseFileName)
-      ),
-      this.readJsonAtomic<SessionOwnerLock>(
-        path.join(sessionDir, cfg.ownerLockFileName)
-      ),
+      this.readJsonAtomic<SessionLease>(leasePath),
+      this.readJsonAtomic<SessionOwnerLock>(ownerLockPath),
     ]);
     const liveness = processLiveness(
       lease?.ownerPid ?? ownerLock?.ownerPid
@@ -883,9 +922,14 @@ export class StateStore {
       await fs.access(registryPath);
     } catch {
       const root = await this.getRootDir();
-      await fs.mkdir(path.join(root, cfg.sessionsRoot), { recursive: true });
+      const sessionsRoot = await resolveContainedPath(root, cfg.sessionsRoot, "Sessions root");
+      await fs.mkdir(sessionsRoot, { recursive: true });
       const empty = emptySessionRegistry();
-      const lockPath = path.join(path.dirname(registryPath), cfg.registryLockFileName);
+      const lockPath = await resolveContainedPath(
+        path.dirname(registryPath),
+        cfg.registryLockFileName,
+        "Session registry lock"
+      );
       await this.withFileLock(lockPath, async () => {
         try {
           await fs.access(registryPath);
@@ -906,7 +950,11 @@ export class StateStore {
       return data;
     }
     const cfg = await this.getPathsConfig();
-    const lockPath = path.join(path.dirname(registryPath), cfg.registryLockFileName);
+    const lockPath = await resolveContainedPath(
+      path.dirname(registryPath),
+      cfg.registryLockFileName,
+      "Session registry lock"
+    );
     const recovered = await this.withFileLock(lockPath, async () => {
       const latest = await this.readJsonAtomic<SessionRegistry>(registryPath);
       if (latest) return latest;
@@ -933,9 +981,17 @@ export class StateStore {
     try {
       const sessionDir = await this.getSessionDir(sessionId);
       const sessionsRoot = path.dirname(sessionDir);
-      const deletionLock = path.join(
+      const dataRoot = await this.getRootDir();
+      const deletionBase = await resolveContainedPath(
+        dataRoot,
         path.dirname(sessionsRoot),
-        `session_delete_${sessionId}.lock`
+        "Session deletion base",
+        true
+      );
+      const deletionLock = await resolveContainedPath(
+        deletionBase,
+        `session_delete_${sessionId}.lock`,
+        "Session deletion lock"
       );
       const registryPath = await this.getRegistryPath();
       const cfg = await this.getPathsConfig();
@@ -963,16 +1019,29 @@ export class StateStore {
 
         const sessionExists = await fs.stat(sessionDir).then((stat) => stat.isDirectory()).catch(() => false);
         if (sessionExists) {
-          const tombstoneRoot = path.join(path.dirname(sessionsRoot), "session_tombstones");
+          const revalidatedSessionDir = await this.getSessionDir(sessionId);
+          if (revalidatedSessionDir !== sessionDir) {
+            throw new Error("Session directory changed while preparing deletion.");
+          }
+          const tombstoneRoot = await resolveContainedPath(
+            deletionBase,
+            "session_tombstones",
+            "Session tombstone directory"
+          );
           await fs.mkdir(tombstoneRoot, { recursive: true });
-          tombstonePath = path.join(
+          tombstonePath = await resolveContainedPath(
             tombstoneRoot,
-            `${sessionId}.${Date.now()}.${randomBytes(4).toString("hex")}`
+            `${sessionId}.${Date.now()}.${randomBytes(4).toString("hex")}`,
+            "Session tombstone"
           );
           await fs.rename(sessionDir, tombstonePath);
         }
 
-        const registryLock = path.join(path.dirname(registryPath), cfg.registryLockFileName);
+        const registryLock = await resolveContainedPath(
+          path.dirname(registryPath),
+          cfg.registryLockFileName,
+          "Session registry lock"
+        );
         try {
           await this.withFileLock(registryLock, async () => {
             const registry = await this.readJsonAtomic<SessionRegistry>(registryPath);
@@ -995,7 +1064,23 @@ export class StateStore {
       this.stateCache.delete(sessionId);
       if (tombstonePath) {
         try {
-          await fs.rm(tombstonePath, { recursive: true, force: true });
+          const verifiedDeletionBase = await resolveContainedPath(
+            dataRoot,
+            deletionBase,
+            "Session deletion base",
+            true
+          );
+          const verifiedTombstoneRoot = await resolveContainedPath(
+            verifiedDeletionBase,
+            "session_tombstones",
+            "Session tombstone directory"
+          );
+          const verifiedTombstone = await resolveContainedPath(
+            verifiedTombstoneRoot,
+            path.basename(tombstonePath),
+            "Session tombstone cleanup"
+          );
+          await fs.rm(verifiedTombstone, { recursive: true, force: true });
           dirRemoved = true;
         } catch (err) {
           return {
@@ -1069,7 +1154,11 @@ export class StateStore {
   ): Promise<void> {
     const registryPath = await this.getRegistryPath();
     const cfg = await this.getPathsConfig();
-    const lockPath = path.join(path.dirname(registryPath), cfg.registryLockFileName);
+    const lockPath = await resolveContainedPath(
+      path.dirname(registryPath),
+      cfg.registryLockFileName,
+      "Session registry lock"
+    );
     const fresh = await this.withFileLock(lockPath, async () => {
       const latest = (await this.readJsonAtomic<SessionRegistry>(registryPath)) ??
         this.registryCache ??
@@ -1102,19 +1191,18 @@ export class StateStore {
     const root = await this.getRootDir();
     const cfg = await this.getPathsConfig();
     const registryPath = await this.getRegistryPath();
-    const sessionsRoot = path.join(root, cfg.sessionsRoot);
+    const sessionsRoot = await resolveContainedPath(root, cfg.sessionsRoot, "Sessions root");
     const entries = await fs.readdir(sessionsRoot, { withFileTypes: true }).catch(() => []);
     const discovered: SessionMeta[] = [];
     for (const entry of entries) {
       if (!entry.isDirectory()) continue;
       try {
         assertSafeSessionId(entry.name);
-        const state = await this.readJsonAtomic<LoopState>(
-          path.join(
-            await this.getSessionDir(entry.name),
-            cfg.sessionFileNames.state
-          )
-        );
+        const state = await this.readJsonAtomic<LoopState>(await this.resolveSessionRuntimePath(
+          entry.name,
+          cfg.sessionFileNames.state,
+          "Session state file"
+        ));
         if (!state) continue;
         discovered.push({
           sessionId: entry.name,
@@ -1129,7 +1217,11 @@ export class StateStore {
     }
     if (discovered.length === 0) return;
 
-    const lockPath = path.join(path.dirname(registryPath), cfg.registryLockFileName);
+    const lockPath = await resolveContainedPath(
+      path.dirname(registryPath),
+      cfg.registryLockFileName,
+      "Session registry lock"
+    );
     const reconciled = await this.withFileLock(lockPath, async () => {
       const registry = await this.readJsonAtomic<SessionRegistry>(registryPath);
       if (!registry) return null;
@@ -1153,7 +1245,11 @@ export class StateStore {
   async readState(sessionId: string): Promise<LoopState | null> {
     const cached = this.stateCache.get(sessionId);
     const cfg = await this.getPathsConfig();
-    const statePath = path.join(await this.getSessionDir(sessionId), cfg.sessionFileNames.state);
+    const statePath = await this.resolveSessionRuntimePath(
+      sessionId,
+      cfg.sessionFileNames.state,
+      "Session state file"
+    );
     const data = await this.readJsonAtomic<LoopState>(statePath);
     if (data) {
       this.stateCache.set(sessionId, data);
@@ -1169,7 +1265,11 @@ export class StateStore {
 
   async readProgressNotes(sessionId: string): Promise<string> {
     const cfg = await this.getPathsConfig();
-    const notesPath = path.join(await this.getSessionDir(sessionId), cfg.sessionFileNames.progressNotes);
+    const notesPath = await this.resolveSessionRuntimePath(
+      sessionId,
+      cfg.sessionFileNames.progressNotes,
+      "Progress notes file"
+    );
     try {
       return await fs.readFile(notesPath, "utf8");
     } catch {
@@ -1179,13 +1279,17 @@ export class StateStore {
 
   async readHistory(sessionId: string): Promise<LoopHistoryEntry[]> {
     const cfg = await this.getPathsConfig();
-    const historyDir = path.join(await this.getSessionDir(sessionId), cfg.loopHistoryDirName);
+    const historyDir = await this.resolveSessionRuntimePath(
+      sessionId,
+      cfg.loopHistoryDirName,
+      "Loop history directory"
+    );
     try {
       const files = await fs.readdir(historyDir);
       const entries: LoopHistoryEntry[] = [];
       for (const file of files) {
         if (!file.endsWith(".json")) continue;
-        const filePath = path.join(historyDir, file);
+        const filePath = await resolveContainedPath(historyDir, file, "Loop history entry");
         const data = await this.readJsonAtomic<LoopHistoryEntry>(filePath);
         if (data) entries.push(data);
       }
@@ -1201,7 +1305,11 @@ export class StateStore {
 
   async readFinalSummary(sessionId: string): Promise<FinalSummary | null> {
     const cfg = await this.getPathsConfig();
-    const summaryPath = path.join(await this.getSessionDir(sessionId), cfg.sessionFileNames.finalSummary);
+    const summaryPath = await this.resolveSessionRuntimePath(
+      sessionId,
+      cfg.sessionFileNames.finalSummary,
+      "Final summary file"
+    );
     return this.readJsonAtomic<FinalSummary>(summaryPath);
   }
 
@@ -1246,23 +1354,6 @@ export class StateStore {
         console.error("[StateStore] listener error:", err);
       }
     }
-  }
-
-  private resolveContainedSessionFile(sessionDir: string, configuredPath: string): string {
-    const resolvedSessionDir = path.resolve(sessionDir);
-    const resolvedFile = path.isAbsolute(configuredPath)
-      ? path.resolve(configuredPath)
-      : path.resolve(resolvedSessionDir, configuredPath);
-    const relative = path.relative(resolvedSessionDir, resolvedFile);
-    if (
-      !relative ||
-      relative === ".." ||
-      relative.startsWith(`..${path.sep}`) ||
-      path.isAbsolute(relative)
-    ) {
-      throw new Error(`Plan document escapes session directory: ${configuredPath}`);
-    }
-    return resolvedFile;
   }
 
   private async withFileLock<T>(

@@ -49,13 +49,20 @@ async function waitFor<T>(
 function execFileAsync(
   file: string,
   args: string[],
-  cwd: string
+  cwd: string,
+  env?: NodeJS.ProcessEnv
 ): Promise<{ stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
     execFile(
       file,
       args,
-      { cwd, timeout: 30_000, windowsHide: true, maxBuffer: 5 * 1024 * 1024 },
+      {
+        cwd,
+        timeout: 30_000,
+        windowsHide: true,
+        maxBuffer: 5 * 1024 * 1024,
+        env: env ? { ...process.env, ...env } : undefined,
+      },
       (err, stdout, stderr) => {
         if (err) {
           reject(new Error(`${err.message}\nstdout:\n${stdout}\nstderr:\n${stderr}`));
@@ -67,9 +74,139 @@ function execFileAsync(
   });
 }
 
+async function prepareProviderTarget(root: string): Promise<string> {
+  const target = path.join(root, "target");
+  await fsp.mkdir(target, { recursive: true });
+  // The provider process runs from the target directory, while each test may
+  // replace the root-level fake implementation between run/resume commands.
+  await fsp.writeFile(path.join(target, "run"), "require('../run');\n", "utf8");
+  return target;
+}
+
+async function readArtifactCorpus(root: string): Promise<string> {
+  const chunks: string[] = [];
+  const visit = async (directory: string): Promise<void> => {
+    for (const entry of await fsp.readdir(directory, { withFileTypes: true })) {
+      const entryPath = path.join(directory, entry.name);
+      if (entry.isDirectory()) await visit(entryPath);
+      else if (entry.isFile()) chunks.push(await fsp.readFile(entryPath, "utf8"));
+    }
+  };
+  await visit(root);
+  return chunks.join("\n");
+}
+
+test("run rejects an equal mutable root before spawning the provider", async () => {
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), "agent-loop-unsafe-layout-"));
+  try {
+    await fsp.writeFile(
+      path.join(root, "run"),
+      "require('node:fs').writeFileSync('provider-spawned.txt', 'unsafe');\n",
+      "utf8"
+    );
+    const pipelinePath = path.join(root, "pipeline.json");
+    await fsp.writeFile(
+      pipelinePath,
+      JSON.stringify(minimalImplementationPipeline(), null, 2),
+      "utf8"
+    );
+    await assert.rejects(
+      execFileAsync(
+        process.execPath,
+        [
+          path.join(__dirname, "loop_orchestrator.js"),
+          "run",
+          "--goal", "prove layout preflight",
+          "--target", root,
+          "--root", root,
+          "--session", "unsafe-layout-session",
+          "--binary", process.execPath,
+          "--profile", "opencode",
+          "--pipeline", pipelinePath,
+        ],
+        root
+      ),
+      /Unsafe Agent Loop layout/
+    );
+    await assert.rejects(fsp.access(path.join(root, "provider-spawned.txt")));
+    await assert.rejects(fsp.access(path.join(root, ".goal")));
+  } finally {
+    await fsp.rm(root, { recursive: true, force: true });
+  }
+});
+
+test("resolved MCP secrets are redacted from every persisted execution artifact", async () => {
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), "agent-loop-mcp-redaction-"));
+  const secret = "mcp-secret-sentinel-0123456789";
+  try {
+    const target = await prepareProviderTarget(root);
+    await fsp.writeFile(path.join(root, "models"), "console.log('fake/model');\n", "utf8");
+    await fsp.writeFile(
+      path.join(root, "loop_config.json"),
+      JSON.stringify({
+        toolAccess: {
+          webSearch: { enabled: false, mode: "cached" },
+          mcpServers: [{
+            id: "echo",
+            name: "Echo",
+            enabled: true,
+            type: "local",
+            command: process.execPath,
+            environment: { TOKEN: "${env:MCP_ECHO_SECRET}" },
+          }],
+        },
+      }, null, 2),
+      "utf8"
+    );
+    await fsp.writeFile(
+      path.join(root, "run"),
+      [
+        "const config = process.env.OPENCODE_CONFIG_CONTENT || '';",
+        "const evidence = '[REQUIREMENT_EVIDENCE]\\nREQ_ID: REQ-001\\nSTATUS: SATISFIED\\nEVIDENCE: secret redaction observed\\n[/REQUIREMENT_EVIDENCE]';",
+        "const text = 'provider config=' + config + '\\n' + evidence + '\\n[PHASE_DONE]';",
+        "console.log(JSON.stringify({type:'text',id:'secret-echo',part:{id:'secret-part',text}}));",
+      ].join("\n"),
+      "utf8"
+    );
+    const pipelinePath = path.join(root, "pipeline.json");
+    await fsp.writeFile(
+      pipelinePath,
+      JSON.stringify(minimalImplementationPipeline(), null, 2),
+      "utf8"
+    );
+    const result = await execFileAsync(
+      process.execPath,
+      [
+        path.join(__dirname, "loop_orchestrator.js"),
+        "run",
+        "--goal", "redact the provider secret",
+        "--target", target,
+        "--root", root,
+        "--session", "mcp-redaction-session",
+        "--binary", process.execPath,
+        "--profile", "opencode",
+        "--pipeline", pipelinePath,
+        "--phase-timeout", "5000",
+        "--idle-timeout", "1000",
+        "--tool-timeout", "1000",
+        "--transport-timeout", "1000",
+        "--phase-recovery-budget", "60000",
+      ],
+      root,
+      { MCP_ECHO_SECRET: secret }
+    );
+    const corpus = await readArtifactCorpus(root);
+    assert.equal(`${result.stdout}\n${result.stderr}\n${corpus}`.includes(secret), false);
+    assert.match(corpus, /\[REDACTED\]/);
+  } finally {
+    await fsp.rm(root, { recursive: true, force: true });
+  }
+});
+
 test("dist CLI composes separate role and loop files to execute a custom pipeline", async () => {
   const root = await fsp.mkdtemp(path.join(os.tmpdir(), "agent-loop-integration-"));
   try {
+    const target = await prepareProviderTarget(root);
     await fsp.writeFile(path.join(root, "models"), "console.log('fake/model');\n", "utf8");
     await fsp.writeFile(
       path.join(root, "run"),
@@ -143,7 +280,7 @@ test("dist CLI composes separate role and loop files to execute a custom pipelin
         cliPath,
         "run",
         "--goal", "exercise configurable pipeline",
-        "--target", root,
+        "--target", target,
         "--root", root,
         "--session", "integration-session",
         "--binary", process.execPath,
@@ -183,6 +320,7 @@ test("dist CLI composes separate role and loop files to execute a custom pipelin
 test("clean incomplete exit gets one fresh bounded completion recovery session", async () => {
   const root = await fsp.mkdtemp(path.join(os.tmpdir(), "agent-loop-completion-recovery-"));
   try {
+    const target = await prepareProviderTarget(root);
     await fsp.writeFile(
       path.join(root, "run"),
       [
@@ -212,7 +350,7 @@ test("clean incomplete exit gets one fresh bounded completion recovery session",
         cliPath,
         "run",
         "--goal", "recover a clean incomplete response",
-        "--target", root,
+        "--target", target,
         "--root", root,
         "--session", "completion-recovery-session",
         "--binary", process.execPath,
@@ -253,6 +391,7 @@ test("clean incomplete exit gets one fresh bounded completion recovery session",
 test("default planning waits for the user with full center-editor Markdown artifacts", async () => {
   const root = await fsp.mkdtemp(path.join(os.tmpdir(), "agent-loop-planning-ui-"));
   try {
+    const target = await prepareProviderTarget(root);
     await fsp.writeFile(
       path.join(root, "run"),
       [
@@ -276,7 +415,7 @@ test("default planning waits for the user with full center-editor Markdown artif
         cliPath,
         "run",
         "--goal", "review plans in the center editor",
-        "--target", root,
+        "--target", target,
         "--root", root,
         "--session", "planning-review-session",
         "--binary", process.execPath,
@@ -430,6 +569,7 @@ test("default planning waits for the user with full center-editor Markdown artif
 test("insufficient named-reference research waits for the user after one planning attempt", async () => {
   const root = await fsp.mkdtemp(path.join(os.tmpdir(), "agent-loop-research-blocked-"));
   try {
+    const target = await prepareProviderTarget(root);
     await fsp.writeFile(
       path.join(root, "loop_config.json"),
       JSON.stringify({
@@ -463,7 +603,7 @@ test("insufficient named-reference research waits for the user after one plannin
         cliPath,
         "run",
         "--goal", "인터넷을 검색해서 Named Game과 같은 게임을 제작해",
-        "--target", root,
+        "--target", target,
         "--root", root,
         "--session", "research-blocked-session",
         "--binary", process.execPath,
@@ -500,6 +640,7 @@ test("insufficient named-reference research waits for the user after one plannin
 test("network failure reconnects once with the persisted CLI session", async () => {
   const root = await fsp.mkdtemp(path.join(os.tmpdir(), "agent-loop-reconnect-"));
   try {
+    const target = await prepareProviderTarget(root);
     await fsp.writeFile(
       path.join(root, "run"),
       [
@@ -532,7 +673,7 @@ test("network failure reconnects once with the persisted CLI session", async () 
         cliPath,
         "run",
         "--goal", "recover the implementation transport",
-        "--target", root,
+        "--target", target,
         "--root", root,
         "--session", "reconnect-session",
         "--binary", process.execPath,
@@ -574,6 +715,7 @@ test("network failure reconnects once with the persisted CLI session", async () 
 test("model generation timeout keeps its failure kind and reconnects the persisted CLI session", async () => {
   const root = await fsp.mkdtemp(path.join(os.tmpdir(), "agent-loop-transport-reconnect-"));
   try {
+    const target = await prepareProviderTarget(root);
     await fsp.writeFile(
       path.join(root, "run"),
       [
@@ -606,7 +748,7 @@ test("model generation timeout keeps its failure kind and reconnects the persist
         cliPath,
         "run",
         "--goal", "recover a stalled model stream",
-        "--target", root,
+        "--target", target,
         "--root", root,
         "--session", "transport-reconnect-session",
         "--binary", process.execPath,
@@ -644,6 +786,7 @@ test("model generation timeout keeps its failure kind and reconnects the persist
 test("token-free transient exhaustion schedules recovery without spending interrupter tokens", async () => {
   const root = await fsp.mkdtemp(path.join(os.tmpdir(), "agent-loop-interrupter-evidence-"));
   try {
+    const target = await prepareProviderTarget(root);
     await fsp.writeFile(
       path.join(root, "run"),
       [
@@ -674,7 +817,7 @@ test("token-free transient exhaustion schedules recovery without spending interr
         cliPath,
         "run",
         "--goal", "collect evidence for a stalled implementation",
-        "--target", root,
+        "--target", target,
         "--root", root,
         "--session", "interrupter-evidence-session",
         "--binary", process.execPath,
@@ -743,6 +886,8 @@ test("implementation preflight waits for approval, then resumes with requested o
   const root = await fsp.mkdtemp(path.join(os.tmpdir(), "agent-loop-boundary-root-"));
   const outsideRoot = await fsp.mkdtemp(path.join(os.tmpdir(), "agent-loop-boundary-outside-"));
   try {
+    const target = await prepareProviderTarget(root);
+    await fsp.mkdir(path.join(outsideRoot, "game"), { recursive: true });
     await fsp.writeFile(
       path.join(root, "run"),
       [
@@ -771,7 +916,7 @@ test("implementation preflight waits for approval, then resumes with requested o
         path.join(__dirname, "loop_orchestrator.js"),
         "run",
         "--goal", `Write the game to ${path.join(outsideRoot, "game")}`,
-        "--target", root,
+        "--target", target,
         "--root", root,
         "--session", "boundary-preflight-session",
         "--binary", process.execPath,
@@ -834,7 +979,7 @@ test("implementation preflight waits for approval, then resumes with requested o
         path.join(__dirname, "loop_orchestrator.js"),
         "run",
         "--goal", `Write another game to ${path.join(outsideRoot, "full-access-game")}`,
-        "--target", root,
+        "--target", target,
         "--root", root,
         "--session", "boundary-full-access-session",
         "--binary", process.execPath,
@@ -868,6 +1013,7 @@ test("implementation preflight waits for approval, then resumes with requested o
 test("STOP cancels a persisted retry backoff before another attempt starts", async () => {
   const root = await fsp.mkdtemp(path.join(os.tmpdir(), "agent-loop-backoff-stop-"));
   try {
+    const target = await prepareProviderTarget(root);
     await fsp.writeFile(
       path.join(root, "run"),
       [
@@ -892,7 +1038,7 @@ test("STOP cancels a persisted retry backoff before another attempt starts", asy
         cliPath,
         "run",
         "--goal", "stop during retry backoff",
-        "--target", root,
+        "--target", target,
         "--root", root,
         "--session", "backoff-stop-session",
         "--binary", process.execPath,
@@ -930,7 +1076,7 @@ test("STOP cancels a persisted retry backoff before another attempt starts", asy
       }
     });
 
-    const requestId = "integration-stop-request";
+    const requestId = "control_migrate_0123456789ab";
     const requestsDir = path.join(sessionDir, "control", "requests");
     await fsp.mkdir(requestsDir, { recursive: true });
     await fsp.writeFile(

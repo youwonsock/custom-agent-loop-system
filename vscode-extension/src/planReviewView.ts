@@ -308,6 +308,11 @@ export class PlanReviewViewProvider implements vscode.WebviewViewProvider {
         } catch (err) {
           const errMsg = err instanceof Error ? err.message : String(err);
           vscode.window.showErrorMessage(`Failed to send interrupt message: ${errMsg}`);
+        } finally {
+          void this.view?.webview.postMessage({
+            command: "operationComplete",
+            operation: "interruptSession",
+          });
         }
         await this.pushState();
         break;
@@ -556,7 +561,10 @@ export class PlanReviewViewProvider implements vscode.WebviewViewProvider {
         var newSig = stateSignature(payload);
         state = payload;
         requestRender();
-      } else if (msg.command === "operationComplete" && msg.operation === "revisePlan") {
+      } else if (
+        msg.command === "operationComplete" &&
+        (msg.operation === "revisePlan" || msg.operation === "interruptSession")
+      ) {
         reviseBusy = false;
         clearReviseBusyTimer();
         requestRender();

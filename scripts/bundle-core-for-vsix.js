@@ -84,8 +84,8 @@ if (!hasNativePrebuild && !fs.existsSync(path.join(nodePtyDestination, "build", 
 }
 
 const manifest = {
+  formatVersion: 1,
   coreVersion: require(path.join(root, "package.json")).version,
-  generatedAt: new Date().toISOString(),
   entrypoint: "dist/loop_orchestrator.js",
   targetPlatform: nativePlatform,
 };

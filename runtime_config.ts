@@ -217,6 +217,14 @@ function assertSafeRelativePath(value: unknown, label: string, singleSegment = f
   if (portableParts.some((part) => !part || part === "." || part === "..")) {
     throw new Error(`${label} contains an unsafe path segment.`);
   }
+  const windowsReservedName = /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?$/i;
+  if (portableParts.some((part) =>
+    /[\x00-\x1f<>:"|?*]/.test(part) ||
+    /[ .]$/.test(part) ||
+    windowsReservedName.test(part)
+  )) {
+    throw new Error(`${label} contains a non-portable or unsafe path segment.`);
+  }
   if (singleSegment && portableParts.length !== 1) {
     throw new Error(`${label} must be a single path segment.`);
   }

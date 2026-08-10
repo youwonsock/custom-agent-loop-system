@@ -2,6 +2,7 @@ import * as vscode from "vscode";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import runtimeDefaults from "./generated_runtime_defaults.json";
+import { validateLoopPathsConfig } from "./pathSafety";
 
 export type LoopStatus =
   | "RUNNING"
@@ -588,7 +589,7 @@ export async function loadLoopPathsConfig(rootDir: string): Promise<LoopPathsCon
     const raw = await fs.readFile(cfgPath, "utf-8");
     const cfg = JSON.parse(raw) as Partial<LoopConfig>;
     if (cfg.paths) {
-      return {
+      return validateLoopPathsConfig({
         ...defaults,
         ...cfg.paths,
         sessionFileNames: {
@@ -603,11 +604,15 @@ export async function loadLoopPathsConfig(rootDir: string): Promise<LoopPathsCon
           ...defaults.roomDirNames,
           ...cfg.paths.roomDirNames,
         },
-      } as LoopPathsConfig;
+      } as LoopPathsConfig);
     }
-    return defaults;
-  } catch {
-    return defaults;
+    return validateLoopPathsConfig(defaults);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      return validateLoopPathsConfig(defaults);
+    }
+    const reason = err instanceof Error ? err.message : String(err);
+    throw new Error(`Failed to load Agent Loop paths from ${cfgPath}: ${reason}`);
   }
 }
 
@@ -643,29 +648,10 @@ function normalizePathSetting(value: string | undefined): string {
   return v;
 }
 
-const KNOWN_CLI_BINARIES = new Set(["opencode", "kilo", "codex", "claude"]);
-const PROFILE_DEFAULT_BINARY: Record<string, string> = {
-  opencode: "opencode",
-  kilo: "kilo",
-  codex: "codex",
-  claude: "claude",
-};
-
 export function readExtensionConfig(): ExtensionConfig {
   const cfg = vscode.workspace.getConfiguration("agentLoop");
   const cliProfile = cfg.get<string>("cliProfile", "opencode").trim();
-  let cliBinary = cfg.get<string>("cliBinary", "opencode").trim();
-  // Auto-sync: if cliBinary is one of the known default names and doesn't match the
-  // active profile's default binary, adopt the profile's default. This ensures that
-  // changing only `cliProfile` in settings always yields a coherent (binary, profile) pair.
-  const profileDefaultBinary = PROFILE_DEFAULT_BINARY[cliProfile];
-  if (profileDefaultBinary && KNOWN_CLI_BINARIES.has(cliBinary) && cliBinary !== profileDefaultBinary) {
-    cliBinary = profileDefaultBinary;
-    cfg.update("cliBinary", cliBinary, vscode.ConfigurationTarget.Global).then(
-      () => {},
-      () => {}
-    );
-  }
+  const cliBinary = cfg.get<string>("cliBinary", "opencode").trim();
   const result: ExtensionConfig = {
     cliBinary,
     cliProfile,

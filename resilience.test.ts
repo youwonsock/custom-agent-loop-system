@@ -12,6 +12,7 @@ import {
   ensureControlQueue,
   getControlQueuePaths,
   readControlAck,
+  recoverClaimedControlRequests,
   withShortFileLock,
 } from "./resilience";
 
@@ -55,6 +56,154 @@ test("control queue prioritizes STOP and preserves every request", async () => {
     await completeControlRequest(paths, second!, "cancelled", "already paused");
     assert.equal((await readControlAck(paths, stop.requestId))?.result, "completed");
     assert.equal((await readControlAck(paths, interrupt.requestId))?.result, "cancelled");
+  });
+});
+
+test("malformed control requests are quarantined and cannot escape the ACK directory", async () => {
+  await withTempDir(async (dir) => {
+    const paths = getControlQueuePaths(path.join(dir, "session"));
+    await ensureControlQueue(paths);
+    const escapeBase = path.join(dir, "session", "escaped-control-ack");
+    await fsp.writeFile(
+      path.join(paths.requests, "attacker.json"),
+      JSON.stringify({
+        requestId: "../../escaped-control-ack",
+        type: "STOP",
+        createdAt: new Date().toISOString(),
+        message: null,
+      }),
+      "utf8"
+    );
+
+    assert.equal(await claimNextControlRequest(paths), null);
+    assert.equal((await fsp.readdir(paths.requests)).length, 0);
+    assert.equal((await fsp.readdir(paths.quarantine)).length, 1);
+    await assert.rejects(() => readControlAck(paths, "../../escaped-control-ack"), /Unsafe control request id/);
+    await assert.rejects(() => fsp.access(`${escapeBase}.json`), /ENOENT/);
+  });
+});
+
+test("temporary atomic request files are ignored rather than quarantined", async () => {
+  await withTempDir(async (dir) => {
+    const paths = getControlQueuePaths(dir);
+    await ensureControlQueue(paths);
+    const tempName = "control_migrate_0123456789ab.json.tmp.123.456.01234567";
+    await fsp.writeFile(path.join(paths.requests, tempName), "partial", "utf8");
+
+    assert.equal(await claimNextControlRequest(paths), null);
+    assert.deepEqual(await fsp.readdir(paths.requests), [tempName]);
+    assert.equal((await fsp.readdir(paths.quarantine)).length, 0);
+  });
+});
+
+test("forged completed ACKs are quarantined and cannot discard claimed requests", async () => {
+  await withTempDir(async (dir) => {
+    const paths = getControlQueuePaths(dir);
+    await ensureControlQueue(paths);
+    const requestId = "control_recover_0123456789ab";
+    const request = {
+      requestId,
+      type: "STOP",
+      createdAt: new Date().toISOString(),
+      message: null,
+    };
+    await fsp.writeFile(
+      path.join(paths.processing, `${requestId}.json`),
+      JSON.stringify(request),
+      "utf8"
+    );
+    await fsp.writeFile(
+      path.join(paths.acks, `${requestId}.json`),
+      JSON.stringify({
+        requestId: "control_forged_abcdef012345",
+        type: "STOP",
+        acceptedAt: new Date().toISOString(),
+        completedAt: new Date().toISOString(),
+        result: "completed",
+        message: null,
+      }),
+      "utf8"
+    );
+
+    await recoverClaimedControlRequests(paths);
+    assert.deepEqual(await fsp.readdir(paths.requests), [`${requestId}.json`]);
+    assert.equal((await fsp.readdir(paths.processing)).length, 0);
+    assert.equal((await fsp.readdir(paths.acks)).length, 0);
+    assert.equal((await fsp.readdir(paths.quarantine)).length, 1);
+  });
+});
+
+test("invalid timestamps and oversized messages are quarantined or rejected", async () => {
+  await withTempDir(async (dir) => {
+    const paths = getControlQueuePaths(dir);
+    await ensureControlQueue(paths);
+    const requestId = "control_invalid_0123456789ab";
+    await fsp.writeFile(
+      path.join(paths.requests, `${requestId}.json`),
+      JSON.stringify({
+        requestId,
+        type: "INTERRUPT",
+        createdAt: "2026-01-01",
+        message: "inspect",
+      }),
+      "utf8"
+    );
+    assert.equal(await claimNextControlRequest(paths), null);
+    assert.equal((await fsp.readdir(paths.quarantine)).length, 1);
+    await assert.rejects(
+      () => enqueueControlRequest(paths, "INTERRUPT", "x".repeat(16 * 1024 + 1)),
+      /exceeds/
+    );
+  });
+});
+
+test("control request filenames must exactly match their validated request id", async () => {
+  await withTempDir(async (dir) => {
+    const paths = getControlQueuePaths(dir);
+    await ensureControlQueue(paths);
+    const request = await enqueueControlRequest(paths, "INTERRUPT", "inspect");
+    const expectedPath = path.join(paths.requests, `${request.requestId}.json`);
+    const mismatchedPath = path.join(paths.requests, "control_legacy_000000000000.json");
+    await fsp.rename(expectedPath, mismatchedPath);
+
+    assert.equal(await claimNextControlRequest(paths), null);
+    assert.equal((await fsp.readdir(paths.quarantine)).length, 1);
+  });
+});
+
+test("control completion rejects invalid results and oversized ACK messages", async () => {
+  await withTempDir(async (dir) => {
+    const paths = getControlQueuePaths(dir);
+    const request = await enqueueControlRequest(paths, "STOP");
+    const claimed = await claimNextControlRequest(paths);
+    assert.equal(claimed?.request.requestId, request.requestId);
+    await assert.rejects(
+      () => completeControlRequest(paths, claimed!, "unexpected" as never),
+      /Unsupported completed control result/
+    );
+    await assert.rejects(
+      () => completeControlRequest(paths, claimed!, "failed", "x".repeat(16 * 1024 + 1)),
+      /exceeds/
+    );
+    await completeControlRequest(paths, claimed!, "failed", "validation test");
+    assert.equal((await readControlAck(paths, request.requestId))?.result, "failed");
+  });
+});
+
+test("recovery quarantines malformed processing entries instead of replaying them", async () => {
+  await withTempDir(async (dir) => {
+    const paths = getControlQueuePaths(dir);
+    await ensureControlQueue(paths);
+    await fsp.writeFile(
+      path.join(paths.processing, "control_bad_000000000000.json"),
+      "{not-json",
+      "utf8"
+    );
+
+    await recoverClaimedControlRequests(paths);
+    assert.equal((await fsp.readdir(paths.processing)).length, 0);
+    assert.equal((await fsp.readdir(paths.requests)).length, 0);
+    assert.equal((await fsp.readdir(paths.quarantine)).length, 1);
   });
 });
 

@@ -2,12 +2,12 @@
   "name": "agent-loop-vscode",
   "displayName": "Agent Loop Orchestrator",
   "description": "VS Code extension that controls the Custom Agent Loop System CLI to autonomously achieve coding goals via a multi-model multi-session orchestrator.",
-  "version": "3.4.0",
+  "version": "3.4.1",
   "publisher": "custom-agent-loop",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/custom-agent-loop/agent-loop-vscode"
+    "url": "https://github.com/youwonsock/Custom_AgentLoopSystem"
   },
   "engines": {
     "vscode": "^1.85.0"
@@ -23,9 +23,21 @@
     "onCommand:agentLoop.resumeSession",
     "onCommand:agentLoop.discoverModels",
     "onCommand:agentLoop.stopSession",
+    "onCommand:agentLoop.deleteSession",
+    "onCommand:agentLoop.openProgressNotes",
     "onView:agentLoopExplorer"
   ],
   "main": "./out/extension.js",
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": false,
+      "description": "Agent Loop launches configured external processes and is disabled until the workspace is trusted."
+    },
+    "virtualWorkspaces": {
+      "supported": false,
+      "description": "Agent Loop requires local filesystem and process access."
+    }
+  },
   "contributes": {
     "commands": [
       {
@@ -63,6 +75,12 @@
         "icon": "$(trash)"
       },
       {
+        "command": "agentLoop.openProgressNotes",
+        "title": "Agent Loop: Open Progress Notes",
+        "category": "Agent Loop",
+        "icon": "$(note)"
+      },
+      {
         "command": "agentLoop.refresh",
         "title": "Agent Loop: Refresh",
         "category": "Agent Loop",
@@ -74,7 +92,7 @@
         {
           "id": "agentLoopViewContainer",
           "title": "Agent Loop",
-          "icon": "$(symbol-enum)"
+          "icon": "media/icon.svg"
         }
       ]
     },
@@ -125,6 +143,8 @@
         "agentLoop.cliBinary": {
           "type": "string",
           "default": "opencode",
+          "scope": "machine",
+          "restricted": true,
           "description": "Name or path of the coding CLI binary to control."
         },
         "agentLoop.cliProfile": {
@@ -136,21 +156,29 @@
             "claude"
           ],
           "default": "opencode",
+          "scope": "machine",
+          "restricted": true,
           "description": "CLI profile determining command-line interface conventions (run args, model discovery). Auto-detected from cliBinary if unset."
         },
         "agentLoop.rootDir": {
           "type": "string",
           "default": "",
+          "scope": "machine",
+          "restricted": true,
           "description": "Orchestrator root directory (where sessions_registry.json lives). Empty = extension storage path."
         },
         "agentLoop.nodeBinary": {
           "type": "string",
           "default": "node",
+          "scope": "machine",
+          "restricted": true,
           "description": "Path to the Node.js binary used to run the orchestrator CLI."
         },
         "agentLoop.orchestratorScript": {
           "type": "string",
           "default": "",
+          "scope": "machine",
+          "restricted": true,
           "description": "Path to the compiled loop_orchestrator.js. Empty = auto-detect relative to rootDir."
         },
         "agentLoop.maxIterations": {

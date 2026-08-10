@@ -105,7 +105,12 @@ export interface ControlQueuePaths {
   requests: string;
   processing: string;
   acks: string;
+  quarantine: string;
 }
+
+const CONTROL_REQUEST_ID_PATTERN = /^control_[a-z0-9]{1,16}_[a-f0-9]{12}$/;
+const MAX_CONTROL_MESSAGE_LENGTH = 16 * 1024;
+const CONTROL_ATOMIC_TEMP_PATTERN = /^control_[a-z0-9]{1,16}_[a-f0-9]{12}\.json\.tmp\.\d+\.\d+\.[a-f0-9]{8}$/;
 
 export type ProcessLiveness = "alive" | "dead" | "unknown";
 
@@ -487,6 +492,7 @@ export function getControlQueuePaths(sessionDir: string, controlDirName = "contr
     requests: path.join(root, "requests"),
     processing: path.join(root, "processing"),
     acks: path.join(root, "acks"),
+    quarantine: path.join(root, "quarantine"),
   };
 }
 
@@ -495,7 +501,135 @@ export async function ensureControlQueue(paths: ControlQueuePaths): Promise<void
     fsp.mkdir(paths.requests, { recursive: true }),
     fsp.mkdir(paths.processing, { recursive: true }),
     fsp.mkdir(paths.acks, { recursive: true }),
+    fsp.mkdir(paths.quarantine, { recursive: true }),
   ]);
+}
+
+export function assertSafeControlRequestId(value: unknown): string {
+  if (typeof value !== "string" || !CONTROL_REQUEST_ID_PATTERN.test(value)) {
+    throw new Error(`Unsafe control request id: ${JSON.stringify(value)}`);
+  }
+  return value;
+}
+
+function controlFilePath(directory: string, requestId: string): string {
+  const safeId = assertSafeControlRequestId(requestId);
+  const root = path.resolve(directory);
+  const resolved = path.resolve(root, `${safeId}.json`);
+  const relative = path.relative(root, resolved);
+  if (
+    relative !== `${safeId}.json` ||
+    relative.startsWith(`..${path.sep}`) ||
+    path.isAbsolute(relative)
+  ) {
+    throw new Error(`Control path escapes its queue directory: ${safeId}`);
+  }
+  return resolved;
+}
+
+function validControlRequest(value: unknown, fileName: string): value is ControlRequest {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) return false;
+  const request = value as Partial<ControlRequest>;
+  if (typeof request.requestId !== "string" || !CONTROL_REQUEST_ID_PATTERN.test(request.requestId)) {
+    return false;
+  }
+  if (fileName !== `${request.requestId}.json`) return false;
+  if (request.type !== "STOP" && request.type !== "INTERRUPT") return false;
+  if (
+    typeof request.createdAt !== "string" ||
+    !Number.isFinite(Date.parse(request.createdAt)) ||
+    new Date(request.createdAt).toISOString() !== request.createdAt
+  ) {
+    return false;
+  }
+  if (
+    request.message !== null &&
+    (typeof request.message !== "string" || request.message.length > MAX_CONTROL_MESSAGE_LENGTH)
+  ) {
+    return false;
+  }
+  return true;
+}
+
+function validControlAck(
+  value: unknown,
+  expectedRequestId: string,
+  expectedType?: ControlRequest["type"]
+): value is ControlAck {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) return false;
+  const ack = value as Partial<ControlAck>;
+  if (ack.requestId !== expectedRequestId || !CONTROL_REQUEST_ID_PATTERN.test(ack.requestId)) return false;
+  if (ack.type !== "STOP" && ack.type !== "INTERRUPT") return false;
+  if (expectedType && ack.type !== expectedType) return false;
+  if (
+    typeof ack.acceptedAt !== "string" ||
+    !Number.isFinite(Date.parse(ack.acceptedAt)) ||
+    new Date(ack.acceptedAt).toISOString() !== ack.acceptedAt
+  ) return false;
+  if (
+    ack.completedAt !== null &&
+    (typeof ack.completedAt !== "string" ||
+      !Number.isFinite(Date.parse(ack.completedAt)) ||
+      new Date(ack.completedAt).toISOString() !== ack.completedAt)
+  ) return false;
+  if (!["accepted", "completed", "cancelled", "failed"].includes(String(ack.result))) return false;
+  if (ack.result === "accepted" && ack.completedAt !== null) return false;
+  if (ack.result !== "accepted" && ack.completedAt === null) return false;
+  if (
+    ack.message !== null &&
+    (typeof ack.message !== "string" || ack.message.length > MAX_CONTROL_MESSAGE_LENGTH)
+  ) return false;
+  return true;
+}
+
+type StrictJsonRead =
+  | { kind: "missing" }
+  | { kind: "malformed" }
+  | { kind: "value"; value: unknown };
+
+async function readControlJsonStrict(filePath: string): Promise<StrictJsonRead> {
+  let stat: fs.Stats;
+  try {
+    stat = await fsp.lstat(filePath);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return { kind: "missing" };
+    throw err;
+  }
+  if (!stat.isFile() || stat.isSymbolicLink()) return { kind: "malformed" };
+  let content: string;
+  try {
+    content = await fsp.readFile(filePath, "utf8");
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return { kind: "missing" };
+    throw err;
+  }
+  try {
+    return { kind: "value", value: JSON.parse(content) as unknown };
+  } catch (err) {
+    if (err instanceof SyntaxError) return { kind: "malformed" };
+    throw err;
+  }
+}
+
+async function quarantineControlEntry(
+  paths: ControlQueuePaths,
+  sourcePath: string
+): Promise<boolean> {
+  const quarantinePath = path.join(
+    paths.quarantine,
+    `${createId("malformed")}.control`
+  );
+  try {
+    await fsp.rename(sourcePath, quarantinePath);
+    return true;
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw err;
+  }
 }
 
 export async function enqueueControlRequest(
@@ -503,34 +637,52 @@ export async function enqueueControlRequest(
   type: ControlRequest["type"],
   message: string | null = null
 ): Promise<ControlRequest> {
+  if (type !== "STOP" && type !== "INTERRUPT") {
+    throw new Error(`Unsupported control request type: ${String(type)}`);
+  }
+  if (message !== null && typeof message !== "string") {
+    throw new Error("Control request message must be a string or null.");
+  }
+  const normalizedMessage = message?.trim() || null;
+  if (normalizedMessage && normalizedMessage.length > MAX_CONTROL_MESSAGE_LENGTH) {
+    throw new Error(`Control request message exceeds ${MAX_CONTROL_MESSAGE_LENGTH} characters.`);
+  }
   await ensureControlQueue(paths);
   const request: ControlRequest = {
     requestId: createId("control"),
     type,
     createdAt: new Date().toISOString(),
-    message: message?.trim() || null,
+    message: normalizedMessage,
   };
+  assertSafeControlRequestId(request.requestId);
   await atomicWriteJsonFile(path.join(paths.requests, `${request.requestId}.json`), request);
   return request;
 }
 
 export interface ClaimedControlRequest {
   request: ControlRequest;
-  processingPath: string;
 }
 
 export async function claimNextControlRequest(
   paths: ControlQueuePaths
 ): Promise<ClaimedControlRequest | null> {
   await ensureControlQueue(paths);
-  const files = (await fsp.readdir(paths.requests).catch(() => []))
-    .filter((fileName) => fileName.endsWith(".json"));
+  const entries = await fsp.readdir(paths.requests, { withFileTypes: true });
   const candidates: Array<{ request: ControlRequest; fileName: string }> = [];
-  for (const fileName of files) {
-    const request = await readJsonFile<ControlRequest>(path.join(paths.requests, fileName));
-    if (request && (request.type === "STOP" || request.type === "INTERRUPT")) {
-      candidates.push({ request, fileName });
+  for (const entry of entries) {
+    if (CONTROL_ATOMIC_TEMP_PATTERN.test(entry.name)) continue;
+    const sourcePath = path.join(paths.requests, entry.name);
+    if (!entry.isFile()) {
+      await quarantineControlEntry(paths, sourcePath);
+      continue;
     }
+    const read = await readControlJsonStrict(sourcePath);
+    if (read.kind === "missing") continue;
+    if (read.kind !== "value" || !validControlRequest(read.value, entry.name)) {
+      await quarantineControlEntry(paths, sourcePath);
+      continue;
+    }
+    candidates.push({ request: read.value, fileName: entry.name });
   }
   candidates.sort((a, b) => {
     if (a.request.type !== b.request.type) return a.request.type === "STOP" ? -1 : 1;
@@ -539,40 +691,76 @@ export async function claimNextControlRequest(
 
   for (const candidate of candidates) {
     const sourcePath = path.join(paths.requests, candidate.fileName);
-    const processingPath = path.join(paths.processing, candidate.fileName);
+    const processingPath = controlFilePath(paths.processing, candidate.request.requestId);
     try {
       await fsp.rename(sourcePath, processingPath);
-      const ack: ControlAck = {
-        requestId: candidate.request.requestId,
-        type: candidate.request.type,
-        acceptedAt: new Date().toISOString(),
-        completedAt: null,
-        result: "accepted",
-        message: null,
-      };
-      await atomicWriteJsonFile(path.join(paths.acks, candidate.fileName), ack);
-      return { request: candidate.request, processingPath };
-    } catch {
-      // Another process claimed it.
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === "ENOENT" || code === "EEXIST") continue;
+      throw err;
     }
+    // Re-read after the atomic claim so a pre-rename validation/swap race cannot
+    // substitute a different request under the validated filename.
+    const claimedRead = await readControlJsonStrict(processingPath);
+    if (
+      claimedRead.kind !== "value" ||
+      !validControlRequest(claimedRead.value, candidate.fileName)
+    ) {
+      if (claimedRead.kind !== "missing") await quarantineControlEntry(paths, processingPath);
+      continue;
+    }
+    const ack: ControlAck = {
+      requestId: claimedRead.value.requestId,
+      type: claimedRead.value.type,
+      acceptedAt: new Date().toISOString(),
+      completedAt: null,
+      result: "accepted",
+      message: null,
+    };
+    await atomicWriteJsonFile(controlFilePath(paths.acks, claimedRead.value.requestId), ack);
+    return { request: claimedRead.value };
   }
   return null;
 }
 
 export async function recoverClaimedControlRequests(paths: ControlQueuePaths): Promise<void> {
   await ensureControlQueue(paths);
-  const files = (await fsp.readdir(paths.processing).catch(() => []))
-    .filter((fileName) => fileName.endsWith(".json"));
-  for (const fileName of files) {
-    const processingPath = path.join(paths.processing, fileName);
-    const request = await readJsonFile<ControlRequest>(processingPath);
-    if (!request) continue;
-    const ack = await readJsonFile<ControlAck>(path.join(paths.acks, fileName));
-    if (ack?.completedAt) {
-      await fsp.rm(processingPath, { force: true }).catch(() => {});
+  const entries = await fsp.readdir(paths.processing, { withFileTypes: true });
+  for (const entry of entries) {
+    if (CONTROL_ATOMIC_TEMP_PATTERN.test(entry.name)) continue;
+    const processingPath = path.join(paths.processing, entry.name);
+    if (!entry.isFile()) {
+      await quarantineControlEntry(paths, processingPath);
       continue;
     }
-    await fsp.rename(processingPath, path.join(paths.requests, fileName)).catch(() => {});
+    const requestRead = await readControlJsonStrict(processingPath);
+    if (requestRead.kind === "missing") continue;
+    if (requestRead.kind !== "value" || !validControlRequest(requestRead.value, entry.name)) {
+      await quarantineControlEntry(paths, processingPath);
+      continue;
+    }
+    const request = requestRead.value;
+    const ackPath = controlFilePath(paths.acks, request.requestId);
+    const ackRead = await readControlJsonStrict(ackPath);
+    if (ackRead.kind === "malformed" || (
+      ackRead.kind === "value" && !validControlAck(ackRead.value, request.requestId, request.type)
+    )) {
+      await quarantineControlEntry(paths, ackPath);
+    }
+    if (
+      ackRead.kind === "value" &&
+      validControlAck(ackRead.value, request.requestId, request.type) &&
+      ackRead.value.completedAt
+    ) {
+      await fsp.rm(processingPath, { force: true });
+      continue;
+    }
+    try {
+      await fsp.rename(processingPath, controlFilePath(paths.requests, request.requestId));
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code !== "ENOENT" && code !== "EEXIST") throw err;
+    }
   }
 }
 
@@ -582,9 +770,42 @@ export async function completeControlRequest(
   result: ControlAck["result"],
   message: string | null = null
 ): Promise<void> {
-  const existing = await readJsonFile<ControlAck>(
-    path.join(paths.acks, `${claimed.request.requestId}.json`)
-  );
+  if (result !== "completed" && result !== "cancelled" && result !== "failed") {
+    throw new Error(`Unsupported completed control result: ${String(result)}`);
+  }
+  if (message !== null && typeof message !== "string") {
+    throw new Error("Control ACK message must be a string or null.");
+  }
+  if (message !== null && message.length > MAX_CONTROL_MESSAGE_LENGTH) {
+    throw new Error(`Control ACK message exceeds ${MAX_CONTROL_MESSAGE_LENGTH} characters.`);
+  }
+  const requestId = assertSafeControlRequestId(claimed.request.requestId);
+  if (!validControlRequest(claimed.request, `${requestId}.json`)) {
+    throw new Error(`Malformed claimed control request: ${requestId}`);
+  }
+  const expectedProcessingPath = controlFilePath(paths.processing, requestId);
+  const processingRead = await readControlJsonStrict(expectedProcessingPath);
+  if (
+    processingRead.kind !== "value" ||
+    !validControlRequest(processingRead.value, `${requestId}.json`) ||
+    JSON.stringify(processingRead.value) !== JSON.stringify(claimed.request)
+  ) {
+    if (processingRead.kind !== "missing") {
+      await quarantineControlEntry(paths, expectedProcessingPath);
+    }
+    throw new Error(`Claimed control request changed before completion: ${requestId}`);
+  }
+  const ackPath = controlFilePath(paths.acks, requestId);
+  const existingRead = await readControlJsonStrict(ackPath);
+  if (
+    existingRead.kind === "malformed" ||
+    (existingRead.kind === "value" &&
+      !validControlAck(existingRead.value, requestId, claimed.request.type))
+  ) {
+    await quarantineControlEntry(paths, ackPath);
+    throw new Error(`Malformed control ACK for request: ${requestId}`);
+  }
+  const existing = existingRead.kind === "value" ? existingRead.value as ControlAck : null;
   const ack: ControlAck = {
     requestId: claimed.request.requestId,
     type: claimed.request.type,
@@ -593,15 +814,24 @@ export async function completeControlRequest(
     result,
     message,
   };
-  await atomicWriteJsonFile(path.join(paths.acks, `${claimed.request.requestId}.json`), ack);
-  await fsp.rm(claimed.processingPath, { force: true }).catch(() => {});
+  await atomicWriteJsonFile(ackPath, ack);
+  await fsp.rm(expectedProcessingPath, { force: true });
 }
 
 export async function readControlAck(
   paths: ControlQueuePaths,
   requestId: string
 ): Promise<ControlAck | null> {
-  return readJsonFile<ControlAck>(path.join(paths.acks, `${requestId}.json`));
+  await ensureControlQueue(paths);
+  const safeId = assertSafeControlRequestId(requestId);
+  const ackPath = controlFilePath(paths.acks, safeId);
+  const read = await readControlJsonStrict(ackPath);
+  if (read.kind === "missing") return null;
+  if (read.kind !== "value" || !validControlAck(read.value, safeId)) {
+    await quarantineControlEntry(paths, ackPath);
+    throw new Error(`Malformed control ACK for request: ${safeId}`);
+  }
+  return read.value;
 }
 
 export async function importLegacyControlFiles(

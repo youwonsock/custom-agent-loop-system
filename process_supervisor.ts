@@ -16,6 +16,54 @@ type AnyObj = Record<string, unknown>;
 const MIN_RAW_LOG_BYTES = 8 * 1024 * 1024;
 const MAX_RAW_LOG_BYTES = 32 * 1024 * 1024;
 const REDACTION_MARKER = "[REDACTED]";
+const EXIT_DATA_DRAIN_MS = 25;
+const RAW_LOG_CLOSE_TIMEOUT_MS = 5_000;
+
+async function openRawLogStream(filePath: string): Promise<fs.WriteStream> {
+  const descriptor = await new Promise<number>((resolve, reject) => {
+    fs.open(filePath, "a", 0o600, (err, fd) => {
+      if (err) reject(err);
+      else resolve(fd);
+    });
+  });
+  try {
+    const stat = await new Promise<fs.Stats>((resolve, reject) => {
+      fs.fstat(descriptor, (err, value) => {
+        if (err) reject(err);
+        else resolve(value);
+      });
+    });
+    if (!stat.isFile()) {
+      const error = new Error(`Raw log path is not a regular file: ${filePath}`) as NodeJS.ErrnoException;
+      error.code = "EISDIR";
+      throw error;
+    }
+    // `mode` on fs.open only applies when the file is newly created. Tighten an
+    // existing attempt log through the already-validated descriptor as well.
+    await new Promise<void>((resolve, reject) => {
+      fs.fchmod(descriptor, 0o600, (err) => {
+        if (err) reject(err);
+        else resolve();
+      });
+    });
+    return fs.createWriteStream(filePath, {
+      fd: descriptor,
+      autoClose: true,
+      encoding: "utf8",
+    });
+  } catch (err) {
+    try { fs.closeSync(descriptor); } catch { /* already closed */ }
+    throw err;
+  }
+}
+
+function errorDescription(err: unknown): string {
+  if (err instanceof Error) {
+    const code = (err as NodeJS.ErrnoException).code;
+    return code && !err.message.includes(code) ? `${code}: ${err.message}` : err.message;
+  }
+  return String(err);
+}
 
 function fixedLengthRedaction(length: number): string {
   if (length <= REDACTION_MARKER.length) return REDACTION_MARKER.slice(0, length);
@@ -170,6 +218,15 @@ export function isInteractiveAccessPrompt(value: string): boolean {
     /(?:allow|grant)\b.{0,120}(?:\[y\/n\]|\(y\/n\)|yes\/no)/i.test(normalized) ||
     /(?:permission|access)\s+(?:is\s+)?(?:required|requested|needed)/i.test(normalized) ||
     /do you want to allow\b/i.test(normalized)
+  );
+}
+
+export function isInteractiveConfirmationPrompt(value: string): boolean {
+  const normalized = stripTerminalControlSequences(value).replace(/\s+/g, " ").trim();
+  if (!normalized) return false;
+  return (
+    /(?:\[|\()(?:y\s*\/\s*n|yes\s*\/\s*no)(?:\]|\))/i.test(normalized) ||
+    /\b(?:continue|proceed|confirm|apply|overwrite|execute|run command|allow)\b.{0,80}(?:\(y\)|\[y\]|type y|enter y)/i.test(normalized)
   );
 }
 
@@ -373,8 +430,101 @@ export async function terminateProcessTreeBounded(
 export class ProcessSupervisor {
   async run(options: ProcessSupervisorOptions): Promise<SupervisorResult> {
     const startedAt = new Date().toISOString();
-    await fsp.mkdir(path.dirname(options.rawLogPath), { recursive: true });
-    const rawLog = fs.createWriteStream(options.rawLogPath, { flags: "a", encoding: "utf8" });
+    const preSpawnLogFailure = (err: unknown): SupervisorResult => ({
+      pid: -1,
+      outcome: "spawn_error",
+      // Reuse the existing non-retryable permission classification: loss of
+      // orchestration evidence requires local storage repair/user action, not
+      // repeated provider attempts. No persisted state enum is added.
+      failureKind: "permission",
+      failureMessage: `Raw log could not be opened: ${errorDescription(err)}`,
+      exitCode: -1,
+      output: "",
+      assistantText: "",
+      events: [],
+      cliSessionId: null,
+      startedAt,
+      endedAt: new Date().toISOString(),
+      timedOut: false,
+      cancelled: false,
+      rawLogPath: options.rawLogPath,
+      controlRequest: null,
+      autoInjected: [],
+    });
+    let rawLog: fs.WriteStream;
+    try {
+      await fsp.mkdir(path.dirname(options.rawLogPath), { recursive: true });
+      // Supplying an already-open descriptor prevents createWriteStream's
+      // asynchronous open errors from becoming an unhandled EventEmitter error.
+      // A bad path therefore fails before the provider process is spawned.
+      rawLog = await openRawLogStream(options.rawLogPath);
+    } catch (err) {
+      return preSpawnLogFailure(err);
+    }
+    let rawLogFailure: unknown = null;
+    let onRawLogFailure: ((err: unknown) => void) | null = null;
+    const recordRawLogFailure = (err: unknown): void => {
+      if (rawLogFailure === null) rawLogFailure = err;
+      onRawLogFailure?.(err);
+    };
+    // Keep this listener installed for the entire stream lifetime, including
+    // final close, so no filesystem error can surface as an uncaught event.
+    rawLog.on("error", recordRawLogFailure);
+    const finalizeRawLog = (baseResult: SupervisorResult): Promise<SupervisorResult> =>
+      new Promise((resolve) => {
+        let settled = false;
+        let closeTimer: NodeJS.Timeout | null = null;
+        const settle = (closeFailure?: unknown): void => {
+          if (settled) return;
+          settled = true;
+          if (closeTimer) clearTimeout(closeTimer);
+          if (closeFailure !== undefined && rawLogFailure === null) {
+            rawLogFailure = closeFailure;
+          }
+          if (rawLogFailure !== null) {
+            const logMessage = `Raw log I/O failure: ${errorDescription(rawLogFailure)}`;
+            if (baseResult.failureKind === "orphaned_process") {
+              resolve({
+                ...baseResult,
+                failureMessage: `${baseResult.failureMessage ?? "Provider process could not be terminated"}; ${logMessage}`,
+              });
+            } else {
+              resolve({
+                ...baseResult,
+                outcome: "spawn_error",
+                failureKind: "permission",
+                failureMessage: logMessage,
+                exitCode: -1,
+                timedOut: false,
+                cancelled: false,
+                controlRequest: null,
+              });
+            }
+            return;
+          }
+          resolve(baseResult);
+        };
+        rawLog.once("close", () => settle());
+        closeTimer = setTimeout(() => {
+          const timeoutError = new Error(
+            `Raw log did not close within ${RAW_LOG_CLOSE_TIMEOUT_MS}ms`
+          );
+          recordRawLogFailure(timeoutError);
+          rawLog.destroy();
+          settle(timeoutError);
+        }, RAW_LOG_CLOSE_TIMEOUT_MS);
+        if (rawLog.destroyed) {
+          settle(rawLogFailure ?? new Error("Raw log stream closed unexpectedly"));
+          return;
+        }
+        try {
+          rawLog.end();
+        } catch (err) {
+          recordRawLogFailure(err);
+          rawLog.destroy();
+          settle(err);
+        }
+      });
     const sensitiveValues = [...new Set((options.sensitiveValues ?? []).filter(Boolean))]
       .sort((left, right) => right.length - left.length);
     const redactor = new StreamingRedactor(sensitiveValues);
@@ -385,15 +535,25 @@ export class ProcessSupervisor {
     let rawLogBytesWritten = 0;
     let rawLogTruncated = false;
     const writeRawLog = (value: string): void => {
-      if (!value || rawLogTruncated) return;
+      if (!value || rawLogTruncated || rawLogFailure !== null) return;
       const remaining = maximumRawLogBytes - rawLogBytesWritten;
       const prefix = utf8Prefix(value, remaining);
       if (prefix) {
-        rawLog.write(prefix);
-        rawLogBytesWritten += Buffer.byteLength(prefix, "utf8");
+        try {
+          rawLog.write(prefix);
+          rawLogBytesWritten += Buffer.byteLength(prefix, "utf8");
+        } catch (err) {
+          recordRawLogFailure(err);
+          return;
+        }
       }
       if (Buffer.byteLength(value, "utf8") > remaining) {
-        rawLog.write("\n[AGENT_LOOP_LOG_TRUNCATED]\n");
+        try {
+          rawLog.write("\n[AGENT_LOOP_LOG_TRUNCATED]\n");
+        } catch (err) {
+          recordRawLogFailure(err);
+          return;
+        }
         rawLogTruncated = true;
       }
     };
@@ -409,9 +569,8 @@ export class ProcessSupervisor {
         useConpty: options.useConpty,
       });
     } catch (err) {
-      rawLog.end();
       const message = err instanceof Error ? err.message : String(err);
-      return {
+      return finalizeRawLog({
         pid: -1,
         outcome: "spawn_error",
         failureKind: "spawn_error",
@@ -428,7 +587,7 @@ export class ProcessSupervisor {
         rawLogPath: options.rawLogPath,
         controlRequest: null,
         autoInjected: [],
-      };
+      });
     }
 
     const pid = child.pid;
@@ -456,6 +615,7 @@ export class ProcessSupervisor {
     let activityTimer: NodeJS.Timeout | null = null;
     let phaseTimer: NodeJS.Timeout | null = null;
     let controlTimer: NodeJS.Timeout | null = null;
+    let exitDrainTimer: NodeJS.Timeout | null = null;
     let controlPollRunning = false;
     const absoluteDeadlineAtMs = Math.max(
       Date.now() + 1,
@@ -489,10 +649,12 @@ export class ProcessSupervisor {
       if (activityTimer) clearTimeout(activityTimer);
       if (phaseTimer) clearTimeout(phaseTimer);
       if (controlTimer) clearInterval(controlTimer);
+      if (exitDrainTimer) clearTimeout(exitDrainTimer);
       transportTimer = null;
       activityTimer = null;
       phaseTimer = null;
       controlTimer = null;
+      exitDrainTimer = null;
     };
 
     let resolveResult: ((result: SupervisorResult) => void) | null = null;
@@ -537,7 +699,7 @@ export class ProcessSupervisor {
       };
       // Do not publish the attempt result until the log stream has flushed. This
       // keeps archive byte counts and immediate post-attempt diagnostics reliable.
-      rawLog.end(() => resolveResult!(finalResult));
+      void finalizeRawLog(finalResult).then((result) => resolveResult!(result));
     };
 
     const terminate = async (
@@ -572,6 +734,17 @@ export class ProcessSupervisor {
       }
       finish(intendedOutcome, intendedFailure, message, cancelled);
     };
+
+    onRawLogFailure = (err) => {
+      if (resolved || terminating) return;
+      void terminate(
+        "spawn_error",
+        "spawn_error",
+        `Raw log I/O failure stopped provider execution: ${errorDescription(err)}`,
+        false
+      );
+    };
+    if (rawLogFailure !== null) onRawLogFailure(rawLogFailure);
 
     const armInitialTransportTimer = (): void => {
       if (transportTimer) clearTimeout(transportTimer);
@@ -719,17 +892,16 @@ export class ProcessSupervisor {
       const interaction = options.interactionWhitelist.find((value) =>
         lower.includes(value.toLowerCase())
       );
-      if (interaction && !destructive) {
-        try {
-          child.write("y\n");
-          autoInjected.push({
-            prompt: trimmed,
-            response: "y",
-            timestamp: new Date().toISOString(),
-          });
-        } catch {
-          // The process may have exited between output and response.
-        }
+      if (destructive || interaction || isInteractiveConfirmationPrompt(trimmed)) {
+        // Text emitted by a provider is not an authorization channel. Safe
+        // non-interactive behavior must be selected through structured adapter
+        // flags; unknown confirmation prompts are denied rather than answered.
+        void terminate(
+          "process_exit",
+          "permission",
+          `Provider requested interactive confirmation; automatic approval is disabled: ${trimmed.slice(0, 500)}`,
+          false
+        );
       }
     }
 
@@ -756,16 +928,24 @@ export class ProcessSupervisor {
     });
 
     child.onExit((event) => {
+      if (exitSeen) return;
       exitSeen = true;
       actualExitCode = event.exitCode;
       resolveExit?.();
       if (terminating || resolved) return;
-      finish(
-        event.exitCode === 0 ? "succeeded" : "process_exit",
-        event.exitCode === 0 ? null : "process_exit",
-        event.exitCode === 0 ? null : `Process exited with code ${event.exitCode}`,
-        false
-      );
+      // node-pty can deliver onExit before the final onData callback. Keep data
+      // acceptance open for one short bounded drain window so the last assistant
+      // event (and any split streaming-redactor carry) is not discarded.
+      clearRuntimeTimers();
+      exitDrainTimer = setTimeout(() => {
+        exitDrainTimer = null;
+        finish(
+          event.exitCode === 0 ? "succeeded" : "process_exit",
+          event.exitCode === 0 ? null : "process_exit",
+          event.exitCode === 0 ? null : `Process exited with code ${event.exitCode}`,
+          false
+        );
+      }, EXIT_DATA_DRAIN_MS);
     });
 
     armInitialTransportTimer();
@@ -786,7 +966,16 @@ export class ProcessSupervisor {
                 : `User requested interrupt: ${claimed.request.message ?? ""}`;
             void terminate("cancelled", "cancelled", message, true);
           })
-          .catch(() => {})
+          .catch((err: unknown) => {
+            if (terminating || resolved) return;
+            const reason = err instanceof Error ? err.message : String(err);
+            void terminate(
+              "process_exit",
+              "permission",
+              `Control queue polling failed; provider execution was stopped: ${reason.slice(0, 500)}`,
+              false
+            );
+          })
           .finally(() => {
             controlPollRunning = false;
           });

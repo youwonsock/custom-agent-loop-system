@@ -5,6 +5,12 @@ import { LoopClient } from "./loopClient";
 import { LoopWebviewPanel } from "./webviewPanel";
 import { PlanReviewViewProvider } from "./planReviewView";
 import { decideRecoveryAction } from "./resilience";
+import { activationSideEffectsAllowed } from "./workspaceExecutionPolicy";
+import {
+  assertPathOutsideBases,
+  resolveConfiguredDataRoot,
+  runWithIsolatedDataRoot,
+} from "./pathSafety";
 
 let store: StateStore | undefined;
 let client: LoopClient | undefined;
@@ -16,7 +22,20 @@ let recoveryPassPromise: Promise<void> | null = null;
 let recoveryPassPending = false;
 let recoveryMonitorEnabled = false;
 
+function requireTrustedWorkspace(action: string): boolean {
+  if (vscode.workspace.isTrusted) return true;
+  void vscode.window.showWarningMessage(
+    `Agent Loop cannot ${action} until this workspace is trusted.`
+  );
+  return false;
+}
+
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
+  const activationAllowed = activationSideEffectsAllowed(vscode.workspace.isTrusted);
+  if (!activationAllowed) {
+    console.warn("[agentLoop] Activation side effects are disabled for an untrusted workspace.");
+    return;
+  }
   setGlobalContext(context);
   globalContext = context;
 
@@ -24,16 +43,33 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   store = new StateStore(config);
   client = new LoopClient(config, store);
 
-  store.ensureInitialized().catch((err) => {
-    console.error("[agentLoop] Failed to initialize store:", err);
-  });
-
-  store.startPolling(config.pollIntervalMs);
+  const protectedWorkspaceRoots = (): string[] =>
+    (vscode.workspace.workspaceFolders ?? []).map((folder) => folder.uri.fsPath);
+  const assertSafeDataRoot = async (): Promise<string> => {
+    const root = await store!.getRootDir();
+    try {
+      return await assertPathOutsideBases(
+        root,
+        protectedWorkspaceRoots(),
+        "Agent Loop data root"
+      );
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      throw new Error(`${reason} Clear "agentLoop.rootDir" to use VS Code global storage.`);
+    }
+  };
+  const ensureSafeInitialized = async (): Promise<void> => {
+    const root = await store!.getRootDir();
+    await runWithIsolatedDataRoot(root, protectedWorkspaceRoots(), async () => {
+      await store!.ensureInitialized();
+    });
+  };
 
   const sessionExplorerProvider = new SessionExplorerProvider(store);
 
   const updateNoSessionsContext = async () => {
     try {
+      await assertSafeDataRoot();
       const registry = await store!.readRegistry();
       const noSessions = !registry.sessionMetas || registry.sessionMetas.length === 0;
       await vscode.commands.executeCommand("setContext", "agentLoop.noSessions", noSessions);
@@ -44,10 +80,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   store.onChange(() => {
     updateNoSessionsContext().catch(() => {});
   });
-  updateNoSessionsContext().catch(() => {});
 
   try {
-    await store.ensureInitialized();
+    await ensureSafeInitialized();
+    store.startPolling(config.pollIntervalMs);
     startRecoveryMonitor(store, client, config.heartbeatIntervalMs);
     await scheduleRecoveryPass(store, client);
     const autoOpenedFlag = "agentLoop.panelAutoOpened";
@@ -61,12 +97,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       await context.globalState.update(autoOpenedFlag, true);
     }
   } catch (err) {
-    console.error("[agentLoop] First-run auto-open failed:", err);
+    const reason = err instanceof Error ? err.message : String(err);
+    console.error("[agentLoop] Initialization was blocked:", err);
+    void vscode.window.showErrorMessage(`Agent Loop initialization blocked: ${reason}`);
   }
+  updateNoSessionsContext().catch(() => {});
 
   context.subscriptions.push(
     vscode.commands.registerCommand("agentLoop.showPanel", async (sessionId?: string) => {
-      await store!.ensureInitialized();
+      if (!requireTrustedWorkspace("open the control panel")) return;
+      await ensureSafeInitialized();
       const panel = LoopWebviewPanel.getInstance(context, store!, client!, config);
       panel.show();
       if (sessionId) {
@@ -76,13 +116,15 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }),
 
     vscode.commands.registerCommand("agentLoop.newSession", async () => {
-      await store!.ensureInitialized();
+      if (!requireTrustedWorkspace("start a new session")) return;
+      await ensureSafeInitialized();
       const panel = LoopWebviewPanel.getInstance(context, store!, client!, config);
       panel.postFocusComposer();
     }),
 
     vscode.commands.registerCommand("agentLoop.resumeSession", async () => {
-      await store!.ensureInitialized();
+      if (!requireTrustedWorkspace("resume a session")) return;
+      await ensureSafeInitialized();
       const registry = await store!.readRegistry();
       if (registry.sessionMetas.length === 0) {
         vscode.window.showInformationMessage("Agent Loop: No sessions found to resume.");
@@ -105,14 +147,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }),
 
     vscode.commands.registerCommand("agentLoop.discoverModels", async () => {
-      await store!.ensureInitialized();
+      if (!requireTrustedWorkspace("discover models")) return;
+      await ensureSafeInitialized();
       const panel = LoopWebviewPanel.getInstance(context, store!, client!, config);
       panel.show();
       panel.postDiscoverModels();
     }),
 
     vscode.commands.registerCommand("agentLoop.stopSession", async () => {
-      await store!.ensureInitialized();
+      if (!requireTrustedWorkspace("stop a session")) return;
+      await ensureSafeInitialized();
       const registry = await store!.readRegistry();
       const runningMetaIds = registry.sessionMetas
         .filter((m) => m.status === "RUNNING" || m.status === "RECOVERING")
@@ -128,12 +172,19 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       );
       if (!picked) return;
       const panel = LoopWebviewPanel.getInstance(context, store!, client!, config);
-      await panel.requestStopSession(picked.sessionId);
-      vscode.window.showInformationMessage(`Agent Loop: Terminating session ${picked.sessionId}…`);
+      const stopped = await panel.requestStopSession(picked.sessionId);
+      if (stopped) {
+        vscode.window.showInformationMessage(`Agent Loop: Session ${picked.sessionId} stopped.`);
+      } else {
+        vscode.window.showWarningMessage(
+          `Agent Loop: Session ${picked.sessionId} could not be verified as stopped.`
+        );
+      }
     }),
 
     vscode.commands.registerCommand("agentLoop.deleteSession", async (arg?: { sessionId?: string }) => {
-      await store!.ensureInitialized();
+      if (!requireTrustedWorkspace("delete a session")) return;
+      await ensureSafeInitialized();
       const targetId = arg?.sessionId;
       const registry = await store!.readRegistry();
       let sessionId: string | undefined = targetId;
@@ -181,20 +232,59 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       sessionExplorerProvider.refresh();
     }),
 
+    vscode.commands.registerCommand(
+      "agentLoop.openProgressNotes",
+      async (arg?: SessionNode | { sessionId?: string }) => {
+        if (!requireTrustedWorkspace("open progress notes")) return;
+        const sessionId = arg?.sessionId;
+        if (!sessionId) return;
+        const panel = LoopWebviewPanel.getInstance(context, store!, client!, config);
+        await panel.openProgressNotes(sessionId);
+      }
+    ),
+
     vscode.commands.registerCommand("agentLoop.refresh", async () => {
       sessionExplorerProvider.refresh();
     })
   );
 
   context.subscriptions.push(
-    vscode.workspace.onDidChangeConfiguration((e) => {
+    vscode.workspace.onDidChangeConfiguration(async (e) => {
       if (e.affectsConfiguration("agentLoop")) {
         const freshConfig = readExtensionConfig();
+        try {
+          const candidateRoot = freshConfig.rootDir
+            ? resolveConfiguredDataRoot(freshConfig.rootDir)
+            : context.globalStorageUri.fsPath;
+          await assertPathOutsideBases(
+            candidateRoot,
+            protectedWorkspaceRoots(),
+            "Agent Loop data root"
+          );
+        } catch (err) {
+          const reason = err instanceof Error ? err.message : String(err);
+          vscode.window.showErrorMessage(
+            `Agent Loop configuration rejected: ${reason} Clear "agentLoop.rootDir" to use VS Code global storage.`
+          );
+          return;
+        }
+        stopRecoveryMonitor();
+        store?.stopPolling();
         config = freshConfig;
         store?.updateConfig(freshConfig);
         client?.updateConfig(freshConfig);
-        if (store && client) {
-          startRecoveryMonitor(store, client, freshConfig.heartbeatIntervalMs);
+        if (store && client && vscode.workspace.isTrusted) {
+          try {
+            await ensureSafeInitialized();
+            store.startPolling(freshConfig.pollIntervalMs);
+            startRecoveryMonitor(store, client, freshConfig.heartbeatIntervalMs);
+          } catch (err) {
+            const reason = err instanceof Error ? err.message : String(err);
+            vscode.window.showErrorMessage(`Agent Loop configuration could not be initialized: ${reason}`);
+            return;
+          }
+        } else {
+          stopRecoveryMonitor();
         }
         try {
           globalContext?.globalState.update("agentLoop.detectedRoot", undefined).then(() => {}, () => {});
@@ -202,9 +292,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
           // ignore
         }
         sessionExplorerProvider.refresh();
-        const panel = LoopWebviewPanel.getInstance(context, store!, client!, config);
-        panel.show();
-        panel.postDiscoverModels();
         vscode.window.showInformationMessage(
           `Agent Loop: Configuration updated (cliProfile=${freshConfig.cliProfile}, cliBinary=${freshConfig.cliBinary}).`
         );
@@ -245,6 +332,7 @@ async function recoverAbnormalSessions(
   stateStore: StateStore,
   loopClient: LoopClient
 ): Promise<void> {
+  if (!vscode.workspace.isTrusted) return;
   const registry = await stateStore.readRegistry();
   for (const meta of registry.sessionMetas) {
     try {
@@ -276,6 +364,7 @@ function scheduleRecoveryPass(
   stateStore: StateStore,
   loopClient: LoopClient
 ): Promise<void> {
+  if (!vscode.workspace.isTrusted) return Promise.resolve();
   recoveryPassPending = true;
   if (!recoveryPassPromise) {
     recoveryPassPromise = (async () => {
@@ -301,6 +390,7 @@ function startRecoveryMonitor(
   heartbeatIntervalMs: number
 ): void {
   stopRecoveryMonitor();
+  if (!vscode.workspace.isTrusted) return;
   recoveryMonitorEnabled = true;
   const intervalMs = Math.max(1_000, Math.min(5_000, heartbeatIntervalMs));
   const wakeup = () => {
@@ -319,6 +409,7 @@ function stopRecoveryMonitor(): void {
     clearInterval(recoveryMonitorTimer);
     recoveryMonitorTimer = null;
   }
+  client?.setRecoveryWakeup(null);
 }
 
 class SessionExplorerProvider implements vscode.TreeDataProvider<SessionNode> {
@@ -370,7 +461,7 @@ class SessionExplorerProvider implements vscode.TreeDataProvider<SessionNode> {
 
 class SessionNode extends vscode.TreeItem {
   constructor(
-    sessionId: string,
+    public readonly sessionId: string,
     status: string,
     goal: string,
     collapsibleState: vscode.TreeItemCollapsibleState,

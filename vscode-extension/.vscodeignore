@@ -10,4 +10,6 @@ package-lock.json
 .gitignore
 .gitattributes
 *.vsix
+*.vsix.sha256
+*.vsix.cdx.json
 !core/**

@@ -11,6 +11,10 @@ function media(fileName: string): string {
   return fs.readFileSync(path.resolve(__dirname, "..", "media", fileName), "utf8");
 }
 
+function manifest(): Record<string, unknown> {
+  return JSON.parse(fs.readFileSync(path.resolve(__dirname, "..", "package.json"), "utf8")) as Record<string, unknown>;
+}
+
 test("plan review sidebar contains controls but no plan body previews", () => {
   const planReview = source("planReviewView.ts");
   assert.doesNotMatch(planReview, /choice-preview/);
@@ -151,4 +155,57 @@ test("settings omit the graph editor while supporting split file-only loop confi
   assert.doesNotMatch(client, /--pipeline/);
   assert.doesNotMatch(types, /pipelineConfigPath:\s*string;/);
   assert.doesNotMatch(extension, /openPipelineConfig/);
+});
+
+test("external process entry points are trust-gated and model discovery is explicit", () => {
+  const extension = source("extension.ts");
+  const client = source("loopClient.ts");
+  const panel = source("webviewPanel.ts");
+  const types = source("types.ts");
+  assert.match(extension, /vscode\.workspace\.isTrusted/);
+  assert.ok(
+    extension.indexOf("if (!activationAllowed)") < extension.indexOf("config = readExtensionConfig()"),
+    "the trust gate must run before configuration reads"
+  );
+  assert.match(
+    extension,
+    /runWithIsolatedDataRoot\(root,[\s\S]*await store!\.ensureInitialized\(\)/
+  );
+  assert.doesNotMatch(types, /cfg\.update\(/);
+  assert.match(client, /assertWorkspaceTrusted\("discover models"\)/);
+  assert.match(client, /assertWorkspaceTrusted\("start a session"\)/);
+  assert.match(client, /assertWorkspaceTrusted\(recovery \? "recover a session" : "resume a session"\)/);
+  assert.match(client, /assertWorkspaceTrusted\("revise a plan"\)/);
+  assert.doesNotMatch(panel, /ensureProviderCatalog/);
+  assert.doesNotMatch(panel, /Automatic provider discovery/);
+});
+
+test("manifest disables unsafe workspace modes and declares every context command", () => {
+  const pkg = manifest() as {
+    capabilities?: { untrustedWorkspaces?: { supported?: boolean }; virtualWorkspaces?: { supported?: boolean } };
+    contributes?: {
+      commands?: Array<{ command?: string }>;
+      viewsContainers?: { activitybar?: Array<{ icon?: string }> };
+      configuration?: { properties?: Record<string, { scope?: string; restricted?: boolean }> };
+    };
+  };
+  assert.equal(pkg.capabilities?.untrustedWorkspaces?.supported, false);
+  assert.equal(pkg.capabilities?.virtualWorkspaces?.supported, false);
+  assert.ok(pkg.contributes?.commands?.some((entry) => entry.command === "agentLoop.openProgressNotes"));
+  assert.equal(pkg.contributes?.viewsContainers?.activitybar?.[0]?.icon, "media/icon.svg");
+  const properties = pkg.contributes?.configuration?.properties ?? {};
+  for (const setting of ["agentLoop.cliBinary", "agentLoop.cliProfile", "agentLoop.rootDir", "agentLoop.nodeBinary", "agentLoop.orchestratorScript"]) {
+    assert.equal(properties[setting]?.scope, "machine", `${setting} must be machine-scoped`);
+    assert.equal(properties[setting]?.restricted, true, `${setting} must be restricted`);
+  }
+});
+
+test("logs and busy completion are isolated by session and operation", () => {
+  const webview = media("webview.js");
+  const planReview = source("planReviewView.ts");
+  assert.match(webview, /const logBuffers = Object\.create\(null\)/);
+  assert.match(webview, /logBuffers\[sessionId\]/);
+  assert.doesNotMatch(webview, /let logBuffer =/);
+  assert.match(planReview, /operation:\s*"interruptSession"/);
+  assert.match(planReview, /msg\.operation === "revisePlan" \|\| msg\.operation === "interruptSession"/);
 });

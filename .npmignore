@@ -1,10 +1,14 @@
 *.ts
 *.test.js
 *.map
+*.vsix.sha256
+*.vsix.cdx.json
 .github/
 .vscode/
 .goal/
 .kilo/
+artifacts/
+.tmp/
 test/
 vscode-extension/
 tsconfig.json

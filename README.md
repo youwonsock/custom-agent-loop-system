@@ -29,7 +29,7 @@ VS Code 확장은 플랫폼별 VSIX에 코어와 해당 플랫폼용 `node-pty` 
 cd vscode-extension
 npm install
 npm run package
-code --install-extension agent-loop-vscode-win32-x64-3.4.0.vsix --force
+code --install-extension agent-loop-vscode-win32-x64-3.4.1.vsix --force
 ```
 
 확장의 기본 데이터 루트는 VS Code 전역 저장소입니다. 별도 코어 저장소를 지정하지 않아도 번들된 코어를 우선 실행합니다. `agentLoop.rootDir`은 데이터 루트를, `agentLoop.orchestratorScript`는 명시적인 외부 코어 진입점을 지정할 때만 사용하십시오.

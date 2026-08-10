@@ -53,9 +53,11 @@ import {
 import { AgentAttemptRunner } from "./agent_attempt_runner";
 import {
   ProviderConfig,
+  McpServerConfig,
   ToolAccessConfig,
   buildProviderInvocation,
   claudeMcpDocument,
+  collectMcpSensitiveValues,
   enabledMcpServers,
   normalizeProviders,
   resolveMcpServerSecrets,
@@ -880,12 +882,45 @@ async function atomicWriteJson(filePath: string, data: unknown): Promise<void> {
 async function atomicWriteSensitiveJson(filePath: string, data: unknown): Promise<void> {
   await fse.ensureDir(path.dirname(filePath));
   const tmpPath = `${filePath}.tmp.${process.pid}.${Date.now()}.${crypto.randomBytes(4).toString("hex")}`;
-  await fse.writeFile(tmpPath, JSON.stringify(data, null, 2), {
-    encoding: "utf8",
-    mode: 0o600,
-  });
-  await renameWithRetry(tmpPath, filePath);
-  await fse.chmod(filePath, 0o600).catch(() => {});
+  try {
+    await fse.writeFile(tmpPath, JSON.stringify(data, null, 2), {
+      encoding: "utf8",
+      mode: 0o600,
+    });
+    await renameWithRetry(tmpPath, filePath);
+    await fse.chmod(filePath, 0o600).catch(() => {});
+  } catch (err) {
+    await fse.remove(tmpPath).catch(() => {});
+    throw err;
+  }
+}
+
+const CLAUDE_MCP_RUNTIME_FILE_PATTERN =
+  /^claude_mcp_[A-Za-z0-9_-]+\.json(?:\.tmp\.\d+\.\d+\.[a-f0-9]{8})?$/;
+
+export async function cleanupClaudeMcpRuntimeFiles(runtimeDir: string): Promise<void> {
+  let stat: fs.Stats;
+  try {
+    stat = await fse.lstat(runtimeDir);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return;
+    throw err;
+  }
+  if (stat.isSymbolicLink() || !stat.isDirectory()) {
+    throw new Error(`Unsafe Claude MCP runtime directory: ${runtimeDir}`);
+  }
+  const entries = await fse.readdir(runtimeDir, { withFileTypes: true });
+  for (const entry of entries) {
+    if (!entry.isFile() || !CLAUDE_MCP_RUNTIME_FILE_PATTERN.test(entry.name)) continue;
+    await fse.remove(path.join(runtimeDir, entry.name));
+  }
+}
+
+function runtimeSensitiveValues(runtimeMcpServers: readonly McpServerConfig[]): string[] {
+  return [...new Set([
+    ...Object.values(CORE_SECRET_VALUES),
+    ...collectMcpSensitiveValues(runtimeMcpServers),
+  ].filter(Boolean))];
 }
 
 async function atomicWriteText(filePath: string, content: string): Promise<void> {
@@ -2481,8 +2516,29 @@ function countCompletedWebSearch(result: PtyRunResult): number {
   }).length;
 }
 
+export type AbsolutePathDialect = "win32" | "posix";
+
+export function detectAbsolutePathDialect(value: string): AbsolutePathDialect | null {
+  const candidate = value.trim();
+  if (!candidate || candidate.includes("\0")) return null;
+  // path.win32.isAbsolute("/repo") is true even though that spelling is also a
+  // native POSIX path. Detect unambiguous Windows forms first and otherwise
+  // preserve leading-forward-slash paths as POSIX.
+  // Device namespaces, drive-root-relative paths, incomplete UNC paths, and
+  // double-forward-slash paths are intentionally rejected as ambiguous.
+  if (/^(?:\\\\|\/\/)[?.][\\/]/.test(candidate)) return null;
+  if (/^[A-Za-z]:[\\/]/.test(candidate)) {
+    return candidate.slice(2).includes(":") ? null : "win32";
+  }
+  if (/^\\\\[^\\/]+[\\/][^\\/]+(?:[\\/]|$)/.test(candidate)) {
+    return candidate.includes(":") ? null : "win32";
+  }
+  if (/^\/(?!\/)/.test(candidate)) return "posix";
+  return null;
+}
+
 function isAbsoluteFileSystemPath(value: string): boolean {
-  return path.win32.isAbsolute(value) || path.posix.isAbsolute(value);
+  return detectAbsolutePathDialect(value) !== null;
 }
 
 function canonicalizeAbsolutePath(value: string): string {
@@ -2490,8 +2546,11 @@ function canonicalizeAbsolutePath(value: string): string {
   if (!trimmed || trimmed.includes("\0") || !isAbsoluteFileSystemPath(trimmed)) {
     throw new Error(`Allowed path must be an absolute filesystem path: ${JSON.stringify(value)}`);
   }
-  const pathApi = path.win32.isAbsolute(trimmed) ? path.win32 : path.posix;
-  return pathApi.resolve(trimmed);
+  const dialect = detectAbsolutePathDialect(trimmed);
+  const pathApi = dialect === "win32" ? path.win32 : path.posix;
+  const normalized = pathApi.normalize(trimmed);
+  const root = pathApi.parse(normalized).root;
+  return normalized === root ? normalized : normalized.replace(/[\\\/]+$/g, "");
 }
 
 export function normalizeAdditionalAllowedPaths(
@@ -2499,23 +2558,121 @@ export function normalizeAdditionalAllowedPaths(
   targetProjectPath?: string
 ): string[] {
   const target = targetProjectPath ? canonicalizeAbsolutePath(targetProjectPath) : null;
+  const targetDialect = target ? detectAbsolutePathDialect(target) : null;
   const unique = new Map<string, string>();
   for (const value of values) {
     const normalized = canonicalizeAbsolutePath(value);
+    const dialect = detectAbsolutePathDialect(normalized);
+    if (targetDialect && dialect !== targetDialect) {
+      throw new Error(
+        `Additional allowed path uses ${dialect ?? "an invalid"} dialect but target uses ${targetDialect}: ${value}`
+      );
+    }
     if (target && pathIsContained(target, normalized)) continue;
-    const key = path.win32.isAbsolute(normalized) ? normalized.toLowerCase() : normalized;
+    const key = dialect === "win32" ? `win32:${normalized.toLowerCase()}` : `posix:${normalized}`;
     if (!unique.has(key)) unique.set(key, normalized);
   }
   return [...unique.values()];
 }
 
 function pathIsContained(targetProjectPath: string, candidatePath: string): boolean {
-  const useWindowsPaths = path.win32.isAbsolute(targetProjectPath) || path.win32.isAbsolute(candidatePath);
-  const pathApi = useWindowsPaths ? path.win32 : path.posix;
-  const target = pathApi.resolve(targetProjectPath);
-  const candidate = pathApi.resolve(candidatePath);
+  const targetDialect = detectAbsolutePathDialect(targetProjectPath);
+  const candidateDialect = detectAbsolutePathDialect(candidatePath);
+  if (!targetDialect || targetDialect !== candidateDialect) return false;
+  const pathApi = targetDialect === "win32" ? path.win32 : path.posix;
+  const targetResolved = pathApi.resolve(targetProjectPath);
+  const candidateResolved = pathApi.resolve(candidatePath);
+  const target = targetDialect === "win32" ? targetResolved.toLowerCase() : targetResolved;
+  const candidate = targetDialect === "win32" ? candidateResolved.toLowerCase() : candidateResolved;
   const relative = pathApi.relative(target, candidate);
   return relative === "" || (!relative.startsWith(`..${pathApi.sep}`) && relative !== ".." && !pathApi.isAbsolute(relative));
+}
+
+async function canonicalNativeLocation(
+  value: string,
+  label: string,
+  requireExistingDirectory: boolean
+): Promise<string> {
+  const dialect = detectAbsolutePathDialect(value);
+  const nativeDialect: AbsolutePathDialect = process.platform === "win32" ? "win32" : "posix";
+  if (!dialect) {
+    throw new Error(`${label} must be an unambiguous absolute filesystem path: ${value}`);
+  }
+  if (dialect && dialect !== nativeDialect) {
+    throw new Error(`${label} uses ${dialect} syntax on a ${nativeDialect} host: ${value}`);
+  }
+  const resolved = path.resolve(value);
+  let existingAncestor = resolved;
+  const missingSegments: string[] = [];
+  while (true) {
+    try {
+      const stat = await fse.stat(existingAncestor);
+      if (existingAncestor === resolved && !stat.isDirectory()) {
+        throw new Error(`${label} must be a directory: ${resolved}`);
+      }
+      break;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+      if (requireExistingDirectory) {
+        throw new Error(`${label} must be an existing directory: ${resolved}`);
+      }
+      const parent = path.dirname(existingAncestor);
+      if (parent === existingAncestor) throw new Error(`${label} has no existing ancestor: ${resolved}`);
+      missingSegments.unshift(path.basename(existingAncestor));
+      existingAncestor = parent;
+    }
+  }
+  const canonicalAncestor = await fse.realpath(existingAncestor);
+  return path.resolve(canonicalAncestor, ...missingSegments);
+}
+
+export async function assertMutableRootOutsideTarget(
+  mutableRoot: string,
+  targetProjectPath: string,
+  additionalWriteRoots: readonly string[] = []
+): Promise<void> {
+  const canonicalRoot = await canonicalNativeLocation(mutableRoot, "Agent Loop mutable root", false);
+  const canonicalWriteRoots = await Promise.all([
+    canonicalNativeLocation(targetProjectPath, "Target project path", true),
+    ...additionalWriteRoots.map((entry) =>
+      canonicalNativeLocation(entry, "Additional provider write root", true)
+    ),
+  ]);
+  const rootForComparison = process.platform === "win32" ? canonicalRoot.toLowerCase() : canonicalRoot;
+  for (const canonicalWriteRoot of canonicalWriteRoots) {
+    const writeRootForComparison = process.platform === "win32"
+      ? canonicalWriteRoot.toLowerCase()
+      : canonicalWriteRoot;
+    const relative = path.relative(writeRootForComparison, rootForComparison);
+    const mutableRootIsWritable =
+      relative === "" ||
+      (!relative.startsWith(`..${path.sep}`) && relative !== ".." && !path.isAbsolute(relative));
+    if (mutableRootIsWritable) {
+      throw new Error(
+        `Unsafe Agent Loop layout: mutable root '${canonicalRoot}' is inside or identical to ` +
+        `provider write root '${canonicalWriteRoot}'. Choose a --root outside every provider write root.`
+      );
+    }
+  }
+}
+
+function warnFullAccessLimitations(): void {
+  console.warn(
+    "[security] --full-access may grant the selected provider host-wide filesystem and tool access. " +
+    "Separating the Agent Loop mutable root reduces accidental writes but is not a security boundary " +
+    "for a provider running with the same OS user privileges."
+  );
+}
+
+function extractAbsolutePathCandidates(markdown: string): string[] {
+  const patterns = [
+    /(?<![A-Za-z0-9_])[A-Za-z]:[\\/][^\s`"'<>|*?]*/g,
+    /(?<!\\)\\\\[^\s`"'<>|*?]+/g,
+    /(?<![:\\A-Za-z0-9_])\\(?!\\)[^\s`"'<>|*?]+/g,
+    /(?<![A-Za-z0-9_:\/])\/(?!\/)[^\s`"'<>|*?]*/g,
+    /(?<![A-Za-z0-9_:\/])\/\/[^\s`"'<>|*?]+/g,
+  ];
+  return patterns.flatMap((pattern) => markdown.match(pattern) ?? []);
 }
 
 export function findAbsolutePathsOutsideTarget(
@@ -2534,14 +2691,13 @@ export function findAbsolutePathsOutsideAllowedRoots(
     canonicalizeAbsolutePath(targetProjectPath),
     ...normalizeAdditionalAllowedPaths(additionalAllowedPaths, targetProjectPath),
   ];
-  const candidates = path.win32.isAbsolute(targetProjectPath)
-    ? markdown.match(/(?<![A-Za-z])[A-Za-z]:[\\/][^\s`"'<>|*?]+/g) ?? []
-    : markdown.match(/\/(?:[^\s`"'<>|]+\/?)+/g) ?? [];
+  const candidates = extractAbsolutePathCandidates(markdown);
   const unique = new Map<string, string>();
   for (const rawCandidate of candidates) {
     const candidate = rawCandidate.replace(/[\]),.;:]+$/g, "");
     if (!candidate || !allowedRoots.some((root) => pathIsContained(root, candidate))) {
-      const key = path.win32.isAbsolute(candidate) ? candidate.toLowerCase() : candidate;
+      const dialect = detectAbsolutePathDialect(candidate);
+      const key = dialect === "win32" ? `win32:${candidate.toLowerCase()}` : `posix:${candidate}`;
       if (candidate) unique.set(key, candidate);
     }
   }
@@ -3402,11 +3558,17 @@ class LoopOrchestrator {
     preAcquiredOwnership?: SessionOwnershipAcquireResult,
     recoverPersistedAttempt = false
   ): Promise<void> {
+    await assertMutableRootOutsideTarget(
+      this.rootDir,
+      this.state.targetProjectPath,
+      this.state.additionalAllowedPaths
+    );
     this.registerSignalHandlers();
     const ownershipResult =
       preAcquiredOwnership ?? await this.ownership.acquire();
 
     try {
+      await cleanupClaudeMcpRuntimeFiles(path.join(this.sessionDir, "runtime"));
       await ensureControlQueue(this.controlPaths);
       await recoverClaimedControlRequests(this.controlPaths);
       if (ownershipResult.recoveredStaleOwner || recoverPersistedAttempt) {
@@ -4575,19 +4737,21 @@ class LoopOrchestrator {
       });
       await this.saveState();
 
-      const selectedMcpServers = enabledMcpServers(this.state.toolAccess);
+      const configuredMcpServers = enabledMcpServers(this.state.toolAccess);
+      const selectedMcpServers = readOnlyRole ? [] : configuredMcpServers;
       const runtimeMcpServers = resolveMcpServerSecrets(
         selectedMcpServers,
         CORE_SECRET_VALUES,
         process.env
       );
+      const sensitiveValues = runtimeSensitiveValues(runtimeMcpServers);
       const useWebSearch = this.state.toolAccess.webSearch.enabled;
       let claudeMcpConfigPath: string | undefined;
-      if (provider.adapter === "claude" && selectedMcpServers.length > 0) {
+      if (provider.adapter === "claude" && runtimeMcpServers.length > 0) {
         const runtimeDir = path.join(this.sessionDir, "runtime");
         await fse.ensureDir(runtimeDir);
+        await cleanupClaudeMcpRuntimeFiles(runtimeDir);
         claudeMcpConfigPath = path.join(runtimeDir, `claude_mcp_${attemptId}.json`);
-        await atomicWriteSensitiveJson(claudeMcpConfigPath, claudeMcpDocument(runtimeMcpServers));
       }
       const invocation = buildProviderInvocation(provider, {
         model,
@@ -4600,9 +4764,8 @@ class LoopOrchestrator {
         readOnly: readOnlyRole,
         webSearch: useWebSearch,
         webSearchMode: this.state.toolAccess.webSearch.mode,
-        mcpServers: selectedMcpServers,
+        mcpServers: runtimeMcpServers,
         claudeMcpConfigPath,
-        secretValues: CORE_SECRET_VALUES,
       });
       const interactionWhitelist = (
         provider.interactionWhitelist
@@ -4621,7 +4784,15 @@ class LoopOrchestrator {
       let progressWrite = Promise.resolve();
       let lastProgressPersistedAt = 0;
       const supervisor = new ProcessSupervisor();
-      const supervised = await supervisor.run({
+      const supervised = await (async () => {
+        try {
+          if (claudeMcpConfigPath) {
+            await atomicWriteSensitiveJson(
+              claudeMcpConfigPath,
+              claudeMcpDocument(runtimeMcpServers)
+            );
+          }
+          return await supervisor.run({
         binary: resolveBinaryOnWindows(invocation.binary),
         args: invocation.args,
         cwd: this.state.targetProjectPath,
@@ -4651,7 +4822,7 @@ class LoopOrchestrator {
         rawLogPath,
         interactionWhitelist,
         destructivePrompts: loopConfig.destructivePrompts,
-        sensitiveValues: Object.values(CORE_SECRET_VALUES),
+        sensitiveValues,
         pollControl: () => this.pollControlRequest(),
         onProgress: (progress) => {
           this.activePtyPid = progress.childPid;
@@ -4669,9 +4840,11 @@ class LoopOrchestrator {
             progressWrite = progressWrite.then(() => this.saveState()).catch(() => {});
           }
         },
-      }).finally(async () => {
-        if (claudeMcpConfigPath) await fse.remove(claudeMcpConfigPath).catch(() => {});
-      });
+          });
+        } finally {
+          if (claudeMcpConfigPath) await fse.remove(claudeMcpConfigPath).catch(() => {});
+        }
+      })();
       await progressWrite;
       this.activePtyPid = null;
       this.ownership.setChildPid(null);
@@ -5426,6 +5599,10 @@ async function cmdRun(parsed: Record<string, string>, rootDir: string): Promise<
   const idleTimeoutMs = parseIntSafe(parsed["idle-timeout"], loopConfig.defaults.idleTimeoutMs);
   const resilience = applyResilienceOverrides(parsed, resilienceSettingsFromConfig());
   validateRuntimeSettings(maxIterations, phaseTimeoutMs, idleTimeoutMs, resilience);
+  // This must precede registry initialization and provider model discovery: the
+  // provider workspace must never contain mutable orchestration state.
+  await assertMutableRootOutsideTarget(rootDir, targetProjectPath);
+  if (accessMode === "full_access") warnFullAccessLimitations();
 
   const registryPath = path.join(rootDir, loopConfig.paths.registryFileName);
   let registry = await atomicReadJson<SessionRegistry>(registryPath);
@@ -5646,6 +5823,11 @@ async function cmdResume(parsed: Record<string, string>, rootDir: string): Promi
   }
   const normalized = normalizeLoopState(loadedState);
   const state = normalized.state;
+  await assertMutableRootOutsideTarget(
+    rootDir,
+    state.targetProjectPath,
+    state.additionalAllowedPaths
+  );
   const statusBeforeResume = state.status;
   const wasRunningBeforeResume = statusBeforeResume === LoopStatus.RUNNING;
   const needsRecoveredChildCleanup =
@@ -5671,10 +5853,12 @@ async function cmdResume(parsed: Record<string, string>, rootDir: string): Promi
     if (!state.pendingAccessRequest) {
       throw new Error(`Session ${sessionId} has no pending access request to approve.`);
     }
-    state.additionalAllowedPaths = normalizeAdditionalAllowedPaths(
+    const approvedPaths = normalizeAdditionalAllowedPaths(
       [...state.additionalAllowedPaths, ...state.pendingAccessRequest.requestedPaths],
       state.targetProjectPath
     );
+    await assertMutableRootOutsideTarget(rootDir, state.targetProjectPath, approvedPaths);
+    state.additionalAllowedPaths = approvedPaths;
     state.pendingAccessRequest = null;
   }
   if (grantFullAccess || approvePendingAccess) {
@@ -5741,6 +5925,8 @@ async function cmdResume(parsed: Record<string, string>, rootDir: string): Promi
     );
     return;
   }
+
+  if (state.accessMode === "full_access") warnFullAccessLimitations();
 
   const ownership = new SessionOwnership({
     sessionDir,
@@ -5911,6 +6097,11 @@ async function cmdRevisePlan(parsed: Record<string, string>, rootDir: string): P
     process.exit(1);
   }
   const state = normalizeLoopState(stateRaw).state;
+  await assertMutableRootOutsideTarget(
+    rootDir,
+    state.targetProjectPath,
+    state.additionalAllowedPaths
+  );
 
   const planPath = path.join(sessionDir, loopConfig.paths.sessionFileNames.plan);
   let currentPlan = "";
@@ -5935,15 +6126,10 @@ Output the full revised plan as markdown only. Do not include the original promp
     ?? state.cliProfile;
   const provider = state.providerConfigs?.[providerId] ?? loopConfig.providers[providerId];
   if (!provider?.enabled) throw new Error(`Planner provider '${providerId}' is missing or disabled.`);
-  const mcpServers = enabledMcpServers(state.toolAccess);
-  const runtimeMcpServers = resolveMcpServerSecrets(mcpServers, CORE_SECRET_VALUES, process.env);
-  let claudeMcpConfigPath: string | undefined;
-  if (provider.adapter === "claude" && mcpServers.length > 0) {
-    const runtimeDir = path.join(sessionDir, "runtime");
-    await fse.ensureDir(runtimeDir);
-    claudeMcpConfigPath = path.join(runtimeDir, `claude_mcp_plan_revision_${createId("config")}.json`);
-    await atomicWriteSensitiveJson(claudeMcpConfigPath, claudeMcpDocument(runtimeMcpServers));
-  }
+  // Plan revision is a read-only role. MCP capabilities have no persisted
+  // side-effect classification, so do not even resolve their credentials.
+  const runtimeMcpServers: McpServerConfig[] = [];
+  const sensitiveValues = runtimeSensitiveValues(runtimeMcpServers);
   const invocation = buildProviderInvocation(provider, {
     model: planningRole.model ?? state.modelMapping[planningRole.modelRole],
     targetProjectPath: state.targetProjectPath,
@@ -5954,9 +6140,7 @@ Output the full revised plan as markdown only. Do not include the original promp
     readOnly: true,
     webSearch: state.toolAccess.webSearch.enabled,
     webSearchMode: state.toolAccess.webSearch.mode,
-    mcpServers,
-    claudeMcpConfigPath,
-    secretValues: CORE_SECRET_VALUES,
+    mcpServers: runtimeMcpServers,
   });
   const supervised = await new ProcessSupervisor().run({
     binary: resolveBinaryOnWindows(invocation.binary),
@@ -5986,9 +6170,7 @@ Output the full revised plan as markdown only. Do not include the original promp
     interactionWhitelist: (provider.interactionWhitelist ?? INTERACTION_WHITELIST)
       .filter((pattern) => !/(?:allow|permission|action required|run command)/i.test(pattern)),
     destructivePrompts: loopConfig.destructivePrompts,
-    sensitiveValues: Object.values(CORE_SECRET_VALUES),
-  }).finally(async () => {
-    if (claudeMcpConfigPath) await fse.remove(claudeMcpConfigPath).catch(() => {});
+    sensitiveValues,
   });
   const result: PtyRunResult = {
     ...supervised,
@@ -6076,6 +6258,12 @@ async function main(): Promise<void> {
   const parsed = parseArgs(args.slice(1));
   const rootDir = await resolveRootDir(parsed);
   loopConfig = await loadLoopConfig(rootDir);
+  if (command === "run") {
+    const targetProjectPath = parsed.target && parsed.target !== "true"
+      ? parsed.target
+      : process.cwd();
+    await assertMutableRootOutsideTarget(rootDir, targetProjectPath);
+  }
   if (command !== "init") {
     await reconcileSessionRegistry(rootDir);
   }

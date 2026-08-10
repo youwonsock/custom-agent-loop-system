@@ -5,6 +5,7 @@ import {
   assertMcpCredentialsAreReferenced,
   buildProviderInvocation,
   claudeMcpDocument,
+  collectMcpSensitiveValues,
   normalizeProviders,
   resolveMcpServerSecrets,
   validateToolAccess,
@@ -125,20 +126,19 @@ test("Codex remote MCP headers use environment references and never expose value
   assert.equal(Object.values(invocation.env).includes("Bearer top-secret"), true);
 });
 
-test("Codex read-only role sandbox overrides session full access", () => {
-  const invocation = buildProviderInvocation(DEFAULT_PROVIDERS.codex, {
-    model: "gpt-5.6-sol",
-    targetProjectPath: "C:\\repo",
-    prompt: "inspect only",
-    fullAccess: true,
-    readOnly: true,
-    webSearch: false,
-    mcpServers: [],
-  });
-  const sandboxIndex = invocation.args.indexOf("--sandbox");
-  assert.ok(sandboxIndex >= 0);
-  assert.equal(invocation.args[sandboxIndex + 1], "read-only");
-  assert.equal(invocation.args.includes("danger-full-access"), false);
+test("Codex read-only roles fail closed while inherited MCP cannot be isolated", () => {
+  assert.throws(
+    () => buildProviderInvocation(DEFAULT_PROVIDERS.codex, {
+      model: "gpt-5.6-sol",
+      targetProjectPath: "C:\\repo",
+      prompt: "inspect only",
+      fullAccess: true,
+      readOnly: true,
+      webSearch: false,
+      mcpServers: [localMcp],
+    }),
+    /read-only roles are unsupported.*MCP servers inherited/i
+  );
 });
 
 test("OpenCode-family access policies map approved roots and never bypass read-only roles", () => {
@@ -150,12 +150,34 @@ test("OpenCode-family access policies map approved roots and never bypass read-o
     fullAccess: true,
     readOnly: true,
     webSearch: false,
-    mcpServers: [],
+    mcpServers: [localMcp],
   });
   assert.equal(readOnly.args.includes("--dangerously-skip-permissions"), false);
   const openConfig = JSON.parse(readOnly.env.OPENCODE_CONFIG_CONTENT) as any;
+  assert.equal(openConfig.permission["*"], "deny");
+  assert.equal(openConfig.permission.read, "allow");
+  assert.equal(openConfig.permission.glob, "allow");
+  assert.equal(openConfig.permission.grep, "allow");
+  assert.equal(openConfig.permission.list, "allow");
   assert.equal(openConfig.permission.edit, "deny");
+  assert.equal(openConfig.permission.bash, "deny");
   assert.equal(openConfig.permission["external_directory"]["C:/outside/**"], "allow");
+  assert.equal(openConfig.mcp, undefined);
+
+  const kiloReadOnly = buildProviderInvocation(DEFAULT_PROVIDERS.kilo, {
+    model: "anthropic/model",
+    targetProjectPath: "C:\\repo",
+    prompt: "inspect",
+    fullAccess: true,
+    readOnly: true,
+    webSearch: false,
+    mcpServers: [localMcp],
+  });
+  const kiloReadOnlyConfig = JSON.parse(kiloReadOnly.env.KILO_CONFIG_CONTENT) as any;
+  assert.equal(kiloReadOnlyConfig.permission["*"], "deny");
+  assert.equal(kiloReadOnlyConfig.permission.bash, "deny");
+  assert.equal(kiloReadOnlyConfig.permission.edit, "deny");
+  assert.equal(kiloReadOnlyConfig.mcp, undefined);
 
   const askMode = buildProviderInvocation(DEFAULT_PROVIDERS.kilo, {
     model: "anthropic/model",
@@ -198,6 +220,30 @@ test("Claude invocation maps stream JSON, web tools, resume, and generated MCP d
   assert.deepEqual(claudeMcpDocument([localMcp]), {
     mcpServers: { docs: { command: "npx", args: ["-y", "docs-mcp"], env: { API_KEY: "secret" } } },
   });
+});
+
+test("Claude read-only roles expose only an explicit safe tool allowlist", () => {
+  const invocation = buildProviderInvocation(DEFAULT_PROVIDERS.claude, {
+    model: "sonnet",
+    targetProjectPath: "C:\\repo",
+    prompt: "inspect only",
+    fullAccess: true,
+    readOnly: true,
+    webSearch: true,
+    mcpServers: [localMcp],
+    claudeMcpConfigPath: "C:\\tmp\\mcp.json",
+  });
+  const toolsIndex = invocation.args.indexOf("--tools");
+  assert.ok(toolsIndex >= 0);
+  assert.equal(invocation.args[toolsIndex + 1], "Read,Glob,Grep,WebSearch,WebFetch");
+  assert.equal(invocation.args.includes("--disallowedTools"), false);
+  assert.equal(invocation.args[toolsIndex + 1].includes("Bash"), false);
+  assert.equal(invocation.args[toolsIndex + 1].includes("Task"), false);
+  assert.equal(invocation.args[toolsIndex + 1].includes("Skill"), false);
+  assert.equal(invocation.args.includes("--strict-mcp-config"), true);
+  assert.equal(invocation.args.includes("--mcp-config"), false);
+  assert.equal(invocation.args.some((arg) => arg.includes("mcp__")), false);
+  assert.equal(invocation.args.includes("--dangerously-skip-permissions"), false);
 });
 
 test("OpenCode and Kilo receive runtime MCP and web search configuration without file edits", () => {
@@ -248,6 +294,22 @@ test("persistent MCP settings reject inline credentials and accept references", 
       headers: { Authorization: "${secret:agentLoop.mcp.docs.headers.auth}" },
     }],
   }));
+});
+
+test("resolved MCP environment and header values are collected for streaming redaction", () => {
+  const servers = resolveMcpServerSecrets([{
+    ...localMcp,
+    environment: { API_KEY: "${env:DOCS_API_KEY}" },
+    headers: { Authorization: "${secret:docs.authorization}" },
+  }], {
+    "docs.authorization": "Bearer secret-storage-value",
+  }, {
+    DOCS_API_KEY: "environment-secret-value",
+  });
+  assert.deepEqual(
+    new Set(collectMcpSensitiveValues(servers)),
+    new Set(["environment-secret-value", "Bearer secret-storage-value"])
+  );
 });
 
 test("supervisor extracts only provider assistant fields and all supported session IDs", () => {

@@ -6,12 +6,15 @@ import * as path from "node:path";
 import {
   boundedAttemptTimeoutMs,
   approvalDecisionSignature,
+  assertMutableRootOutsideTarget,
   automaticRecoveryDelayMs,
   buildPrompt,
   classifyExhaustedFailureDisposition,
   classifyAgentFailure,
   cleanupRecoveredChildProcesses,
+  cleanupClaudeMcpRuntimeFiles,
   discoverCodexModels,
+  detectAbsolutePathDialect,
   deriveRequirementLedger,
   evaluateRequirementCoverage,
   advanceConvergence,
@@ -297,6 +300,111 @@ test("additional access roots are canonicalized and honored by implementation pr
     ),
     ["D:\\private\\secret.txt"]
   );
+});
+
+test("absolute path dialect detection does not reinterpret POSIX roots as Windows paths", () => {
+  assert.equal(detectAbsolutePathDialect("/repo"), "posix");
+  assert.equal(detectAbsolutePathDialect("/etc/passwd"), "posix");
+  assert.equal(detectAbsolutePathDialect("C:\\repo"), "win32");
+  assert.equal(detectAbsolutePathDialect("C:/repo"), "win32");
+  assert.equal(detectAbsolutePathDialect("\\\\server\\share\\repo"), "win32");
+  assert.equal(detectAbsolutePathDialect("\\\\?\\C:\\repo"), null);
+  assert.equal(detectAbsolutePathDialect("C:\\repo\\file.txt:secret"), null);
+  assert.equal(detectAbsolutePathDialect("\\drive-root-relative"), null);
+  assert.equal(detectAbsolutePathDialect("\\\\incomplete-server"), null);
+  assert.equal(detectAbsolutePathDialect("//ambiguous/share"), null);
+  assert.equal(detectAbsolutePathDialect("repo/relative"), null);
+  assert.deepEqual(
+    findAbsolutePathsOutsideTarget("Reject `\\drive-root-relative\\file.txt`.", "C:\\repo"),
+    ["\\drive-root-relative\\file.txt"]
+  );
+});
+
+test("POSIX, Windows, and UNC path corpora use same-dialect containment only", () => {
+  assert.deepEqual(
+    normalizeAdditionalAllowedPaths(
+      ["/repo/shared", "/repo/shared/../shared", "/repo/generated"],
+      "/repo"
+    ),
+    []
+  );
+  assert.deepEqual(
+    new Set(findAbsolutePathsOutsideAllowedRoots(
+      "Keep /repo/src/app.ts; inspect /etc/passwd and C:\\private\\secret.txt.",
+      "/repo",
+      []
+    )),
+    new Set(["/etc/passwd", "C:\\private\\secret.txt"])
+  );
+  assert.deepEqual(
+    new Set(findAbsolutePathsOutsideAllowedRoots(
+      "Keep C:\\repo\\src\\app.ts; inspect /etc/passwd and \\\\server\\share\\secret.txt.",
+      "C:\\repo",
+      []
+    )),
+    new Set(["/etc/passwd", "\\\\server\\share\\secret.txt"])
+  );
+  assert.deepEqual(
+    findAbsolutePathsOutsideAllowedRoots(
+      "Keep \\\\server\\share\\repo\\src\\app.ts; reject \\\\server\\share\\other\\secret.txt.",
+      "\\\\server\\share\\repo",
+      []
+    ),
+    ["\\\\server\\share\\other\\secret.txt"]
+  );
+  assert.throws(
+    () => normalizeAdditionalAllowedPaths(["C:\\foreign\\root"], "/repo"),
+    /dialect but target uses posix/
+  );
+});
+
+test("mutable orchestration roots fail closed when contained by the provider target", async () => {
+  const base = await fs.mkdtemp(path.join(os.tmpdir(), "agent-loop-root-layout-"));
+  try {
+    const target = path.join(base, "target");
+    const nestedRoot = path.join(target, ".agent-loop-data");
+    const siblingRoot = path.join(base, "agent-loop-data");
+    const missingSiblingRoot = path.join(base, "new-agent-loop-data");
+    await Promise.all([
+      fs.mkdir(nestedRoot, { recursive: true }),
+      fs.mkdir(siblingRoot, { recursive: true }),
+    ]);
+
+    await assert.rejects(
+      () => assertMutableRootOutsideTarget(nestedRoot, target),
+      /mutable root .* inside or identical/i
+    );
+    await assert.rejects(
+      () => assertMutableRootOutsideTarget(target, target),
+      /mutable root .* inside or identical/i
+    );
+    await assert.doesNotReject(() => assertMutableRootOutsideTarget(siblingRoot, target));
+    await assert.doesNotReject(() => assertMutableRootOutsideTarget(missingSiblingRoot, target));
+    await assert.rejects(
+      () => assertMutableRootOutsideTarget("relative-root", target),
+      /unambiguous absolute filesystem path/
+    );
+  } finally {
+    await fs.rm(base, { recursive: true, force: true });
+  }
+});
+
+test("Claude MCP cleanup removes only owned final and atomic temporary files", async () => {
+  const runtimeDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-loop-claude-mcp-"));
+  try {
+    const stale = "claude_mcp_attempt-1.json";
+    const staleTmp = "claude_mcp_attempt-2.json.tmp.123.456.0123abcd";
+    const unrelated = "keep-me.json";
+    await Promise.all([
+      fs.writeFile(path.join(runtimeDir, stale), "secret", "utf8"),
+      fs.writeFile(path.join(runtimeDir, staleTmp), "secret", "utf8"),
+      fs.writeFile(path.join(runtimeDir, unrelated), "safe", "utf8"),
+    ]);
+    await cleanupClaudeMcpRuntimeFiles(runtimeDir);
+    assert.deepEqual(await fs.readdir(runtimeDir), [unrelated]);
+  } finally {
+    await fs.rm(runtimeDir, { recursive: true, force: true });
+  }
 });
 
 test("planner, tester, and reviewer enforce their contracts", () => {

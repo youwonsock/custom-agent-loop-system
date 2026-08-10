@@ -160,6 +160,21 @@ export function resolveMcpServerSecrets(
   }));
 }
 
+/** Values materialized into provider MCP configuration and therefore requiring log redaction. */
+export function collectMcpSensitiveValues(
+  servers: readonly McpServerConfig[]
+): string[] {
+  const values = new Set<string>();
+  for (const server of servers) {
+    for (const configured of [server.environment, server.headers]) {
+      for (const value of Object.values(configured ?? {})) {
+        if (value) values.add(value);
+      }
+    }
+  }
+  return [...values];
+}
+
 export function normalizeProviders(
   input?: Record<string, Partial<ProviderConfig>> | null
 ): Record<string, ProviderConfig> {
@@ -318,16 +333,17 @@ function externalDirectoryPermission(paths: readonly string[]): Record<string, "
 }
 
 function opencodePermissionDocument(opts: ProviderInvocationOptions): Record<string, unknown> {
-  const permission: Record<string, unknown> = {
+  const permission: Record<string, unknown> = opts.readOnly ? { "*": "deny" } : {};
+  Object.assign(permission, {
     read: "allow",
     glob: "allow",
     grep: "allow",
     list: "allow",
-    bash: "allow",
+    bash: opts.readOnly ? "deny" : "allow",
     edit: opts.readOnly ? "deny" : "allow",
     websearch: opts.webSearch ? "allow" : "deny",
     webfetch: opts.webSearch ? "allow" : "deny",
-  };
+  });
   const additional = externalDirectoryPermission(opts.additionalAllowedPaths ?? []);
   if (Object.keys(additional).length > 0) permission.external_directory = additional;
   return permission;
@@ -395,7 +411,12 @@ export function buildProviderInvocation(
   opts: ProviderInvocationOptions
 ): ProviderInvocation {
   const env: Record<string, string> = {};
-  const mcpServers = resolveMcpServerSecrets(opts.mcpServers, opts.secretValues);
+  // MCP tools have no side-effect metadata in the current persisted format. Until
+  // that capability is explicit, exposing any MCP server to a read-only role would
+  // silently allow remote or local mutation outside the filesystem sandbox.
+  const mcpServers = opts.readOnly
+    ? []
+    : resolveMcpServerSecrets(opts.mcpServers, opts.secretValues);
   let args: string[];
   switch (provider.adapter) {
     case "opencode": {
@@ -424,6 +445,13 @@ export function buildProviderInvocation(
       break;
     }
     case "codex": {
+      if (opts.readOnly) {
+        throw new Error(
+          "Codex read-only roles are unsupported: the native read-only sandbox does not reliably " +
+          "disable MCP servers inherited from user configuration. Use OpenCode, Kilo, or Claude " +
+          "for read-only roles until an isolated Codex configuration home is available."
+        );
+      }
       const globalArgs: string[] = [];
       if (opts.webSearch && opts.webSearchMode === "live") globalArgs.push("--search");
       args = [...globalArgs, "exec", "--json", "--model", opts.model, "--skip-git-repo-check"];
@@ -451,7 +479,17 @@ export function buildProviderInvocation(
       for (const allowedPath of opts.additionalAllowedPaths ?? []) {
         args.push("--add-dir", path.resolve(allowedPath));
       }
-      if (opts.readOnly) args.push("--disallowedTools", "Edit,Write,NotebookEdit");
+      if (opts.readOnly) {
+        // Claude's --tools flag is an available-tool allowlist. Keep read-only
+        // roles fail-closed as the CLI adds tools over time: delegation, shell,
+        // mutation, skills, and MCP are absent unless explicitly listed here.
+        const readOnlyTools = ["Read", "Glob", "Grep"];
+        if (opts.webSearch) readOnlyTools.push("WebSearch", "WebFetch");
+        args.push("--tools", readOnlyTools.join(","));
+        // Do not merge user, project, or plugin MCP configuration into a
+        // read-only role. The explicit safe --tools allowlist excludes MCP too.
+        args.push("--strict-mcp-config");
+      }
       if (opts.resumeSessionId) args.push("--resume", opts.resumeSessionId);
       if (mcpServers.length > 0) {
         if (!opts.claudeMcpConfigPath) throw new Error("Claude MCP requires a generated config path.");
