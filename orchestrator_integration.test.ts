@@ -771,7 +771,10 @@ test("model generation timeout keeps its failure kind and reconnects the persist
       .map((line) => JSON.parse(line) as string[]);
     assert.equal(invocations.length, 2);
     const resumeFlag = invocations[1].indexOf("--session");
-    assert.ok(resumeFlag >= 0);
+    assert.ok(
+      resumeFlag >= 0,
+      (await readArtifactCorpus(root)).slice(-20_000)
+    );
     assert.equal(invocations[1][resumeFlag + 1], "transport-cli-session");
 
     const sessionDir = path.join(root, ".goal", "sessions", "transport-reconnect-session");
@@ -850,7 +853,11 @@ test("token-free transient exhaustion schedules recovery without spending interr
     assert.match(state.interruptBriefing, /0 with observed token usage/);
     assert.match(state.interruptBriefing, /Disposition: recover_transport/);
     assert.equal(state.automaticRecovery?.cycle, 1);
-    assert.equal(state.automaticRecovery?.failureKind, "idle_timeout");
+    assert.equal(
+      state.automaticRecovery?.failureKind,
+      "idle_timeout",
+      (await readArtifactCorpus(root)).slice(-20_000)
+    );
 
     await fsp.writeFile(
       path.join(root, "run"),
