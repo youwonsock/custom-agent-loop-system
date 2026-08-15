@@ -89,7 +89,7 @@ export interface AgentLoopDefinition {
 }
 
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
-const TERMINAL_TARGETS = new Set(["SUCCESS", "PAUSED"]);
+const TERMINAL_TARGETS = new Set(["SUCCESS", "PAUSED", "BLOCKED"]);
 
 export function completionContractForExecutor(
   executor: PipelineStageExecutor

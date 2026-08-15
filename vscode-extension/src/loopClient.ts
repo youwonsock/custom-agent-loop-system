@@ -12,6 +12,7 @@ import {
   WorkspaceProcessLaunch,
 } from "./workspaceExecutionPolicy";
 import { assertPathOutsideBases } from "./pathSafety";
+import { validateCoreHandshake } from "./coreProtocol";
 
 export interface NewSessionOptions {
   goal: string;
@@ -42,6 +43,7 @@ export class LoopClient {
   private activePlanRevisions = new Set<string>();
   private startingSessions = new Set<string>();
   private auxiliaryProcesses = new Set<ChildProcess>();
+  private compatibleCoreKeys = new Set<string>();
 
   constructor(
     private config: ExtensionConfig,
@@ -81,12 +83,6 @@ export class LoopClient {
         path.join(extensionContext.extensionUri.fsPath, "core", "dist", "loop_orchestrator.js")
       );
     }
-    const root = await this.store.getRootDir();
-    candidates.push(path.join(root, "dist", "loop_orchestrator.js"));
-    for (const folder of vscode.workspace.workspaceFolders ?? []) {
-      candidates.push(path.join(folder.uri.fsPath, "dist", "loop_orchestrator.js"));
-    }
-    candidates.push(path.join(process.cwd(), "dist", "loop_orchestrator.js"));
     const seen = new Set<string>();
     for (const candidate of candidates) {
       if (seen.has(candidate)) continue;
@@ -121,7 +117,9 @@ export class LoopClient {
     }
     const missing = candidates[0];
     throw new Error(
-      `Orchestrator script not found. Looked for:\n  ${missing}\nSet "Agent Loop: Root Dir" in Settings to the Custom_AgentLoopSystem install path (the folder containing dist/loop_orchestrator.js).`
+      `Orchestrator script not found. Looked for:\n  ${missing}\n` +
+      `Set "Agent Loop: Orchestrator Script" to the compiled loop_orchestrator.js path, ` +
+      `or reinstall the extension so its bundled core is available.`
     );
   }
 
@@ -138,6 +136,71 @@ export class LoopClient {
 
   private assertWorkspaceTrusted(action: string): void {
     requireWorkspaceTrust(vscode.workspace.isTrusted, action);
+  }
+
+  private async assertCoreCompatible(script: string, dataRoot: string): Promise<void> {
+    const cacheKey = `${script}\0${dataRoot}`;
+    if (this.compatibleCoreKeys.has(cacheKey)) return;
+    this.assertWorkspaceTrusted("check core compatibility");
+    const args = [
+      script,
+      "capabilities",
+      "--data-root",
+      dataRoot,
+      "--config-root",
+      dataRoot,
+    ];
+    const output = await new Promise<string>((resolve, reject) => {
+      const child = launchTrusted(vscode.workspace.isTrusted, "discoverModels", () =>
+        spawn(this.config.nodeBinary, args, {
+          cwd: dataRoot,
+          env: process.env,
+        })
+      );
+      this.auxiliaryProcesses.add(child);
+      let stdout = "";
+      let stderr = "";
+      let settled = false;
+      const timer = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        child.kill();
+        this.auxiliaryProcesses.delete(child);
+        reject(new Error("Timed out while checking Agent Loop core compatibility."));
+      }, 10_000);
+      const finish = (error?: Error): void => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        this.auxiliaryProcesses.delete(child);
+        if (error) reject(error);
+        else resolve(stdout.trim());
+      };
+      child.stdout.on("data", (chunk: Buffer) => {
+        stdout = (stdout + chunk.toString()).slice(-64 * 1024);
+      });
+      child.stderr.on("data", (chunk: Buffer) => {
+        stderr = (stderr + chunk.toString()).slice(-8 * 1024);
+      });
+      child.once("error", (error) => finish(error));
+      child.once("close", (code) => {
+        finish(
+          code === 0
+            ? undefined
+            : new Error(
+                `Agent Loop core compatibility check failed (${String(code)}): ${stderr.trim()}`
+              )
+        );
+      });
+    });
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(output);
+    } catch {
+      throw new Error("Agent Loop core returned malformed capability JSON.");
+    }
+    validateCoreHandshake(parsed);
+    this.compatibleCoreKeys.add(cacheKey);
   }
 
   private async assertIsolatedDataRoot(root: string, targetProjectPath?: string): Promise<void> {
@@ -165,7 +228,8 @@ export class LoopClient {
       vscode.window.showErrorMessage(msg);
       return { models: [], exitCode: -1, stderr: msg, command: "" };
     }
-    const args = ["models", "--root", root];
+    await this.assertCoreCompatible(script, root);
+    const args = ["models", "--data-root", root, "--config-root", root];
     const cmdStr = `${this.config.nodeBinary} ${script} ${args.join(" ")}`;
     return new Promise<{ models: string[]; exitCode: number | null; stderr: string; command: string }>((resolve) => {
       const child = launchTrusted(vscode.workspace.isTrusted, "discoverModels", () =>
@@ -205,6 +269,7 @@ export class LoopClient {
     const root = await this.store.getRootDir();
     await this.assertIsolatedDataRoot(root, opts.targetProjectPath);
     const script = await this.resolveOrchestratorScript();
+    await this.assertCoreCompatible(script, root);
     const cfg = this.liveConfig();
 
     const args: string[] = [
@@ -214,7 +279,8 @@ export class LoopClient {
       "--target", opts.targetProjectPath,
       "--binary", cfg.cliBinary,
       "--profile", cfg.cliProfile,
-      "--root", root,
+      "--data-root", root,
+      "--config-root", root,
       "--session", sessionId,
       "--max-iterations", String(cfg.maxIterations),
       "--phase-timeout", String(cfg.phaseTimeoutMs),
@@ -287,12 +353,14 @@ export class LoopClient {
       const state = await this.store.readState(sessionId);
       await this.assertIsolatedDataRoot(root, state?.targetProjectPath);
       const script = await this.resolveOrchestratorScript();
+      await this.assertCoreCompatible(script, root);
 
       const args: string[] = [
         script,
         "resume",
         "--session", sessionId,
-        "--root", root,
+        "--data-root", root,
+        "--config-root", root,
       ];
       if (recovery) args.push("--recovery");
       if (!recovery) {
@@ -650,11 +718,13 @@ export class LoopClient {
     }
     const root = await this.store.getRootDir();
     const script = await this.resolveOrchestratorScript();
+    await this.assertCoreCompatible(script, root);
     const args: string[] = [
       script,
       "revise-plan",
       "--session", sessionId,
-      "--root", root,
+      "--data-root", root,
+      "--config-root", root,
       "--message", message,
     ];
 

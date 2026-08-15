@@ -1,0 +1,103 @@
+name: Authenticated provider conformance
+
+on:
+  workflow_dispatch:
+    inputs:
+      opencode_model:
+        description: Authenticated OpenCode model identifier
+        required: true
+        default: opencode/big-pickle
+      kilo_model:
+        description: Authenticated Kilo model identifier
+        required: true
+        default: anthropic/claude-sonnet-4-5
+      codex_model:
+        description: Authenticated Codex model identifier
+        required: true
+        default: gpt-5.6-sol
+      claude_model:
+        description: Authenticated Claude model identifier
+        required: true
+        default: sonnet
+
+permissions:
+  contents: read
+
+jobs:
+  sandbox-conformance:
+    name: ${{ matrix.provider.id }} / ${{ matrix.os }}
+    environment: provider-conformance
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2025, ubuntu-24.04, macos-15]
+        provider:
+          - id: opencode
+            package: opencode-ai@1.18.14
+            model: ${{ inputs.opencode_model }}
+          - id: kilo
+            package: '@kilocode/cli@7.3.54'
+            model: ${{ inputs.kilo_model }}
+          - id: codex
+            package: '@openai/codex@0.146.1'
+            model: ${{ inputs.codex_model }}
+          - id: claude
+            package: '@anthropic-ai/claude-code@2.1.233'
+            model: ${{ inputs.claude_model }}
+    runs-on: ${{ matrix.os }}
+    env:
+      OPENCODE_API_KEY: ${{ matrix.provider.id == 'opencode' && secrets.OPENCODE_API_KEY || '' }}
+      KILO_API_KEY: ${{ matrix.provider.id == 'kilo' && secrets.KILO_API_KEY || '' }}
+      OPENAI_API_KEY: ${{ matrix.provider.id == 'codex' && secrets.OPENAI_API_KEY || '' }}
+      ANTHROPIC_API_KEY: ${{ matrix.provider.id == 'claude' && secrets.ANTHROPIC_API_KEY || '' }}
+      DISABLE_AUTOUPDATER: '1'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          # The pinned Claude CLI requires Node 22; this does not change the product's Node 18 floor.
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Install pinned provider CLI
+        run: npm install --global ${{ matrix.provider.package }}
+      - run: npm run build
+      - id: write
+        name: Authenticated write and structured-event conformance
+        continue-on-error: true
+        shell: bash
+        env:
+          PROVIDER_ID: ${{ matrix.provider.id }}
+          PROVIDER_MODEL: ${{ matrix.provider.model }}
+          REPORT_PATH: artifacts/conformance/${{ matrix.provider.id }}-${{ runner.os }}-write.json
+        run: |
+          node dist/provider_conformance.js \
+            --provider "$PROVIDER_ID" \
+            --model "$PROVIDER_MODEL" \
+            --mode write \
+            --report "$REPORT_PATH"
+      - id: readonly
+        name: Authenticated read-only or expected fail-closed conformance
+        continue-on-error: true
+        shell: bash
+        env:
+          PROVIDER_ID: ${{ matrix.provider.id }}
+          PROVIDER_MODEL: ${{ matrix.provider.model }}
+          REPORT_PATH: artifacts/conformance/${{ matrix.provider.id }}-${{ runner.os }}-read-only.json
+        run: |
+          node dist/provider_conformance.js \
+            --provider "$PROVIDER_ID" \
+            --model "$PROVIDER_MODEL" \
+            --mode read-only \
+            --report "$REPORT_PATH"
+      - if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: provider-conformance-${{ matrix.provider.id }}-${{ runner.os }}
+          path: artifacts/conformance/*.json
+          if-no-files-found: error
+          retention-days: 30
+      - if: always() && (steps.write.outcome != 'success' || steps.readonly.outcome != 'success')
+        name: Enforce conformance gate
+        run: exit 1

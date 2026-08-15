@@ -16,19 +16,14 @@ import {
   assertSafeSessionId,
   backupFileOnce,
   checkProcessLiveness,
-  claimNextControlRequest,
   collectRecoveredChildPids,
-  completeControlRequest,
   createId,
   ensureControlQueue,
   getControlQueuePaths,
-  importLegacyControlFiles,
-  recoverClaimedControlRequests,
   resolveContainedSessionPath,
   withShortFileLock,
 } from "./resilience";
 import {
-  ProcessSupervisor,
   terminateProcessTreeBounded,
 } from "./process_supervisor";
 import {
@@ -48,28 +43,102 @@ import {
   roleForStage,
   stageById,
   stageTypeForStage,
-  validatePipeline,
 } from "./pipeline";
+import {
+  compilePipeline,
+  verifyCompiledPipeline,
+} from "./pipeline_compiler";
+import {
+  completeCycleObservation,
+  deriveLegacyMaxWorkflowSteps,
+  finishCurrentActivation,
+  markCurrentActivationCompleted,
+  markUnknownMutationOutcome,
+  normalizeExecutionBudget,
+  reserveAgentAttempt,
+  reserveStageActivation,
+  BudgetExhaustion,
+} from "./execution_budget";
 import { AgentAttemptRunner } from "./agent_attempt_runner";
+import { CliOptions, runCliApplication } from "./cli_application";
+import {
+  AgentExecutionCoordinator,
+  AgentRunResult,
+  CurrentAgentExecutionCoordinator,
+  SUPERVISED_AGENT_RUNTIME,
+} from "./agent_runtime";
+import { ControlRepository, FileControlRepository } from "./control_repository";
+import {
+  AccessMode,
+  AgentRole,
+  AgentState,
+  ErrorSignature,
+  LoopState,
+  ModelMapping,
+  ReferenceIdentity,
+  ResilienceSettings,
+  StageResultState,
+  VariantMapping,
+} from "./loop_state";
+import { StageExecutorRegistry } from "./stage_executor_registry";
+import { PlanningStageExecutor } from "./planning_stage_executor";
+import { InterruptStageExecutor } from "./interrupt_stage_executor";
+import { TestStageExecutor } from "./test_stage_executor";
+import { ReviewStageExecutor } from "./review_stage_executor";
+import { ApprovalStageExecutor } from "./approval_stage_executor";
+import { ImplementationStageExecutor } from "./implementation_stage_executor";
+import { ImplementationPreflightError } from "./stage_execution_errors";
+import {
+  atomicAppendLine,
+  atomicReadJson,
+  atomicWriteJson,
+  atomicWriteText,
+  renameWithRetry,
+} from "./json_file_store";
+import {
+  ProviderCatalogEntry,
+  SessionMetaPatch,
+  SessionRegistry,
+} from "./session_contracts";
+import {
+  FileSessionRepository,
+  SessionRepository,
+  mergeAndWriteRegistryFields,
+  mergeAndWriteSessionMeta,
+  upsertSessionMeta,
+} from "./session_repository";
+import { FileSessionReporter, LoopHistoryEntry } from "./session_reporter";
+import {
+  AgentRoom,
+  AttemptEvidenceSummary,
+  FailureEvidenceSummary,
+  HandoffPayload,
+  PlanChoice,
+} from "./stage_execution_contracts";
+import { LoopStatus } from "./workflow_contracts";
+import { applyPipelineTarget } from "./workflow_engine";
+import { RootSet, canonicalizeRootSet, resolveRootSet } from "./root_set";
+import { createCoreCapabilityHandshake } from "./protocol_contract";
+import { migrateLegacyRoot } from "./root_migration";
+import { ImmutableArtifactStore } from "./authoritative_session_repository";
+import { rebuildSessionsIndex } from "./session_index";
 import {
   ProviderConfig,
   McpServerConfig,
-  ToolAccessConfig,
   buildProviderInvocation,
   claudeMcpDocument,
   collectMcpSensitiveValues,
+  collectSensitiveEnvironmentValues,
   enabledMcpServers,
   normalizeProviders,
   resolveMcpServerSecrets,
+  selectMcpServersForInvocation,
   validateToolAccess,
 } from "./provider_runtime";
 import {
-  ConvergenceState,
   RequirementEvidenceRecord,
-  RequirementLedger,
   advanceConvergence,
   deriveRequirementLedger,
-  evaluateRequirementCoverage,
   latestRequirementStatuses,
   parseRequirementEvidence,
 } from "./requirement_ledger";
@@ -78,12 +147,28 @@ import {
   getDefaultConfig,
   loadLoopConfig,
 } from "./runtime_config";
+import {
+  appendStageOutcome,
+  createFailedStageOutcome,
+  createStageOutcome,
+  normalizeStageOutcomes,
+  observeStructuredStageOutcome,
+  structuredDecisionForCompletion,
+} from "./stage_outcome";
+import {
+  appendDomainEvent,
+  appendWorkflowStatusEventIfChanged,
+  deriveOperatorSnapshot,
+  formatOperatorSnapshot,
+  normalizeDomainEvents,
+} from "./domain_events";
 export {
   advanceConvergence,
   deriveRequirementLedger,
   evaluateRequirementCoverage,
   parseRequirementEvidence,
 } from "./requirement_ledger";
+export { ReferenceIdentity } from "./loop_state";
 
 const CORE_SECRET_VALUES_ENV = "AGENT_LOOP_SECRET_VALUES";
 
@@ -171,184 +256,6 @@ function resolveBinaryOnWindows(binary: string): string {
 
 type AnyObj = Record<string, unknown>;
 
-enum LoopStatus {
-  RUNNING = "RUNNING",
-  PAUSED = "PAUSED",
-  WAITING_USER = "WAITING_USER",
-  RECOVERING = "RECOVERING",
-  STOPPED = "STOPPED",
-  BLOCKED = "BLOCKED",
-  SUCCESS = "SUCCESS",
-  FAILED = "FAILED",
-}
-
-type AgentRole = string;
-type AccessMode = "ask" | "full_access";
-
-interface PendingAccessRequest {
-  requestId: string;
-  requestedPaths: string[];
-  requestedAt: string;
-  sourcePhase: string;
-  reason: string;
-}
-
-interface ModelMapping {
-  [role: string]: string;
-  planner: string;
-  implementer: string;
-  tester: string;
-  qa_lead: string;
-  master: string;
-  interrupter: string;
-}
-
-type VariantMapping = Partial<Record<AgentRole, string>>;
-
-interface ErrorSignature {
-  signature: string;
-  rawMessage: string;
-  timestamp: number;
-  phase: string;
-}
-
-interface AgentState {
-  status: "idle" | "running" | "retry_wait" | "completed" | "failed";
-  lastExitCode: number | null;
-  lastRunAt: string | null;
-}
-
-interface LoopState {
-  stateVersion: 2;
-  sessionId: string;
-  status: LoopStatus;
-  phase: string;
-  loopCount: number;
-  completedIterations: number;
-  goal: string;
-  targetProjectPath: string;
-  additionalAllowedPaths: string[];
-  accessMode: AccessMode;
-  pendingAccessRequest: PendingAccessRequest | null;
-  modelMapping: ModelMapping;
-  providerMapping: Record<string, string>;
-  providerConfigs: Record<string, ProviderConfig>;
-  errorQueue: ErrorSignature[];
-  agentStates: Record<string, AgentState>;
-  refinedGoal: string | null;
-  referenceIdentity: ReferenceIdentity | null;
-  planningComplete: boolean;
-  masterApproved: boolean;
-  awaitingPlanApproval: boolean;
-  planApproved: boolean;
-  planPath: string | null;
-  planOverviewPath: string | null;
-  selectedPlanChoiceId: number | null;
-  createdAt: string;
-  updatedAt: string;
-  maxIterations: number;
-  phaseTimeoutMs: number;
-  idleTimeoutMs: number;
-  cliBinary: string;
-  cliProfile: string;
-  variantMapping: VariantMapping;
-  toolAccess: ToolAccessConfig;
-  lastFailureDigest: string | null;
-  interruptMessage?: string;
-  interruptBriefing?: string | null;
-  planRevisionPending?: boolean;
-  interruptedFromPhase?: string | null;
-  activeAttempt: AgentAttemptState | null;
-  lastFailure: AttemptFailure | null;
-  recoveryCount: number;
-  totalAgentAttempts: number;
-  statusReason: string | null;
-  automaticRecovery: AutomaticRecoveryState | null;
-  resilience: ResilienceSettings;
-  pipeline: PipelineDefinition;
-  pipelineConfigPath: string | null;
-  stageResults: Record<string, StageResultState>;
-  requirements: RequirementLedger;
-  convergence: ConvergenceState;
-}
-
-interface AutomaticRecoveryState {
-  sourcePhase: string;
-  failureKind: FailureKind;
-  cycle: number;
-  maxCycles: number;
-  resumeAt: string;
-  reason: string;
-}
-
-interface StageResultState {
-  stageId: string;
-  role: string;
-  kind: string;
-  executor?: PipelineStageExecutor;
-  completedAt: string;
-  output: string;
-  verdict: "PASS" | "FAIL" | "APPROVED" | "REJECTED" | null;
-  attemptId: string | null;
-}
-
-interface ResilienceSettings {
-  transportTimeoutMs: number;
-  toolTimeoutMs: number;
-  maxAgentAttempts: number;
-  maxCompletionRecoveryAttempts: number;
-  maxAutomaticRecoveryCycles: number;
-  automaticRecoveryBackoffMs: number[];
-  retryBackoffMs: number[];
-  phaseRecoveryBudgetMs: number;
-  terminationGraceMs: number;
-  killTimeoutMs: number;
-  heartbeatIntervalMs: number;
-  leaseTtlMs: number;
-  maxInMemoryOutputBytes: number;
-}
-
-interface PlanChoice {
-  id: number;
-  title: string;
-  body: string;
-  markdownPath?: string;
-}
-
-interface SessionMeta {
-  sessionId: string;
-  goal: string;
-  targetProjectPath: string;
-  status: LoopStatus;
-  createdAt: string;
-}
-
-interface SessionRegistry {
-  version: number;
-  activeSessionIds: string[];
-  availableModels: string[];
-  modelsDiscoveredAt: string | null;
-  modelsDiscoveredCli: string | null;
-  sessionMetas: SessionMeta[];
-  manualModelsOverride: string[] | null;
-  modelVariants: Record<string, string[]> | null;
-  providerCatalog?: Record<string, ProviderCatalogEntry>;
-}
-
-interface ProviderCatalogEntry {
-  id: string;
-  label: string;
-  adapter: ProviderConfig["adapter"];
-  binary: string;
-  enabled: boolean;
-  available: boolean;
-  models: string[];
-  modelLabels?: Record<string, string>;
-  modelVariants?: Record<string, string[]>;
-  discoveredAt: string | null;
-  error: string | null;
-}
-
 function cliProfileFromConfig(config: LoopConfig, profileName: string, binaryLower: string): CliProfile {
   const profileCfg = config.cliProfiles[profileName] || config.cliProfiles[binaryLower];
   if (profileCfg) {
@@ -362,110 +269,11 @@ function cliProfileFromConfig(config: LoopConfig, profileName: string, binaryLow
   return CLI_PROFILES[profileName] ?? CLI_PROFILES[binaryLower] ?? OPENCODE_PROFILE;
 }
 
-interface HandoffPayload {
-  sessionId: string;
-  originalGoal: string;
-  approvedPlan: string | null;
-  lockedReferenceIdentity: ReferenceIdentity | null;
-  targetProjectPath: string;
-  additionalAllowedPaths: string[];
-  accessMode: AccessMode;
-  progressNotes: string;
-  failureDigest: string | null;
-  phase: string;
-  loopCount: number;
-  toolAccess?: ToolAccessConfig;
-  interruptMessage?: string;
-  planRevised?: boolean;
-  failureEvidence?: FailureEvidenceSummary | null;
-  requirements?: RequirementLedger;
-}
-
-export interface ReferenceIdentity {
-  title: string;
-  creator: string;
-  packageId: string;
-  canonicalUrl: string;
-  candidateCount: number;
-  identityMatch: "EXACT" | "AMBIGUOUS" | "SIMILAR" | "UNKNOWN";
-  confidence: "HIGH" | "MEDIUM" | "LOW";
-}
-
-interface AttemptEvidenceSummary {
-  attemptId: string | null;
-  attemptNumber: number | null;
-  result: LoopHistoryEntry["result"];
-  failureKind: FailureKind | null;
-  exitCode: number;
-  startedAt: string;
-  endedAt: string;
-  outputBytes: number;
-  assistantTextBytes: number | null;
-  eventCount: number | null;
-  lastEventType: string | null;
-  lastToolName: string | null;
-  lastToolStatus: string | null;
-  lastToolCommand: string | null;
-  lastStepFinishReason: string | null;
-  lastStepFinishTotalTokens: number | null;
-  maxObservedTotalTokens: number | null;
-  rawLogPath: string | null;
-  rawLogBytes: number | null;
-}
-
-interface FailureEvidenceSummary {
-  sourcePhase: string | null;
-  targetProjectPath: string;
-  additionalAllowedPaths: string[];
-  accessMode: AccessMode;
-  pendingAccessRequest: PendingAccessRequest | null;
-  detectedAbsolutePathsOutsideTarget: string[];
-  detectedAbsolutePathsOutsideAllowedRoots: string[];
-  lastFailure: AttemptFailure | null;
-  attempts: AttemptEvidenceSummary[];
-}
-
 interface AgentSkills {
   role: AgentRole;
   allowedTools: string[];
   enforcedRules: string[];
   systemPrompt: string;
-}
-
-interface AgentRoom {
-  role: AgentRole;
-  statePath: string;
-  skillsPath: string;
-  inputPayloadPath: string;
-  outputPayloadPath: string;
-}
-
-interface LoopHistoryEntry {
-  loopNumber: number;
-  phase: string;
-  agentRole: AgentRole;
-  model: string;
-  exitCode: number;
-  startedAt: string;
-  endedAt: string;
-  output: string;
-  result: "success" | "failure" | "timeout";
-  signature: string | null;
-  interruptMessage: string | null;
-  attemptId?: string | null;
-  attemptNumber?: number | null;
-  failureKind?: FailureKind | null;
-  rawLogPath?: string | null;
-  rawLogBytes?: number | null;
-  assistantTextBytes?: number | null;
-  eventCount?: number | null;
-  lastEventType?: string | null;
-  lastToolName?: string | null;
-  lastToolStatus?: string | null;
-  lastToolCommand?: string | null;
-  lastStepFinishReason?: string | null;
-  lastStepFinishTotalTokens?: number | null;
-  maxObservedTotalTokens?: number | null;
 }
 
 function resilienceSettingsFromConfig(): ResilienceSettings {
@@ -486,32 +294,7 @@ function resilienceSettingsFromConfig(): ResilienceSettings {
   };
 }
 
-interface FinalSummary {
-  sessionId: string;
-  goal: string;
-  achievedAt: string;
-  totalLoops: number;
-  finalModelMapping: ModelMapping;
-  progressNotes: string;
-  approvedByMaster: boolean;
-}
-
-interface PtyRunResult {
-  pid: number;
-  exitCode: number;
-  output: string;
-  events: AnyObj[];
-  timedOut: boolean;
-  cancelled: boolean;
-  autoInjected: { prompt: string; response: string; timestamp: string }[];
-  outcome?: AgentAttemptState["status"];
-  failureKind?: FailureKind | null;
-  failureMessage?: string | null;
-  assistantText?: string;
-  cliSessionId?: string | null;
-  rawLogPath?: string;
-  controlRequest?: ClaimedControlRequest | null;
-}
+type PtyRunResult = AgentRunResult;
 
 class StopRequestedError extends Error {
   constructor() {
@@ -537,32 +320,14 @@ class AgentRetriesExhaustedError extends Error {
   }
 }
 
-class ImplementationPreflightError extends Error {
-  constructor(
-    readonly failure: AttemptFailure,
-    readonly outsidePaths: string[]
-  ) {
-    super(failure.message);
-    this.name = "ImplementationPreflightError";
+class WorkflowBudgetExhaustedError extends Error {
+  constructor(readonly exhaustion: BudgetExhaustion) {
+    super(exhaustion.reason);
+    this.name = "WorkflowBudgetExhaustedError";
   }
 }
 
 const SENTINEL = "[PHASE_DONE]";
-const MAX_RETAINED_HISTORY_FILES = 250;
-const MAX_RETAINED_ATTEMPT_LOGS = 50;
-const MAX_HISTORY_OUTPUT_BYTES = 512 * 1024;
-
-function boundedHistoryOutput(value: string): string {
-  const bytes = Buffer.from(value, "utf8");
-  if (bytes.length <= MAX_HISTORY_OUTPUT_BYTES) return value;
-  const marker = "\n[AGENT_LOOP_HISTORY_OUTPUT_TRUNCATED]\n";
-  const markerBytes = Buffer.byteLength(marker, "utf8");
-  const headBytes = Math.floor((MAX_HISTORY_OUTPUT_BYTES - markerBytes) / 4);
-  const tailBytes = MAX_HISTORY_OUTPUT_BYTES - markerBytes - headBytes;
-  const head = bytes.subarray(0, headBytes).toString("utf8").replace(/\uFFFD$/, "");
-  const tail = bytes.subarray(bytes.length - tailBytes).toString("utf8").replace(/^\uFFFD/, "");
-  return `${head}${marker}${tail}`;
-}
 
 const INTERACTION_WHITELIST: string[] = [
   "Apply changes? [y/n]",
@@ -871,14 +636,6 @@ export async function materializePlanChoiceMarkdown(
   return { choices: enriched, overviewPath };
 }
 
-async function atomicWriteJson(filePath: string, data: unknown): Promise<void> {
-  await fse.ensureDir(path.dirname(filePath));
-  const tmpPath = `${filePath}.tmp.${process.pid}.${Date.now()}.${crypto.randomBytes(4).toString("hex")}`;
-  const jsonStr = JSON.stringify(data, null, 2);
-  await fse.writeFile(tmpPath, jsonStr, "utf8");
-  await renameWithRetry(tmpPath, filePath);
-}
-
 async function atomicWriteSensitiveJson(filePath: string, data: unknown): Promise<void> {
   await fse.ensureDir(path.dirname(filePath));
   const tmpPath = `${filePath}.tmp.${process.pid}.${Date.now()}.${crypto.randomBytes(4).toString("hex")}`;
@@ -916,124 +673,19 @@ export async function cleanupClaudeMcpRuntimeFiles(runtimeDir: string): Promise<
   }
 }
 
-function runtimeSensitiveValues(runtimeMcpServers: readonly McpServerConfig[]): string[] {
+function runtimeSensitiveValues(
+  runtimeMcpServers: readonly McpServerConfig[],
+  providerEnvironment: Readonly<Record<string, string | undefined>> = {}
+): string[] {
   return [...new Set([
     ...Object.values(CORE_SECRET_VALUES),
     ...collectMcpSensitiveValues(runtimeMcpServers),
+    ...collectSensitiveEnvironmentValues(providerEnvironment),
   ].filter(Boolean))];
-}
-
-async function atomicWriteText(filePath: string, content: string): Promise<void> {
-  await fse.ensureDir(path.dirname(filePath));
-  const tmpPath = `${filePath}.tmp.${process.pid}.${Date.now()}.${crypto.randomBytes(4).toString("hex")}`;
-  await fse.writeFile(tmpPath, content, "utf8");
-  await renameWithRetry(tmpPath, filePath);
-}
-
-async function renameWithRetry(src: string, dest: string, maxRetries = 5): Promise<void> {
-  let lastErr: unknown;
-  for (let attempt = 0; attempt < maxRetries; attempt++) {
-    try {
-      await fse.rename(src, dest);
-      return;
-    } catch (err: unknown) {
-      lastErr = err;
-      const code = (err as NodeJS.ErrnoException).code;
-      if (code === "EPERM" || code === "EBUSY" || code === "EACCES") {
-        await sleep(50 * Math.pow(2, attempt));
-        continue;
-      }
-      throw err;
-    }
-  }
-  throw lastErr;
 }
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-async function atomicReadJson<T>(filePath: string): Promise<T | null> {
-  try {
-    const content = await fse.readFile(filePath, "utf8");
-    return JSON.parse(content) as T;
-  } catch (err: unknown) {
-    const code = (err as NodeJS.ErrnoException).code;
-    if (code === "ENOENT") return null;
-    const backupPath = `${filePath}.corrupt.${Date.now()}`;
-    try {
-      await fse.copy(filePath, backupPath);
-      console.error(`[atomicReadJson] Corrupted JSON at ${filePath}. Backed up to ${backupPath}.`);
-    } catch {
-      console.error(`[atomicReadJson] Corrupted JSON at ${filePath} and backup failed.`);
-    }
-    return null;
-  }
-}
-
-interface SessionMetaPatch {
-  sessionId: string;
-  goal?: string;
-  targetProjectPath?: string;
-  status?: LoopStatus;
-  createdAt?: string;
-}
-
-function upsertSessionMeta(registry: SessionRegistry, patch: SessionMetaPatch): void {
-  const existing = registry.sessionMetas.find((m) => m.sessionId === patch.sessionId);
-  if (existing) {
-    if (patch.status !== undefined) existing.status = patch.status;
-    if (patch.goal !== undefined) existing.goal = patch.goal;
-    if (patch.targetProjectPath !== undefined) existing.targetProjectPath = patch.targetProjectPath;
-  } else {
-    registry.sessionMetas.push({
-      sessionId: patch.sessionId,
-      goal: patch.goal ?? "",
-      targetProjectPath: patch.targetProjectPath ?? "",
-      status: patch.status ?? LoopStatus.RUNNING,
-      createdAt: patch.createdAt ?? new Date().toISOString(),
-    });
-  }
-  if (!registry.activeSessionIds.includes(patch.sessionId)) {
-    registry.activeSessionIds.push(patch.sessionId);
-  }
-}
-
-async function reloadRegistry(registryPath: string, fallback: SessionRegistry): Promise<SessionRegistry> {
-  const fresh = await atomicReadJson<SessionRegistry>(registryPath);
-  return fresh ?? fallback;
-}
-
-async function mergeAndWriteSessionMeta(
-  registryPath: string,
-  fallback: SessionRegistry,
-  patch: SessionMetaPatch
-): Promise<SessionRegistry> {
-  const lockPath = path.join(path.dirname(registryPath), loopConfig.paths.registryLockFileName);
-  return withShortFileLock(lockPath, async () => {
-    const merged = await reloadRegistry(registryPath, fallback);
-    upsertSessionMeta(merged, patch);
-    await atomicWriteJson(registryPath, merged);
-    return merged;
-  });
-}
-
-async function mergeAndWriteRegistryFields(
-  registryPath: string,
-  fallback: SessionRegistry,
-  fields: Partial<Pick<SessionRegistry, "availableModels" | "modelsDiscoveredAt" | "modelsDiscoveredCli" | "modelVariants" | "providerCatalog">>
-): Promise<SessionRegistry> {
-  const lockPath = path.join(path.dirname(registryPath), loopConfig.paths.registryLockFileName);
-  return withShortFileLock(lockPath, async () => {
-    const merged = await reloadRegistry(registryPath, fallback);
-    if (fields.availableModels !== undefined) merged.availableModels = fields.availableModels;
-    if (fields.modelsDiscoveredAt !== undefined) merged.modelsDiscoveredAt = fields.modelsDiscoveredAt;
-    if (fields.modelsDiscoveredCli !== undefined) merged.modelsDiscoveredCli = fields.modelsDiscoveredCli;
-    if (fields.modelVariants !== undefined) merged.modelVariants = fields.modelVariants;
-    if (fields.providerCatalog !== undefined) merged.providerCatalog = fields.providerCatalog;
-    await atomicWriteJson(registryPath, merged);
-    return merged;
-  });
 }
 
 function resetStaleRunningAgentStates(agentStates: Record<AgentRole, AgentState>): void {
@@ -1059,6 +711,30 @@ export function normalizeLoopState(raw: LoopState): { state: LoopState; migrated
       throw new Error(`Unsupported loop state version: ${state.stateVersion}`);
     }
     state.stateVersion = 2;
+  }
+  if (state.aggregateFormatVersion !== 1) {
+    state.aggregateFormatVersion = 1;
+    migrated = true;
+  }
+  if (!Number.isSafeInteger(state.aggregateRevision) || state.aggregateRevision < 0) {
+    state.aggregateRevision = 0;
+    migrated = true;
+  }
+  if (!Number.isSafeInteger(state.fencingEpoch) || state.fencingEpoch < 0) {
+    state.fencingEpoch = 0;
+    migrated = true;
+  }
+  if (typeof state.aggregateChecksum !== "string") {
+    state.aggregateChecksum = "";
+    migrated = true;
+  }
+  if (!Array.isArray(state.processedRequestIds)) {
+    state.processedRequestIds = [];
+    migrated = true;
+  }
+  if (!state.artifactRefs || typeof state.artifactRefs !== "object") {
+    state.artifactRefs = {};
+    migrated = true;
   }
 
   if (typeof state.targetProjectPath !== "string" || state.targetProjectPath.trim().length === 0) {
@@ -1219,11 +895,20 @@ export function normalizeLoopState(raw: LoopState): { state: LoopState; migrated
     state.toolAccess = normalizedToolAccess;
   }
   if (!state.pipeline) {
-    state.pipeline = defaultPipelineDefinition();
+    const compiled = compilePipeline(defaultPipelineDefinition());
+    state.pipeline = compiled.pipeline;
+    state.pipelineCompilation = compiled.compilation;
     state.pipelineConfigPath = null;
     migrated = true;
   } else {
-    state.pipeline = validatePipeline(state.pipeline);
+    const compiled = state.pipelineCompilation
+      ? verifyCompiledPipeline(state.pipeline, state.pipelineCompilation)
+      : compilePipeline(state.pipeline);
+    state.pipeline = compiled.pipeline;
+    if (!state.pipelineCompilation) {
+      state.pipelineCompilation = compiled.compilation;
+      migrated = true;
+    }
     if (!Object.prototype.hasOwnProperty.call(state, "pipelineConfigPath")) {
       state.pipelineConfigPath = null;
       migrated = true;
@@ -1231,6 +916,56 @@ export function normalizeLoopState(raw: LoopState): { state: LoopState; migrated
   }
   if (!state.stageResults) {
     state.stageResults = {};
+    migrated = true;
+  }
+  const normalizedStageOutcomes = normalizeStageOutcomes(
+    (state as unknown as { stageOutcomes?: unknown }).stageOutcomes
+  );
+  if (JSON.stringify(normalizedStageOutcomes) !== JSON.stringify(state.stageOutcomes)) {
+    state.stageOutcomes = normalizedStageOutcomes;
+    migrated = true;
+  }
+  if (normalizeDomainEvents(state)) migrated = true;
+  if (state.domainEvents.length === 0) {
+    appendDomainEvent(
+      state,
+      {
+        type: "workflow.started",
+        stageId: state.phase,
+        summary: `Session ${state.sessionId} state was imported into the domain-event stream.`,
+        detail: { status: LoopStatus.RUNNING, migrated: true },
+      },
+      state.createdAt
+    );
+    appendWorkflowStatusEventIfChanged(state);
+    migrated = true;
+  }
+  if (normalizeExecutionBudget(state)) migrated = true;
+  if (
+    state.activeAttempt &&
+    ["starting", "running", "retry_wait"].includes(state.activeAttempt.status) &&
+    !state.currentActivation
+  ) {
+    const activeStage = stageById(state.pipeline, state.activeAttempt.phase || state.phase);
+    const activeStageType = stageTypeForStage(state.pipeline, activeStage);
+    const reservation = reserveStageActivation(
+      state,
+      activeStage,
+      activeStageType.executor,
+      stageActivationAttemptLimit(state, activeStageType),
+      state.activeAttempt.startedAt
+    );
+    if (reservation.ok) {
+      reservation.reservation.attemptsReserved = Math.min(
+        reservation.reservation.maxAgentAttempts,
+        Math.max(1, state.activeAttempt.attemptNumber)
+      );
+      reservation.reservation.status = "running";
+      state.activeAttempt.activationId = reservation.reservation.activationId;
+    } else {
+      state.status = LoopStatus.PAUSED;
+      state.statusReason = `BUDGET_EXHAUSTED/${reservation.exhaustion.dimension}: ${reservation.exhaustion.reason}`;
+    }
     migrated = true;
   }
   if (
@@ -1323,34 +1058,6 @@ function createDefaultAgentStates(
       { status: "idle", lastExitCode: null, lastRunAt: null } satisfies AgentState,
     ])
   );
-}
-
-function applyPipelineTarget(state: LoopState, target: string): void {
-  if (target === "SUCCESS") {
-    state.status = LoopStatus.SUCCESS;
-    return;
-  }
-  if (target === "PAUSED") {
-    state.status = LoopStatus.PAUSED;
-    return;
-  }
-  stageById(state.pipeline, target);
-  state.phase = target;
-}
-
-async function atomicAppendLine(filePath: string, line: string): Promise<void> {
-  await fse.ensureDir(path.dirname(filePath));
-  const tmpPath = `${filePath}.append.${process.pid}.${Date.now()}`;
-  let existing = "";
-  try {
-    existing = await fse.readFile(filePath, "utf8");
-  } catch {
-    existing = "";
-  }
-  const newline = existing.length > 0 && !existing.endsWith("\n") ? "\n" : "";
-  const newContent = existing + newline + line + "\n";
-  await fse.writeFile(tmpPath, newContent, "utf8");
-  await renameWithRetry(tmpPath, filePath);
 }
 
 function stripAnsi(str: string): string {
@@ -2169,6 +1876,13 @@ function isMutatingToolName(value: unknown): boolean {
     "deletefile",
     "movefile",
     "renamefile",
+    // Shell/terminal tools are mutation-capable regardless of the displayed
+    // command. A read-only role should never receive one.
+    "bash",
+    "shell",
+    "terminal",
+    "executecommand",
+    "runcommand",
   ].some((name) => compact === name || compact.endsWith(name));
 }
 
@@ -2180,15 +1894,15 @@ function eventContainsFileMutation(value: unknown, depth = 0): boolean {
   if (typeof value !== "object") return false;
   const node = value as AnyObj;
   const type = typeof node.type === "string" ? node.type.toLowerCase() : "";
-  if (type === "file_change" || type === "filechange") return true;
-  if (type.includes("tool")) {
-    if (
-      isMutatingToolName(node.name) ||
-      isMutatingToolName(node.tool) ||
-      isMutatingToolName(node.toolName) ||
-      isMutatingToolName(node.tool_name)
-    ) return true;
+  if (["file_change", "filechange", "command_execution", "commandexecution"].includes(type)) {
+    return true;
   }
+  if (
+    isMutatingToolName(node.tool) ||
+    isMutatingToolName(node.toolName) ||
+    isMutatingToolName(node.tool_name) ||
+    (type.includes("tool") && isMutatingToolName(node.name))
+  ) return true;
   return Object.values(node).some((entry) => eventContainsFileMutation(entry, depth + 1));
 }
 
@@ -3198,27 +2912,6 @@ function buildCompletionRecoveryPrompt(
   return lines.join("\n");
 }
 
-function parseArgs(args: string[]): Record<string, string> {
-  const result: Record<string, string> = {};
-  for (let i = 0; i < args.length; i++) {
-    const arg = args[i];
-    if (arg.startsWith("--")) {
-      const key = arg.slice(2);
-      const eqIdx = key.indexOf("=");
-      if (eqIdx >= 0) {
-        result[key.slice(0, eqIdx)] = key.slice(eqIdx + 1);
-        continue;
-      }
-      if (i + 1 < args.length && !args[i + 1].startsWith("--")) {
-        result[key] = args[++i];
-      } else {
-        result[key] = "true";
-      }
-    }
-  }
-  return result;
-}
-
 function parseIntSafe(value: string | undefined, defaultValue: number): number {
   if (value === undefined || value === "true" || value.length === 0) return defaultValue;
   const n = parseInt(value, 10);
@@ -3457,13 +3150,29 @@ function validateRuntimeSettings(
   }
 }
 
+function stageActivationAttemptLimit(
+  state: Pick<LoopState, "resilience">,
+  stageType: PipelineStageType
+): number {
+  const normalAttempts =
+    stageType.executor === "interrupt" ? 1 : state.resilience.maxAgentAttempts;
+  const completionRecoveryAttempts =
+    stageType.executor === "planning" || stageType.executor === "interrupt"
+      ? 0
+      : state.resilience.maxCompletionRecoveryAttempts;
+  return normalAttempts + completionRecoveryAttempts;
+}
+
 function printUsage(): void {
   console.log(`
 Custom Agent Loop System - Dynamic Multi-Model Multi-Session Orchestrator
 
 Usage:
-  agent-loop init                                    Initialize the system in the current directory
+  agent-loop init                                    Initialize config and application-data roots
+  agent-loop capabilities                            Print the core protocol/capability handshake
+  agent-loop migrate-root --from <legacy-root>       Migrate legacy data/config explicitly
   agent-loop models [--binary opencode] [--profile]  List available CLI models
+  agent-loop status --session <id> [--json]          Show operator state and remaining budgets
   agent-loop run --goal "..." --target "..." [opts]  Start a new session
   agent-loop resume --session <id> [opts]            Resume a held session
   agent-loop revise-plan --session <id> --message "..."  Revise the plan with AI
@@ -3474,7 +3183,9 @@ Options for 'run':
   --full-access              Allow filesystem access outside the target without prompting
   --binary <name>            CLI binary name (default: opencode)
   --profile <name>           Legacy default provider: opencode | kilo | codex | claude
-  --max-iterations <n>       Max loop iterations (default: 20)
+  --max-cycles <n>           Max implementation-to-verification cycles (default: 20)
+  --max-workflow-steps <n>   Hard fuse for all automatic stage activations (default: 8*cycles+4)
+  --max-iterations <n>       Deprecated alias for --max-cycles
   --phase-timeout <ms>       Progress-renewable attempt window (default: 900000)
   --idle-timeout <ms>        Model no-progress timeout after connection (default: 300000)
   --tool-timeout <ms>        Tool execution no-progress timeout (default: 600000)
@@ -3498,17 +3209,50 @@ Options for 'run':
   --interrupter-model <m>    Model for interrupter agent
   --model-mapping <json>     Arbitrary pipeline role-to-model mapping
   --provider-mapping <json>  Arbitrary pipeline role-to-provider mapping
-  --roles <path>             Agent role definition file (default: <root>/agent_roles.json)
-  --loop <path>              Loop graph definition file (default: <root>/agent_loop.json)
+  --roles <path>             Agent role definition file (default: <config-root>/agent_roles.json)
+  --loop <path>              Loop graph definition file (default: <config-root>/agent_loop.json)
   --session <id>             Pre-assigned session ID (optional; auto-generated if omitted)
-  --root <path>              Orchestrator root dir (default: this file's dir)
+  --data-root <path>         Session/control data root (default: OS application-data directory)
+  --config-root <path>       Trusted configuration root (default: OS config directory)
+  --code-root <path>         Packaged core root (default: derived from this executable)
+  --project-root <path>      Provider workspace root (default: --target or cwd)
+  --root <path>              Deprecated compatibility root for code/config/data
 
 Options for 'resume':
   --session <id>             Session ID to resume (required)
   --approve-access           Approve the pending access request before resuming
   --full-access              Grant full filesystem access before resuming
-  --root <path>              Orchestrator root dir
+  --max-cycles <n>           Replace the cycle ceiling (never refunds consumed cycles)
+  --max-workflow-steps <n>   Replace the workflow-step ceiling (never refunds consumed steps)
+  --reconcile-mutation retry Explicitly permit a newly charged retry after unknown mutation outcome
+  --data-root <path>         Session/control data root
+  --config-root <path>       Trusted configuration root
+  --root <path>              Deprecated compatibility root
+
+Options for 'status':
+  --session <id>             Session ID to inspect (required)
+  --json                     Print the versioned operator snapshot as JSON
+  --data-root <path>         Session/control data root
+  --config-root <path>       Trusted configuration root
 `);
+}
+
+function createFileSessionRepository(
+  rootDir: string,
+  sessionDir: string
+): FileSessionRepository {
+  return new FileSessionRepository({
+    sessionDir,
+    registryPath: path.join(rootDir, loopConfig.paths.sessionsIndexFileName),
+    stateFileName: loopConfig.paths.sessionFileNames.state,
+    stateLockFileName: loopConfig.paths.stateLockFileName,
+    registryLockFileName: loopConfig.paths.registryLockFileName,
+    ownerLockFileName: loopConfig.paths.ownerLockFileName,
+    leaseFileName: loopConfig.paths.leaseFileName,
+    dataRoot: rootDir,
+    sessionsRoot: loopConfig.paths.sessionsRoot,
+    sessionsIndexFileName: loopConfig.paths.sessionsIndexFileName,
+  });
 }
 
 class LoopOrchestrator {
@@ -3516,10 +3260,15 @@ class LoopOrchestrator {
   private state: LoopState;
   private rooms: Record<AgentRole, AgentRoom>;
   private readonly rootDir: string;
-  private readonly registryPath: string;
   private readonly sessionDir: string;
   private readonly controlPaths: ControlQueuePaths;
   private readonly ownership: SessionOwnership;
+  private readonly stageExecutors: StageExecutorRegistry;
+  private readonly agentExecution: AgentExecutionCoordinator<PtyRunResult>;
+  private readonly sessionRepository: SessionRepository;
+  private readonly controlRepository: ControlRepository;
+  private readonly reporter: FileSessionReporter;
+  private readonly artifactStore: ImmutableArtifactStore;
   private activeControlRequest: ClaimedControlRequest | null = null;
   private activePtyPid: number | null = null;
   private disposed = false;
@@ -3537,9 +3286,9 @@ class LoopOrchestrator {
     this.registry = registry;
     this.state = state;
     this.rooms = rooms;
-    this.registryPath = path.join(rootDir, cfg.registryFileName);
     this.sessionDir = resolveContainedSessionPath(path.join(rootDir, cfg.sessionsRoot), state.sessionId);
     this.controlPaths = getControlQueuePaths(this.sessionDir, cfg.controlDirName);
+    this.controlRepository = new FileControlRepository(this.controlPaths);
     this.ownership =
       ownership ??
       new SessionOwnership({
@@ -3549,6 +3298,147 @@ class LoopOrchestrator {
         heartbeatIntervalMs: state.resilience.heartbeatIntervalMs,
         leaseTtlMs: state.resilience.leaseTtlMs,
       });
+    this.agentExecution = new CurrentAgentExecutionCoordinator((request) =>
+      this.executeAgentCurrent(
+        request.role,
+        request.prompt,
+        request.maxAttempts,
+        request.stageType,
+        request.modelRole ?? "implementer",
+        request.planOptionsCount ?? 3
+      )
+    );
+    this.sessionRepository = createFileSessionRepository(rootDir, this.sessionDir);
+    this.reporter = new FileSessionReporter({
+      sessionDir: this.sessionDir,
+      state: this.state,
+      paths: {
+        loopHistoryDirName: loopConfig.paths.loopHistoryDirName,
+        attemptLogsDirName: loopConfig.paths.attemptLogsDirName,
+        progressNotesFileName: loopConfig.paths.sessionFileNames.progressNotes,
+        finalSummaryFileName: loopConfig.paths.sessionFileNames.finalSummary,
+      },
+      summarizeAttemptEvents,
+    });
+    this.artifactStore = new ImmutableArtifactStore(path.join(this.sessionDir, "artifacts"));
+    const planningExecutor = new PlanningStageExecutor({
+      state: this.state,
+      sessionDir: this.sessionDir,
+      planFileNames: {
+        plan: loopConfig.paths.sessionFileNames.plan,
+        planChoices: loopConfig.paths.sessionFileNames.planChoices,
+        planOverview: loopConfig.paths.sessionFileNames.planOverview,
+        planOptionsDir: loopConfig.paths.sessionFileNames.planOptionsDir,
+      },
+      goalRequiresExternalResearch,
+      goalRequiresNamedReferenceVerification,
+      isResearchBlockedResponse,
+      parseReferenceIdentity,
+      parsePlanChoices,
+      materializePlanChoiceMarkdown,
+      writeJson: atomicWriteJson,
+      writeText: atomicWriteText,
+      storeArtifact: async (key, content, mediaType) => {
+        this.state.artifactRefs[key] = await this.artifactStore.put(content, mediaType);
+      },
+      executeAgent: (...args) => this.executeAgent(...args),
+      buildPrompt,
+      extractOutput,
+      appendProgressNote: (note) => this.appendProgressNote(note),
+      commitPhaseResult: (patch) => this.commitPhaseResult(patch),
+      archiveLoop: (...args) => this.archiveLoop(...args),
+      recordStageResult: (...args) => this.recordStageResult(...args),
+    });
+    const interruptExecutor = new InterruptStageExecutor({
+      state: this.state,
+      rootDir: this.rootDir,
+      executeAgent: (...args) => this.executeAgent(...args),
+      buildPrompt,
+      extractOutput,
+      appendProgressNote: (note) => this.appendProgressNote(note),
+      readProgressNotes: () => this.readProgressNotes(),
+      commitPhaseResult: (patch) => this.commitPhaseResult(patch),
+      archiveLoop: (...args) => this.archiveLoop(...args),
+      recordStageResult: (...args) => this.recordStageResult(...args),
+      collectFailureEvidence: () => this.collectFailureEvidence(),
+    });
+    const testExecutor = new TestStageExecutor({
+      state: this.state,
+      rooms: this.rooms,
+      executeAgent: (...args) => this.executeAgent(...args),
+      buildPrompt,
+      extractOutput,
+      parseTesterVerdict,
+      writeJson: atomicWriteJson,
+      appendProgressNote: (note) => this.appendProgressNote(note),
+      readProgressNotes: () => this.readProgressNotes(),
+      commitPhaseResult: (patch) => this.commitPhaseResult(patch),
+      archiveLoop: (...args) => this.archiveLoop(...args),
+      recordStageResult: (...args) => this.recordStageResult(...args),
+    });
+    const reviewExecutor = new ReviewStageExecutor({
+      state: this.state,
+      executeAgent: (...args) => this.executeAgent(...args),
+      buildPrompt,
+      extractOutput,
+      stripAnsi,
+      isResearchBlockedResponse,
+      parseMasterVerdict,
+      extractFailureDigest,
+      normalizeSignature,
+      pushAndCheckOscillation,
+      enterInterruptPhase: () => this.enterInterruptPhase(),
+      appendProgressNote: (note) => this.appendProgressNote(note),
+      readProgressNotes: () => this.readProgressNotes(),
+      commitPhaseResult: (patch) => this.commitPhaseResult(patch),
+      archiveLoop: (...args) => this.archiveLoop(...args),
+      recordStageResult: (...args) => this.recordStageResult(...args),
+    });
+    const approvalExecutor = new ApprovalStageExecutor({
+      state: this.state,
+      executeAgent: (...args) => this.executeAgent(...args),
+      buildPrompt,
+      extractOutput,
+      extractVerdictFromOutput,
+      isResearchBlockedResponse,
+      parseMasterVerdict,
+      approvalDecisionSignature,
+      stripAnsi,
+      pushAndCheckOscillation,
+      enterInterruptPhase: () => this.enterInterruptPhase(),
+      appendProgressNote: (note) => this.appendProgressNote(note),
+      readProgressNotes: () => this.readProgressNotes(),
+      commitPhaseResult: (patch) => this.commitPhaseResult(patch),
+      archiveLoop: (...args) => this.archiveLoop(...args),
+      recordStageResult: (...args) => this.recordStageResult(...args),
+      emitFinalSummary: () => this.emitFinalSummary(),
+      saveRegistry: () => this.saveRegistry(),
+    });
+    const implementationExecutor = new ImplementationStageExecutor({
+      state: this.state,
+      findAbsolutePathsOutsideAllowedRoots,
+      executeAgent: (...args) => this.executeAgent(...args),
+      buildPrompt,
+      extractOutput,
+      appendProgressNote: (note) => this.appendProgressNote(note),
+      readProgressNotes: () => this.readProgressNotes(),
+      commitPhaseResult: (patch) => this.commitPhaseResult(patch),
+      archiveLoop: (...args) => this.archiveLoop(...args),
+      recordStageResult: (...args) => this.recordStageResult(...args),
+    });
+    this.stageExecutors = new StageExecutorRegistry({
+      planning: planningExecutor,
+      implementation: {
+        execute: async (stage) => {
+          await implementationExecutor.execute(stage, this.state.lastFailureDigest);
+          this.state.lastFailureDigest = null;
+        },
+      },
+      test: testExecutor,
+      review: reviewExecutor,
+      approval: approvalExecutor,
+      interrupt: interruptExecutor,
+    });
   }
 
   private enterInterruptPhase(): void {
@@ -3572,9 +3462,12 @@ class LoopOrchestrator {
       preAcquiredOwnership ?? await this.ownership.acquire();
 
     try {
+      if (!preAcquiredOwnership) {
+        await this.sessionRepository.beginOwnership(this.state);
+      }
       await cleanupClaudeMcpRuntimeFiles(path.join(this.sessionDir, "runtime"));
-      await ensureControlQueue(this.controlPaths);
-      await recoverClaimedControlRequests(this.controlPaths);
+      await this.controlRepository.initialize();
+      await this.controlRepository.recoverClaims();
       if (ownershipResult.recoveredStaleOwner || recoverPersistedAttempt) {
         const staleChildPids = collectRecoveredChildPids(
           ownershipResult.previousLease,
@@ -3610,6 +3503,15 @@ class LoopOrchestrator {
           };
           await this.appendProgressNote(
             `[Loop ${this.state.loopCount}] RECOVERY: Orphaned PTY pid ${staleChildPid}; automatic recovery blocked.`
+          );
+          await this.saveState();
+          await this.saveRegistry();
+          return;
+        }
+
+        if (markUnknownMutationOutcome(this.state)) {
+          await this.appendProgressNote(
+            `[Loop ${this.state.loopCount}] RECOVERY: ${this.state.statusReason}`
           );
           await this.saveState();
           await this.saveRegistry();
@@ -3654,61 +3556,73 @@ class LoopOrchestrator {
         await this.appendProgressNote(
           `[Loop ${this.state.loopCount}] INTERRUPT: Human operator message: "${this.state.interruptMessage}"`
         );
-        await completeControlRequest(this.controlPaths, pendingControl, "completed", "Interrupt accepted.");
+        await this.controlRepository.complete(pendingControl, "completed", "Interrupt accepted.");
         await this.saveState();
         continue;
       }
 
       const currentStage = stageById(this.state.pipeline, this.state.phase);
-      if (
-        currentStage.countsIteration &&
-        this.state.completedIterations >= this.state.maxIterations
-      ) {
-        this.state.status = LoopStatus.PAUSED;
-        this.state.statusReason =
-          `Completed implementation-to-verification cycle budget (${this.state.maxIterations}) was exhausted. ` +
-          "Resume only after reviewing unresolved requirements or revising the plan.";
-        await this.appendProgressNote(
-          `[Loop ${this.state.loopCount}] PAUSED: ${this.state.statusReason}`
-        );
-        await this.saveState();
-        await this.saveRegistry();
-        console.warn(`[orchestrator] Max iterations (${this.state.maxIterations}) reached. Session PAUSED.`);
+      const currentStageType = stageTypeForStage(this.state.pipeline, currentStage);
+      const activation = reserveStageActivation(
+        this.state,
+        currentStage,
+        currentStageType.executor,
+        this.maxAttemptsForStage(currentStageType)
+      );
+      if (!activation.ok) {
+        await this.pauseForBudgetExhaustion(activation.exhaustion);
         return;
+      }
+      if (!activation.reused) {
+        appendDomainEvent(this.state, {
+          type: "stage.started",
+          stageId: currentStage.id,
+          activationId: activation.reservation.activationId,
+          role: currentStage.role,
+          summary: `Stage ${currentStage.id} started with ${currentStageType.executor}.`,
+          detail: {
+            executor: currentStageType.executor,
+            workflowStep: activation.reservation.workflowStep,
+            cycleNumber: activation.reservation.cycleNumber,
+          },
+        });
+        await this.saveState();
       }
 
       try {
-        const currentStageType = stageTypeForStage(this.state.pipeline, currentStage);
-        switch (currentStageType.executor) {
-          case "planning":
-            await this.runPlanning(currentStage);
-            break;
-          case "implementation":
-            await this.runImplementation(currentStage, this.state.lastFailureDigest);
-            this.state.lastFailureDigest = null;
-            break;
-          case "test":
-            await this.runTestGeneration(currentStage);
-            break;
-          case "review":
-            await this.runVerification(currentStage);
-            break;
-          case "approval":
-            await this.runMasterApproval(currentStage);
-            break;
-          case "interrupt":
-            await this.runInterrupter(currentStage);
-            break;
-          default:
-            this.state.status = LoopStatus.FAILED;
-            await this.saveState();
-            await this.saveRegistry();
-            return;
-        }
+        await this.stageExecutors.execute(currentStageType.executor, currentStage);
+        markCurrentActivationCompleted(this.state);
+        finishCurrentActivation(this.state, "completed");
         await this.saveState();
         await this.saveRegistry();
       } catch (err: unknown) {
+        this.recordFailedStageOutcome(currentStage, err);
+        appendDomainEvent(this.state, {
+          type:
+            err instanceof StopRequestedError ||
+            err instanceof InterruptRequestedError ||
+            err instanceof ImplementationPreflightError ||
+            err instanceof WorkflowBudgetExhaustedError
+              ? "stage.paused"
+              : "stage.failed",
+          stageId: currentStage.id,
+          activationId: this.state.currentActivation?.activationId ?? null,
+          attemptId: this.state.activeAttempt?.attemptId ?? null,
+          role: currentStage.role,
+          summary:
+            err instanceof Error
+              ? `Stage ${currentStage.id}: ${err.message}`
+              : `Stage ${currentStage.id} failed.`,
+          detail: { executor: currentStageType.executor },
+        });
+        if (err instanceof WorkflowBudgetExhaustedError) {
+          finishCurrentActivation(this.state, "failed");
+          await this.pauseForBudgetExhaustion(err.exhaustion);
+          return;
+        }
         if (err instanceof StopRequestedError) {
+          finishCurrentActivation(this.state, "cancelled");
+          await this.saveState();
           return;
         }
         if (err instanceof ImplementationPreflightError) {
@@ -3739,6 +3653,7 @@ class LoopOrchestrator {
           return;
         }
         if (err instanceof InterruptRequestedError) {
+          finishCurrentActivation(this.state, "cancelled");
           this.state.interruptMessage = err.messageText ?? "Operator requested interrupt.";
           this.enterInterruptPhase();
           await this.appendProgressNote(
@@ -3749,6 +3664,7 @@ class LoopOrchestrator {
           continue;
         }
         if (err instanceof AgentRetriesExhaustedError) {
+          finishCurrentActivation(this.state, "failed");
           this.state.lastFailure = err.failure;
           const evidence = await this.collectFailureEvidence();
           const disposition = classifyExhaustedFailureDisposition(
@@ -3843,6 +3759,7 @@ class LoopOrchestrator {
           return;
         }
         const errMsg = err instanceof Error ? err.message : String(err);
+        finishCurrentActivation(this.state, "failed");
         console.error(`[orchestrator] Error in phase ${this.state.phase}: ${errMsg}`);
 
         const entry: ErrorSignature = {
@@ -3871,581 +3788,6 @@ class LoopOrchestrator {
     } finally {
       await this.ownership.release();
     }
-  }
-
-  private async runPlanning(stage: PipelineStage): Promise<void> {
-    if (this.state.planningComplete && this.state.stageResults[stage.id]) {
-      applyPipelineTarget(this.state, stage.onSuccess);
-      return;
-    }
-
-    if (this.state.awaitingPlanApproval) {
-      return;
-    }
-
-    if (
-      goalRequiresExternalResearch(this.state.goal) &&
-      !this.state.toolAccess.webSearch.enabled
-    ) {
-      this.state.status = LoopStatus.WAITING_USER;
-      this.state.statusReason =
-        "The original goal explicitly requires internet research, but Web Search is disabled. Enable Web Search and resume the session.";
-      await this.appendProgressNote(
-        "[Loop 0] PLANNING: Waiting for Web Search because the original goal explicitly requires internet research."
-      );
-      await this.commitPhaseResult({});
-      return;
-    }
-
-    const payload: HandoffPayload = {
-      sessionId: this.state.sessionId,
-      originalGoal: this.state.goal,
-      approvedPlan: null,
-      lockedReferenceIdentity: null,
-      targetProjectPath: this.state.targetProjectPath,
-      additionalAllowedPaths: this.state.additionalAllowedPaths,
-      accessMode: this.state.accessMode,
-      progressNotes: "",
-      failureDigest: null,
-      phase: stage.id,
-      loopCount: 0,
-      toolAccess: this.state.toolAccess,
-      requirements: this.state.requirements,
-    };
-
-    const role = roleForStage(this.state.pipeline, stage);
-    const stageType = stageTypeForStage(this.state.pipeline, stage);
-    const prompt = buildPrompt(role.id, payload, role, stage, stageType);
-    const result = await this.executeAgent(
-      role.id,
-      prompt,
-      undefined,
-      stageType,
-      role.modelRole,
-      stage.planOptionsCount
-    );
-
-    if (result.exitCode !== 0) {
-      throw new Error(`Planner exited with code ${result.exitCode}`);
-    }
-
-    const output = extractOutput(result);
-    if (isResearchBlockedResponse(output)) {
-      this.state.referenceIdentity = null;
-      this.recordStageResult(stage, output, null);
-      this.state.status = LoopStatus.WAITING_USER;
-      this.state.statusReason =
-        "Internet research did not establish the named reference's core gameplay. Clarify the reference or provide a reliable source before resuming.";
-      await this.appendProgressNote(
-        "[Loop 0] PLANNING: Research evidence was insufficient; waiting for operator clarification instead of guessing."
-      );
-      await this.archiveLoop(0, stage.id, role.id, result, new Date(), new Date());
-      await this.commitPhaseResult({});
-      return;
-    }
-    if (goalRequiresNamedReferenceVerification(this.state.goal)) {
-      const identity = parseReferenceIdentity(output);
-      if (!identity) {
-        throw new Error("Planner completed without a valid locked reference identity.");
-      }
-      this.state.referenceIdentity = identity;
-    } else {
-      this.state.referenceIdentity = null;
-    }
-    let choices = parsePlanChoices(output);
-
-    const planPath = path.join(this.sessionDir, loopConfig.paths.sessionFileNames.plan);
-    const choicesPath = path.join(this.sessionDir, loopConfig.paths.sessionFileNames.planChoices);
-    const materialized = await materializePlanChoiceMarkdown(
-      this.sessionDir,
-      choices,
-      loopConfig.paths.sessionFileNames.planOverview,
-      loopConfig.paths.sessionFileNames.planOptionsDir
-    );
-    choices = materialized.choices;
-    await atomicWriteJson(choicesPath, choices);
-
-    this.state.planPath = planPath;
-    this.state.planOverviewPath = materialized.overviewPath;
-    this.state.selectedPlanChoiceId = null;
-    this.recordStageResult(stage, output, null);
-    if (!stage.requiresPlanApproval) {
-      const selected = choices[0];
-      await atomicWriteText(planPath, `${selected.body.trim()}\n`);
-      this.state.refinedGoal = selected.body;
-      this.state.planningComplete = true;
-      this.state.awaitingPlanApproval = false;
-      this.state.planApproved = true;
-      this.state.selectedPlanChoiceId = selected.id;
-      await this.appendProgressNote(
-        `[Loop 0] ${stage.id}: ${choices.length} plan options generated; option ${selected.id} selected automatically.`
-      );
-      await this.archiveLoop(0, stage.id, role.id, result, new Date(), new Date());
-      applyPipelineTarget(this.state, stage.onSuccess);
-      await this.commitPhaseResult({});
-      return;
-    }
-
-    this.state.awaitingPlanApproval = true;
-    this.state.planApproved = false;
-    this.state.status = LoopStatus.WAITING_USER;
-    this.state.statusReason = "Select and approve a plan before implementation starts.";
-
-    await this.appendProgressNote(`[Loop 0] PLANNING: ${choices.length} plan options generated. Awaiting user selection.`);
-    await this.archiveLoop(0, stage.id, role.id, result, new Date(), new Date());
-    await this.commitPhaseResult({
-      phase: stage.id,
-      status: LoopStatus.WAITING_USER,
-      awaitingPlanApproval: true,
-      planApproved: false,
-      planPath,
-      planOverviewPath: materialized.overviewPath,
-      selectedPlanChoiceId: null,
-    });
-  }
-
-  private async runImplementation(
-    stage: PipelineStage,
-    failureDigest: string | null
-  ): Promise<void> {
-    const implementationGoal = [this.state.goal, this.state.refinedGoal ?? ""]
-      .filter((value) => value.trim().length > 0)
-      .join("\n\n");
-    const outsidePaths = this.state.accessMode === "full_access"
-      ? []
-      : findAbsolutePathsOutsideAllowedRoots(
-          implementationGoal,
-          this.state.targetProjectPath,
-          this.state.additionalAllowedPaths
-        );
-    if (outsidePaths.length > 0) {
-      throw new ImplementationPreflightError(
-        {
-          kind: "permission",
-          message:
-            `Approved implementation plan references path(s) outside the configured write-access roots ` +
-            `(${[this.state.targetProjectPath, ...this.state.additionalAllowedPaths].join(", ")}): ` +
-            outsidePaths.join(", "),
-          retryable: false,
-          occurredAt: new Date().toISOString(),
-          attemptId: null,
-          role: stage.role,
-          phase: stage.id,
-          exitCode: null,
-          cliSessionId: null,
-        },
-        outsidePaths
-      );
-    }
-    const planRevised = !!this.state.planRevisionPending;
-    if (stage.countsIteration) this.state.loopCount++;
-    await this.saveState();
-
-    const notes = await this.readProgressNotes();
-    const payload: HandoffPayload = {
-      sessionId: this.state.sessionId,
-      originalGoal: this.state.goal,
-      approvedPlan: this.state.refinedGoal,
-      lockedReferenceIdentity: this.state.referenceIdentity,
-      targetProjectPath: this.state.targetProjectPath,
-      additionalAllowedPaths: this.state.additionalAllowedPaths,
-      accessMode: this.state.accessMode,
-      progressNotes: notes,
-      failureDigest,
-      phase: stage.id,
-      loopCount: this.state.loopCount,
-      planRevised,
-      toolAccess: this.state.toolAccess,
-      requirements: this.state.requirements,
-    };
-
-    const role = roleForStage(this.state.pipeline, stage);
-    const stageType = stageTypeForStage(this.state.pipeline, stage);
-    const prompt = buildPrompt(role.id, payload, role, stage, stageType);
-    const startedAt = new Date();
-    const result = await this.executeAgent(
-      role.id,
-      prompt,
-      undefined,
-      stageType,
-      role.modelRole
-    );
-    const endedAt = new Date();
-
-    await this.archiveLoop(this.state.loopCount, stage.id, role.id, result, startedAt, endedAt);
-
-    if (result.exitCode !== 0) {
-      throw new Error(`Implementer exited with code ${result.exitCode}: ${extractOutput(result).slice(0, 200)}`);
-    }
-
-    if (planRevised) {
-      this.state.planRevisionPending = false;
-      await this.appendProgressNote(
-        `[Loop ${this.state.loopCount}] IMPLEMENTATION: Code re-implemented after plan revision.`
-      );
-    } else {
-      await this.appendProgressNote(`[Loop ${this.state.loopCount}] IMPLEMENTATION: Code changes applied.`);
-    }
-    this.recordStageResult(stage, extractOutput(result), null);
-    applyPipelineTarget(this.state, stage.onSuccess);
-    await this.commitPhaseResult({ planRevisionPending: false, lastFailureDigest: null });
-  }
-
-  private async runTestGeneration(stage: PipelineStage): Promise<void> {
-    const notes = await this.readProgressNotes();
-    const priorStageFailure =
-      this.state.lastFailure?.phase === stage.id
-        ? `[${this.state.lastFailure.kind}] ${this.state.lastFailure.message}\n` +
-          "Inspect and run any existing tests before creating more test infrastructure."
-        : null;
-    const payload: HandoffPayload = {
-      sessionId: this.state.sessionId,
-      originalGoal: this.state.goal,
-      approvedPlan: this.state.refinedGoal,
-      lockedReferenceIdentity: this.state.referenceIdentity,
-      targetProjectPath: this.state.targetProjectPath,
-      additionalAllowedPaths: this.state.additionalAllowedPaths,
-      accessMode: this.state.accessMode,
-      progressNotes: notes,
-      failureDigest: priorStageFailure,
-      phase: stage.id,
-      loopCount: this.state.loopCount,
-      toolAccess: this.state.toolAccess,
-      requirements: this.state.requirements,
-    };
-
-    const role = roleForStage(this.state.pipeline, stage);
-    const stageType = stageTypeForStage(this.state.pipeline, stage);
-    const prompt = buildPrompt(role.id, payload, role, stage, stageType);
-    const startedAt = new Date();
-    const result = await this.executeAgent(
-      role.id,
-      prompt,
-      undefined,
-      stageType,
-      role.modelRole
-    );
-    const endedAt = new Date();
-
-    await this.archiveLoop(this.state.loopCount, stage.id, role.id, result, startedAt, endedAt);
-
-    if (result.exitCode !== 0) {
-      throw new Error(`Tester exited with code ${result.exitCode}: ${extractOutput(result).slice(0, 200)}`);
-    }
-
-    const testerOutput = extractOutput(result);
-    const assertedVerdict = parseTesterVerdict(testerOutput) ?? "FAIL";
-    const requirementCoverage = evaluateRequirementCoverage(
-      testerOutput,
-      this.state.requirements.items
-    );
-    const verdict = assertedVerdict === "PASS" && !requirementCoverage.allSatisfied
-      ? "FAIL"
-      : assertedVerdict;
-    if (assertedVerdict === "PASS" && verdict === "FAIL") {
-      this.state.lastFailureDigest =
-        `Tester PASS rejected by requirement gate. Missing evidence: ` +
-        `${requirementCoverage.missing.join(", ") || "none"}; unresolved: ` +
-        `${requirementCoverage.unresolved.join(", ") || "none"}.`;
-    }
-    await atomicWriteJson(this.rooms[role.id].outputPayloadPath, {
-      loopCount: this.state.loopCount,
-      producedAt: endedAt.toISOString(),
-      output: testerOutput,
-      verdict,
-    });
-
-    this.recordStageResult(stage, testerOutput, verdict);
-    await this.appendProgressNote(`[Loop ${this.state.loopCount}] ${stage.id}: Test role ${role.id} verdict: ${verdict}.`);
-    applyPipelineTarget(this.state, verdict === "PASS" ? stage.onSuccess : stage.onFailure);
-    await this.commitPhaseResult({});
-  }
-
-  private async runVerification(stage: PipelineStage): Promise<void> {
-    const evidence = Object.values(this.state.stageResults)
-      .filter((result) => {
-        const sourceStage = this.state.pipeline.stages.find((candidate) => candidate.id === result.stageId);
-        return sourceStage ? executorForStage(this.state.pipeline, sourceStage) === "test" : result.executor === "test";
-      })
-      .map((result) => `[${result.stageId}] ${result.verdict ?? "UNKNOWN"}\n${result.output}`)
-      .join("\n\n");
-    const notes = await this.readProgressNotes();
-    const payload: HandoffPayload = {
-      sessionId: this.state.sessionId,
-      originalGoal: this.state.goal,
-      approvedPlan: this.state.refinedGoal,
-      lockedReferenceIdentity: this.state.referenceIdentity,
-      targetProjectPath: this.state.targetProjectPath,
-      additionalAllowedPaths: this.state.additionalAllowedPaths,
-      accessMode: this.state.accessMode,
-      progressNotes: notes,
-      failureDigest: null,
-      phase: stage.id,
-      loopCount: this.state.loopCount,
-      toolAccess: this.state.toolAccess,
-      requirements: this.state.requirements,
-    };
-    const role = roleForStage(this.state.pipeline, stage);
-    const stageType = stageTypeForStage(this.state.pipeline, stage);
-    const reviewPrompt =
-      buildPrompt(role.id, payload, role, stage, stageType) +
-      `\n\n=== PRIOR TEST EVIDENCE (truncated) ===\n${stripAnsi(evidence).slice(-6000)}`;
-    const startedAt = new Date();
-    const result = await this.executeAgent(
-      role.id,
-      reviewPrompt,
-      undefined,
-      stageType,
-      role.modelRole
-    );
-    const endedAt = new Date();
-    await this.archiveLoop(this.state.loopCount, stage.id, role.id, result, startedAt, endedAt);
-
-    const output = extractOutput(result);
-    if (isResearchBlockedResponse(output)) {
-      this.recordStageResult(stage, output, null);
-      this.state.status = LoopStatus.WAITING_USER;
-      this.state.statusReason =
-        "QA could not independently verify the named reference from web sources. Clarify the reference or provide a reliable source before resuming.";
-      await this.appendProgressNote(
-        `[Loop ${this.state.loopCount}] ${stage.id}: Research blocked; waiting for operator clarification.`
-      );
-      await this.commitPhaseResult({});
-      return;
-    }
-    const verdict = parseMasterVerdict(output);
-    const requirementCoverage = evaluateRequirementCoverage(
-      output,
-      this.state.requirements.items
-    );
-    const approved = verdict === "approved" && requirementCoverage.allSatisfied;
-    this.recordStageResult(stage, output, approved ? "APPROVED" : "REJECTED");
-    if (approved) {
-      await this.appendProgressNote(`[Loop ${this.state.loopCount}] ${stage.id}: APPROVED by ${role.id}.`);
-      applyPipelineTarget(this.state, stage.onSuccess);
-      await this.commitPhaseResult({ lastFailureDigest: null });
-      return;
-    }
-
-    const requirementGateFailure = verdict === "approved" && !requirementCoverage.allSatisfied
-      ? `QA APPROVED rejected by requirement gate. Missing evidence: ` +
-        `${requirementCoverage.missing.join(", ") || "none"}; unresolved: ` +
-        `${requirementCoverage.unresolved.join(", ") || "none"}.`
-      : "";
-    const failureDigest = requirementGateFailure || extractFailureDigest(`${output}\n${evidence}`);
-    const entry: ErrorSignature = {
-      signature: normalizeSignature(failureDigest),
-      rawMessage: failureDigest,
-      timestamp: Date.now(),
-      phase: stage.id,
-    };
-    const oscillation = pushAndCheckOscillation(this.state.errorQueue, entry);
-    this.state.errorQueue = oscillation.queue;
-    if (oscillation.oscillation || this.state.convergence.stagnantCycles >= 1) {
-      this.enterInterruptPhase();
-    } else {
-      applyPipelineTarget(this.state, stage.onFailure);
-    }
-    await this.appendProgressNote(
-      `[Loop ${this.state.loopCount}] ${stage.id}: REJECTED by ${role.id}; next=${this.state.phase}.`
-    );
-    await this.commitPhaseResult({ lastFailureDigest: failureDigest });
-  }
-
-  private async runMasterApproval(stage: PipelineStage): Promise<void> {
-    const notes = await this.readProgressNotes();
-    const payload: HandoffPayload = {
-      sessionId: this.state.sessionId,
-      originalGoal: this.state.goal,
-      approvedPlan: this.state.refinedGoal,
-      lockedReferenceIdentity: this.state.referenceIdentity,
-      targetProjectPath: this.state.targetProjectPath,
-      additionalAllowedPaths: this.state.additionalAllowedPaths,
-      accessMode: this.state.accessMode,
-      progressNotes: notes,
-      failureDigest: null,
-      phase: stage.id,
-      loopCount: this.state.loopCount,
-      toolAccess: this.state.toolAccess,
-      requirements: this.state.requirements,
-    };
-
-    const role = roleForStage(this.state.pipeline, stage);
-    const stageType = stageTypeForStage(this.state.pipeline, stage);
-    const prompt = buildPrompt(role.id, payload, role, stage, stageType);
-    const startedAt = new Date();
-    const result = await this.executeAgent(
-      role.id,
-      prompt,
-      undefined,
-      stageType,
-      role.modelRole
-    );
-    const endedAt = new Date();
-
-    await this.archiveLoop(this.state.loopCount, stage.id, role.id, result, startedAt, endedAt);
-
-    const fullOutput = extractOutput(result);
-    if (isResearchBlockedResponse(fullOutput)) {
-      this.recordStageResult(stage, fullOutput, null);
-      this.state.status = LoopStatus.WAITING_USER;
-      this.state.statusReason =
-        "Final acceptance could not independently verify the named reference from web sources. Clarify the reference or provide a reliable source before resuming.";
-      await this.appendProgressNote(
-        `[Loop ${this.state.loopCount}] ${stage.id}: Research blocked; final approval withheld pending operator clarification.`
-      );
-      await this.commitPhaseResult({ masterApproved: false });
-      return;
-    }
-    const verdictText = extractVerdictFromOutput(result);
-    const verdict = parseMasterVerdict(verdictText);
-    const requirementCoverage = evaluateRequirementCoverage(
-      fullOutput,
-      this.state.requirements.items
-    );
-    const approved =
-      result.exitCode === 0 &&
-      verdict === "approved" &&
-      requirementCoverage.allSatisfied;
-    this.recordStageResult(
-      stage,
-      fullOutput,
-      approved ? "APPROVED" : verdict === "rejected" ? "REJECTED" : null
-    );
-
-    console.log(`[orchestrator] Master verdict: ${verdict} (exitCode=${result.exitCode})`);
-    console.log(`[orchestrator] Verdict text (last 200 chars): ${verdictText.slice(-200)}`);
-
-    if (approved) {
-      applyPipelineTarget(this.state, stage.onSuccess);
-      await this.commitPhaseResult({ masterApproved: true, lastFailureDigest: null });
-      await this.appendProgressNote(`[Loop ${this.state.loopCount}] ${stage.id}: APPROVED by ${role.id}.`);
-      if (this.state.status === LoopStatus.SUCCESS) {
-        await this.emitFinalSummary();
-        await this.saveRegistry();
-        console.log(`[orchestrator] Session ${this.state.sessionId} achieved SUCCESS.`);
-      }
-    } else if (verdict === "approved") {
-      const protocolFailure =
-        `Master APPROVED rejected by requirement gate. Missing evidence: ` +
-        `${requirementCoverage.missing.join(", ") || "none"}; unresolved: ` +
-        `${requirementCoverage.unresolved.join(", ") || "none"}.`;
-      await this.appendProgressNote(
-        `[Loop ${this.state.loopCount}] ${stage.id}: APPROVED rejected because mandatory requirement evidence was incomplete.`
-      );
-      this.state.statusReason = protocolFailure;
-      this.enterInterruptPhase();
-      await this.commitPhaseResult({ masterApproved: false, lastFailureDigest: protocolFailure });
-    } else if (verdict === "unknown") {
-      const protocolFailure =
-        "Master completed without an extractable APPROVED or REJECTED decision. " +
-        "Implementation will not be repeated for a decision-protocol failure.";
-      await this.appendProgressNote(
-        `[Loop ${this.state.loopCount}] ${stage.id}: INVALID DECISION; entering INTERRUPT instead of re-running implementation.`
-      );
-      const rejectEntry: ErrorSignature = {
-        signature: approvalDecisionSignature(verdictText),
-        rawMessage: protocolFailure,
-        timestamp: Date.now(),
-        phase: stage.id,
-      };
-      this.state.errorQueue = pushAndCheckOscillation(this.state.errorQueue, rejectEntry).queue;
-      this.state.statusReason = protocolFailure;
-      this.enterInterruptPhase();
-      await this.commitPhaseResult({ masterApproved: false, lastFailureDigest: protocolFailure });
-    } else {
-      await this.appendProgressNote(`[Loop ${this.state.loopCount}] ${stage.id}: REJECTED (${verdict}).`);
-      const rejectionDigest = stripAnsi(verdictText).trim().slice(-4000);
-      const rejectEntry: ErrorSignature = {
-        signature: approvalDecisionSignature(verdictText),
-        rawMessage: rejectionDigest.slice(0, 400),
-        timestamp: Date.now(),
-        phase: stage.id,
-      };
-      const rejectOsc = pushAndCheckOscillation(this.state.errorQueue, rejectEntry);
-      this.state.errorQueue = rejectOsc.queue;
-      if (rejectOsc.oscillation) {
-        this.enterInterruptPhase();
-      } else {
-        applyPipelineTarget(this.state, stage.onFailure);
-      }
-      await this.commitPhaseResult({
-        masterApproved: false,
-        lastFailureDigest: rejectionDigest || "Master rejected the implementation without additional details.",
-      });
-    }
-  }
-
-  private async runInterrupter(stage: PipelineStage): Promise<void> {
-    const notes = await this.readProgressNotes();
-    const failureEvidence = await this.collectFailureEvidence();
-    const queuedErrors = this.state.errorQueue
-      .map((e) => `[${e.phase}] ${e.signature}`)
-      .join("\n");
-    const errorSummary = [
-      this.state.lastFailure
-        ? `[${this.state.lastFailure.phase ?? this.state.phase}] ${this.state.lastFailure.kind}: ${this.state.lastFailure.message}`
-        : "",
-      queuedErrors,
-      this.state.interruptBriefing ?? "",
-    ]
-      .filter((value) => value.trim().length > 0)
-      .join("\n");
-
-    const humanMessage = this.state.interruptMessage;
-
-    const payload: HandoffPayload = {
-      sessionId: this.state.sessionId,
-      originalGoal: this.state.goal,
-      approvedPlan: this.state.refinedGoal,
-      lockedReferenceIdentity: this.state.referenceIdentity,
-      targetProjectPath: this.state.targetProjectPath,
-      additionalAllowedPaths: this.state.additionalAllowedPaths,
-      accessMode: this.state.accessMode,
-      progressNotes: notes,
-      failureDigest: errorSummary,
-      phase: stage.id,
-      loopCount: this.state.loopCount,
-      interruptMessage: humanMessage,
-      failureEvidence,
-      toolAccess: this.state.toolAccess,
-      requirements: this.state.requirements,
-    };
-
-    const role = roleForStage(this.state.pipeline, stage);
-    const stageType = stageTypeForStage(this.state.pipeline, stage);
-    const prompt = buildPrompt(role.id, payload, role, stage, stageType);
-    const startedAt = new Date();
-    const result = await this.executeAgent(
-      role.id,
-      prompt,
-      1,
-      stageType,
-      role.modelRole
-    );
-    const endedAt = new Date();
-
-    await this.archiveLoop(this.state.loopCount, stage.id, role.id, result, startedAt, endedAt);
-
-    const briefing = extractOutput(result);
-    this.recordStageResult(stage, briefing, null);
-    this.state.interruptBriefing = briefing;
-    console.warn("\n=== INTERRUPTER BRIEFING ===");
-    console.warn(briefing);
-    console.warn("============================");
-    const terminalStatus = humanMessage ? LoopStatus.STOPPED : LoopStatus.PAUSED;
-    console.warn(`Session ${this.state.sessionId} is ${terminalStatus}. Review the briefing and resume with:`);
-    console.warn(`  agent-loop resume --session ${this.state.sessionId} --root ${this.rootDir}`);
-
-    if (humanMessage) {
-      this.state.interruptMessage = undefined;
-      this.state.status = LoopStatus.STOPPED;
-      this.state.statusReason = "Operator interrupt completed after producing a briefing.";
-    } else {
-      applyPipelineTarget(this.state, stage.onSuccess);
-      this.state.statusReason = "Repeated token-consuming work showed no meaningful convergence.";
-    }
-    await this.commitPhaseResult({});
   }
 
   private async collectFailureEvidence(): Promise<FailureEvidenceSummary> {
@@ -4520,12 +3862,11 @@ class LoopOrchestrator {
 
   private async pollControlRequest(): Promise<ClaimedControlRequest | null> {
     if (this.activeControlRequest) return null;
-    await importLegacyControlFiles(
-      this.controlPaths,
+    await this.controlRepository.importLegacy(
       path.join(this.sessionDir, loopConfig.paths.sessionFileNames.stopRequest),
       path.join(this.sessionDir, loopConfig.paths.sessionFileNames.interruptMessage)
     );
-    const claimed = await claimNextControlRequest(this.controlPaths);
+    const claimed = await this.controlRepository.claimNext();
     if (claimed) this.activeControlRequest = claimed;
     return claimed;
   }
@@ -4537,7 +3878,7 @@ class LoopOrchestrator {
     const claimed = this.activeControlRequest;
     if (!claimed) return;
     this.activeControlRequest = null;
-    await completeControlRequest(this.controlPaths, claimed, result, message);
+    await this.controlRepository.complete(claimed, result, message);
   }
 
   private async handleClaimedStop(
@@ -4555,10 +3896,9 @@ class LoopOrchestrator {
     await this.saveRegistry();
     await this.completeActiveControl("completed", message);
     while (true) {
-      const remaining = await claimNextControlRequest(this.controlPaths);
+      const remaining = await this.controlRepository.claimNext();
       if (!remaining) break;
-      await completeControlRequest(
-        this.controlPaths,
+      await this.controlRepository.complete(
         remaining,
         "cancelled",
         "Session was already stopped by an earlier request."
@@ -4570,7 +3910,41 @@ class LoopOrchestrator {
     resetStaleRunningAgentStates(this.state.agentStates);
   }
 
-  private async executeAgent(
+  private maxAttemptsForStage(stageType: PipelineStageType): number {
+    return stageActivationAttemptLimit(this.state, stageType);
+  }
+
+  private async pauseForBudgetExhaustion(exhaustion: BudgetExhaustion): Promise<void> {
+    this.state.status = LoopStatus.PAUSED;
+    this.state.statusReason = `BUDGET_EXHAUSTED/${exhaustion.dimension}: ${exhaustion.reason}`;
+    this.state.automaticRecovery = null;
+    await this.appendProgressNote(
+      `[Loop ${this.state.loopCount}] PAUSED: ${this.state.statusReason}`
+    );
+    await this.saveState();
+    await this.saveRegistry();
+    console.warn(`[orchestrator] ${this.state.statusReason}`);
+  }
+
+  private executeAgent(
+    role: AgentRole,
+    prompt: string,
+    maxAttemptsOverride: number | undefined,
+    stageType: PipelineStageType,
+    modelRole: BuiltinModelRole = "implementer",
+    planOptionsCount = 3
+  ): Promise<PtyRunResult> {
+    return this.agentExecution.execute({
+      role,
+      prompt,
+      maxAttempts: maxAttemptsOverride,
+      stageType,
+      modelRole,
+      planOptionsCount,
+    });
+  }
+
+  private async executeAgentCurrent(
     role: AgentRole,
     prompt: string,
     maxAttemptsOverride: number | undefined,
@@ -4653,6 +4027,11 @@ class LoopOrchestrator {
       (attemptNumber <= maxAttempts || completionRecoveryNext) &&
       Date.now() < cycleDeadline
     ) {
+      const attemptReservation = reserveAgentAttempt(this.state);
+      if (!attemptReservation.ok) {
+        throw new WorkflowBudgetExhaustedError(attemptReservation.exhaustion);
+      }
+      attemptNumber = attemptReservation.attemptNumber;
       const isCompletionRecovery = completionRecoveryNext;
       const completionRecoveryNumber = isCompletionRecovery
         ? completionRecoveryUsed + 1
@@ -4682,6 +4061,7 @@ class LoopOrchestrator {
       );
       const activeAttempt: AgentAttemptState = {
         attemptId,
+        activationId: attemptReservation.activationId,
         role,
         phase: this.state.phase,
         status: "starting",
@@ -4713,6 +4093,22 @@ class LoopOrchestrator {
         lastExitCode: null,
         lastRunAt: startedAt.toISOString(),
       };
+      appendDomainEvent(this.state, {
+        type: "attempt.started",
+        stageId: this.state.phase,
+        activationId: activeAttempt.activationId,
+        attemptId,
+        role,
+        summary:
+          `${this.state.phase}: ${role} attempt ${attemptNumber}/${totalAttemptSlots} started` +
+          `${isCompletionRecovery ? " in completion-recovery mode" : ""}.`,
+        detail: {
+          attemptNumber,
+          attemptLimit: totalAttemptSlots,
+          mode: activeAttempt.mode,
+        },
+      });
+      await this.saveState();
 
       const recoveryPrompt = isCompletionRecovery
         ? buildCompletionRecoveryPrompt(
@@ -4739,16 +4135,18 @@ class LoopOrchestrator {
         prompt: recoveryPrompt,
         resumeCliSessionId: resumeThisAttempt ? cliSessionId : null,
       });
-      await this.saveState();
 
       const configuredMcpServers = enabledMcpServers(this.state.toolAccess);
-      const selectedMcpServers = readOnlyRole ? [] : configuredMcpServers;
+      const selectedMcpServers = selectMcpServersForInvocation(
+        provider,
+        configuredMcpServers,
+        readOnlyRole
+      );
       const runtimeMcpServers = resolveMcpServerSecrets(
         selectedMcpServers,
         CORE_SECRET_VALUES,
         process.env
       );
-      const sensitiveValues = runtimeSensitiveValues(runtimeMcpServers);
       const useWebSearch = this.state.toolAccess.webSearch.enabled;
       let claudeMcpConfigPath: string | undefined;
       if (provider.adapter === "claude" && runtimeMcpServers.length > 0) {
@@ -4771,6 +4169,17 @@ class LoopOrchestrator {
         mcpServers: runtimeMcpServers,
         claudeMcpConfigPath,
       });
+      const providerEnvironment = {
+        ...Object.fromEntries(
+          Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined)
+        ),
+        AGENT_LOOP_SESSION_ID: this.state.sessionId,
+        AGENT_LOOP_AGENT_ROLE: role,
+        AGENT_LOOP_PHASE: this.state.phase,
+        AGENT_LOOP_ATTEMPT_ID: attemptId,
+        ...invocation.env,
+      };
+      const sensitiveValues = runtimeSensitiveValues(runtimeMcpServers, providerEnvironment);
       const interactionWhitelist = (
         provider.interactionWhitelist
         ?? (provider.adapter === "kilo" ? KILO_PROFILE.interactionWhitelist : INTERACTION_WHITELIST)
@@ -4787,7 +4196,8 @@ class LoopOrchestrator {
 
       let progressWrite = Promise.resolve();
       let lastProgressPersistedAt = 0;
-      const supervisor = new ProcessSupervisor();
+      let lastDomainProgressAt = 0;
+      let lastDomainActivity = activeAttempt.activity;
       const supervised = await (async () => {
         try {
           if (claudeMcpConfigPath) {
@@ -4796,20 +4206,11 @@ class LoopOrchestrator {
               claudeMcpDocument(runtimeMcpServers)
             );
           }
-          return await supervisor.run({
+          return await SUPERVISED_AGENT_RUNTIME.launch({
         binary: resolveBinaryOnWindows(invocation.binary),
         args: invocation.args,
         cwd: this.state.targetProjectPath,
-        env: {
-          ...Object.fromEntries(
-            Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined)
-          ),
-          AGENT_LOOP_SESSION_ID: this.state.sessionId,
-          AGENT_LOOP_AGENT_ROLE: role,
-          AGENT_LOOP_PHASE: this.state.phase,
-          AGENT_LOOP_ATTEMPT_ID: attemptId,
-          ...invocation.env,
-        },
+        env: providerEnvironment,
         cols: loopConfig.defaults.ptyCols,
         rows: loopConfig.defaults.ptyRows,
         useConpty: process.platform === "win32" && !!process.stdin?.isTTY,
@@ -4839,8 +4240,29 @@ class LoopOrchestrator {
           this.state.activeAttempt.cliSessionId = progress.cliSessionId;
           this.state.activeAttempt.activity = progress.activity;
           this.state.activeAttempt.deadlineAt = progress.deadlineAt;
-          if (Date.now() - lastProgressPersistedAt >= 1_000) {
-            lastProgressPersistedAt = Date.now();
+          const progressNow = Date.now();
+          if (
+            progress.activity !== lastDomainActivity ||
+            progressNow - lastDomainProgressAt >= 5_000
+          ) {
+            lastDomainProgressAt = progressNow;
+            lastDomainActivity = progress.activity;
+            appendDomainEvent(this.state, {
+              type: "attempt.progressed",
+              stageId: this.state.phase,
+              activationId: activeAttempt.activationId,
+              attemptId,
+              role,
+              summary:
+                `${this.state.phase}: attempt ${attemptNumber} progressed (${progress.activity}).`,
+              detail: {
+                activity: progress.activity,
+                deadlineAt: progress.deadlineAt,
+              },
+            });
+          }
+          if (progressNow - lastProgressPersistedAt >= 1_000) {
+            lastProgressPersistedAt = progressNow;
             progressWrite = progressWrite.then(() => this.saveState()).catch(() => {});
           }
         },
@@ -4879,6 +4301,15 @@ class LoopOrchestrator {
         activeAttempt.failureKind = "cancelled";
         activeAttempt.failureMessage = supervised.failureMessage;
         activeAttempt.cliSessionId = cliSessionId;
+        appendDomainEvent(this.state, {
+          type: "attempt.failed",
+          stageId: this.state.phase,
+          activationId: activeAttempt.activationId,
+          attemptId,
+          role,
+          summary: `${this.state.phase}: attempt ${attemptNumber} was cancelled by operator control.`,
+          detail: { failureKind: "cancelled", exitCode: result.exitCode },
+        });
         await atomicWriteJson(this.rooms[role].outputPayloadPath, {
           attempt: activeAttempt,
           output: extractOutput(result),
@@ -4892,7 +4323,7 @@ class LoopOrchestrator {
         throw new InterruptRequestedError(supervised.controlRequest.request.message);
       }
 
-      const completion =
+      const legacyCompletion =
         supervised.outcome === "succeeded"
           ? validateAgentCompletion(
               stageType.completionContract,
@@ -4913,6 +4344,16 @@ class LoopOrchestrator {
               }
             )
           : { valid: false, reason: supervised.failureMessage };
+      const structuredStageOutcome = observeStructuredStageOutcome(result.events, {
+        stageId: this.state.phase,
+        executor: stageType.executor,
+        decision: structuredDecisionForCompletion(stageType.completionContract, result),
+      });
+      result.structuredStageOutcome = structuredStageOutcome;
+      const completion =
+        legacyCompletion.valid && !structuredStageOutcome.valid
+          ? { valid: false, reason: structuredStageOutcome.reason }
+          : legacyCompletion;
       if (supervised.outcome === "succeeded" && completion.valid) {
         activeAttempt.status = "succeeded";
         activeAttempt.endedAt = supervised.endedAt;
@@ -4929,11 +4370,23 @@ class LoopOrchestrator {
           lastExitCode: result.exitCode,
           lastRunAt: supervised.endedAt,
         };
+        appendDomainEvent(this.state, {
+          type: "attempt.completed",
+          stageId: this.state.phase,
+          activationId: activeAttempt.activationId,
+          attemptId,
+          role,
+          summary: `${this.state.phase}: attempt ${attemptNumber} satisfied the completion contract.`,
+          detail: {
+            exitCode: result.exitCode,
+            structuredOutcome: structuredStageOutcome.present,
+          },
+        });
         await atomicWriteJson(this.rooms[role].outputPayloadPath, {
           attempt: activeAttempt,
           output: assistantTextBeforeSentinel(result),
           rawLogPath,
-          structuredResult: null,
+          structuredResult: structuredStageOutcome.signal,
         });
         await atomicWriteJson(this.rooms[role].statePath, this.state.agentStates[role]);
         return result;
@@ -4975,6 +4428,19 @@ class LoopOrchestrator {
         lastExitCode: result.exitCode,
         lastRunAt: supervised.endedAt,
       };
+      appendDomainEvent(this.state, {
+        type: "attempt.failed",
+        stageId: this.state.phase,
+        activationId: activeAttempt.activationId,
+        attemptId,
+        role,
+        summary: `${this.state.phase}: attempt ${attemptNumber} failed (${failure.kind}).`,
+        detail: {
+          failureKind: failure.kind,
+          retryable: failure.retryable,
+          exitCode: result.exitCode,
+        },
+      });
       await atomicWriteJson(this.rooms[role].outputPayloadPath, {
         attempt: activeAttempt,
         output: extractOutput(result),
@@ -5082,114 +4548,32 @@ class LoopOrchestrator {
     startedAt: Date,
     endedAt: Date
   ): Promise<void> {
-    const rawLogPath = result.rawLogPath ?? null;
-    const rawLogBytes = rawLogPath
-      ? await fse.stat(rawLogPath).then((stat) => stat.size).catch(() => null)
-      : null;
-    const lastEvent = summarizeAttemptEvents(result);
-    const entry: LoopHistoryEntry = {
-      loopNumber: loopNum,
-      phase,
-      agentRole: role,
-      model: (() => {
-        const pipelineRole = this.state.pipeline.roles.find((candidate) => candidate.id === role);
-        const providerId = pipelineRole?.provider
-          ?? this.state.providerMapping?.[role]
-          ?? this.state.providerMapping?.[pipelineRole?.modelRole ?? role]
-          ?? this.state.cliProfile;
-        const model = pipelineRole?.model ?? this.state.modelMapping[pipelineRole?.modelRole ?? role] ?? "unknown";
-        return `${providerId}:${model}`;
-      })(),
-      exitCode: result.exitCode,
-      startedAt: startedAt.toISOString(),
-      endedAt: endedAt.toISOString(),
-      output: boundedHistoryOutput(result.output),
-      result: result.timedOut ? "timeout" : result.exitCode === 0 ? "success" : "failure",
-      signature: null,
-      interruptMessage: this.state.interruptMessage ?? null,
-      attemptId: this.state.activeAttempt?.attemptId ?? null,
-      attemptNumber: this.state.activeAttempt?.attemptNumber ?? null,
-      failureKind: result.failureKind ?? null,
-      rawLogPath,
-      rawLogBytes,
-      assistantTextBytes: Buffer.byteLength(result.assistantText ?? "", "utf8"),
-      eventCount: result.events.length,
-      ...lastEvent,
-    };
-    const attemptSuffix = this.state.activeAttempt
-      ? `_attempt_${this.state.activeAttempt.attemptNumber}_${this.state.activeAttempt.attemptId}`
-      : "";
-    const fileName = `loop_${loopNum}_${phase.toLowerCase()}_${role}${attemptSuffix}.json`;
-    const filePath = path.join(this.sessionDir, loopConfig.paths.loopHistoryDirName, fileName);
-    await atomicWriteJson(filePath, entry);
-    await Promise.all([
-      this.pruneRetainedFiles(
-        path.join(this.sessionDir, loopConfig.paths.loopHistoryDirName),
-        ".json",
-        MAX_RETAINED_HISTORY_FILES
-      ),
-      this.pruneRetainedFiles(
-        path.join(this.sessionDir, loopConfig.paths.attemptLogsDirName),
-        ".log",
-        MAX_RETAINED_ATTEMPT_LOGS
-      ),
-    ]);
-  }
-
-  private async pruneRetainedFiles(
-    directory: string,
-    suffix: string,
-    maximumFiles: number
-  ): Promise<void> {
-    const names = (await fse.readdir(directory).catch(() => [] as string[]))
-      .filter((name) => name.endsWith(suffix));
-    if (names.length <= maximumFiles) return;
-    const candidates = await Promise.all(names.map(async (name) => {
-      const filePath = path.join(directory, name);
-      const stat = await fse.stat(filePath).catch(() => null);
-      return stat ? { filePath, modifiedAt: stat.mtimeMs } : null;
-    }));
-    const removable = candidates
-      .filter((candidate): candidate is { filePath: string; modifiedAt: number } => candidate !== null)
-      .sort((left, right) => left.modifiedAt - right.modifiedAt)
-      .slice(0, Math.max(0, names.length - maximumFiles));
-    await Promise.all(removable.map(({ filePath }) => fse.remove(filePath).catch(() => {})));
+    await this.reporter.archiveLoop(loopNum, phase, role, result, startedAt, endedAt);
   }
 
   private async appendProgressNote(note: string): Promise<void> {
-    const notesPath = path.join(this.sessionDir, loopConfig.paths.sessionFileNames.progressNotes);
-    await atomicAppendLine(notesPath, note);
+    await this.reporter.appendProgressNote(note);
   }
 
   private async readProgressNotes(): Promise<string> {
-    const notesPath = path.join(this.sessionDir, loopConfig.paths.sessionFileNames.progressNotes);
-    try {
-      return await fse.readFile(notesPath, "utf8");
-    } catch {
-      return "";
-    }
+    return this.reporter.readProgressNotes();
   }
 
   private async emitFinalSummary(): Promise<void> {
-    const notes = await this.readProgressNotes();
-    const summary: FinalSummary = {
-      sessionId: this.state.sessionId,
-      goal: this.state.goal,
-      achievedAt: new Date().toISOString(),
-      totalLoops: this.state.loopCount,
-      finalModelMapping: this.state.modelMapping,
-      progressNotes: notes,
-      approvedByMaster: this.state.masterApproved,
-    };
-    const summaryPath = path.join(this.sessionDir, loopConfig.paths.sessionFileNames.finalSummary);
-    await atomicWriteJson(summaryPath, summary);
+    await this.reporter.emitFinalSummary();
   }
 
   private recordStageResult(
     stage: PipelineStage,
     output: string,
-    verdict: StageResultState["verdict"]
+    verdict: StageResultState["verdict"],
+    result?: AgentRunResult
   ): void {
+    const recordedAt = new Date().toISOString();
+    const executor = executorForStage(this.state.pipeline, stage);
+    const stageType = stageTypeForStage(this.state.pipeline, stage);
+    const activationId = this.state.currentActivation?.activationId ?? null;
+    const attemptId = this.state.activeAttempt?.attemptId ?? null;
     const validRequirementIds = new Set(this.state.requirements.items.map((item) => item.id));
     const requirementEvidence = parseRequirementEvidence(output)
       .filter((record) => validRequirementIds.has(record.requirementId))
@@ -5197,8 +4581,8 @@ class LoopOrchestrator {
         ...record,
         stageId: stage.id,
         role: stage.role,
-        attemptId: this.state.activeAttempt?.attemptId ?? null,
-        recordedAt: new Date().toISOString(),
+        attemptId,
+        recordedAt,
       }));
     if (requirementEvidence.length > 0) {
       this.state.requirements.evidence = [
@@ -5207,7 +4591,7 @@ class LoopOrchestrator {
       ].slice(-200);
     }
     if (stage.id === this.state.pipeline.iterationCompletionStageId) {
-      this.state.completedIterations++;
+      completeCycleObservation(this.state);
       this.state.convergence = advanceConvergence(
         this.state.convergence,
         this.state.requirements,
@@ -5218,19 +4602,90 @@ class LoopOrchestrator {
       stageId: stage.id,
       role: stage.role,
       kind: stage.kind,
-      executor: executorForStage(this.state.pipeline, stage),
-      completedAt: new Date().toISOString(),
+      executor,
+      completedAt: recordedAt,
       output,
       verdict,
-      attemptId: this.state.activeAttempt?.attemptId ?? null,
+      attemptId,
     };
+    const outcome = createStageOutcome({
+      stage,
+      executor,
+      completionContract: stageType.completionContract,
+      activationId,
+      attemptId,
+      output,
+      verdict,
+      requirementEvidence,
+      artifacts: this.state.artifactRefs,
+      structuredObservation: result?.structuredStageOutcome,
+      status: isResearchBlockedResponse(output) ? "waiting_user" : "succeeded",
+      recordedAt,
+    });
+    this.state.stageOutcomes = appendStageOutcome(this.state.stageOutcomes, outcome);
+    appendDomainEvent(
+      this.state,
+      {
+        type: "stage.completed",
+        stageId: stage.id,
+        activationId,
+        attemptId,
+        role: stage.role,
+        summary:
+          `Stage ${stage.id} completed` +
+          `${outcome.decision ? ` with decision ${outcome.decision}` : ""}.`,
+        detail: {
+          executor,
+          decision: outcome.decision,
+          outcomeSource: outcome.source,
+        },
+      },
+      recordedAt
+    );
+    markCurrentActivationCompleted(this.state);
+  }
+
+  private recordFailedStageOutcome(stage: PipelineStage, error: unknown): void {
+    const failure = error instanceof AgentRetriesExhaustedError
+      ? error.failure
+      : error instanceof ImplementationPreflightError
+        ? error.failure
+        : null;
+    const status = error instanceof StopRequestedError
+      ? "stopped"
+      : error instanceof InterruptRequestedError || error instanceof WorkflowBudgetExhaustedError
+        ? "paused"
+        : error instanceof ImplementationPreflightError
+          ? "waiting_user"
+          : "failed";
+    const outcome = createFailedStageOutcome({
+      stage,
+      executor: executorForStage(this.state.pipeline, stage),
+      completionContract: stageTypeForStage(this.state.pipeline, stage).completionContract,
+      activationId: this.state.currentActivation?.activationId ?? null,
+      attemptId: this.state.activeAttempt?.attemptId ?? null,
+      artifacts: this.state.artifactRefs,
+      status,
+      failure: {
+        kind: failure?.kind ?? (
+          error instanceof WorkflowBudgetExhaustedError
+            ? `budget_${error.exhaustion.dimension}`
+            : error instanceof StopRequestedError || error instanceof InterruptRequestedError
+              ? "cancelled"
+              : "unknown"
+        ),
+        message: error instanceof Error ? error.message : String(error),
+        retryable: failure?.retryable ?? false,
+        exitCode: failure?.exitCode ?? this.state.activeAttempt?.exitCode ?? null,
+      },
+    });
+    this.state.stageOutcomes = appendStageOutcome(this.state.stageOutcomes, outcome);
   }
 
   private async saveState(): Promise<void> {
+    appendWorkflowStatusEventIfChanged(this.state);
     this.state.updatedAt = new Date().toISOString();
-    const statePath = path.join(this.sessionDir, loopConfig.paths.sessionFileNames.state);
-    const lockPath = path.join(this.sessionDir, loopConfig.paths.stateLockFileName);
-    await withShortFileLock(lockPath, () => atomicWriteJson(statePath, this.state));
+    await this.sessionRepository.saveState(this.state);
   }
 
   private async commitPhaseResult(patch: Partial<LoopState>): Promise<void> {
@@ -5247,13 +4702,7 @@ class LoopOrchestrator {
   }
 
   private async saveRegistry(): Promise<void> {
-    this.registry = await mergeAndWriteSessionMeta(this.registryPath, this.registry, {
-      sessionId: this.state.sessionId,
-      goal: this.state.goal,
-      targetProjectPath: this.state.targetProjectPath,
-      status: this.state.status,
-      createdAt: this.state.createdAt,
-    });
+    this.registry = await this.sessionRepository.saveRegistry(this.registry, this.state);
   }
 
   private registerSignalHandlers(): void {
@@ -5312,7 +4761,8 @@ function createDefaultLoopState(
   variantMapping: VariantMapping,
   cliBinary: string,
   cliProfile: string,
-  maxIterations: number,
+  maxCycles: number,
+  maxWorkflowSteps: number,
   phaseTimeoutMs: number,
   idleTimeoutMs: number,
   pipeline: PipelineDefinition,
@@ -5321,15 +4771,29 @@ function createDefaultLoopState(
   accessMode: AccessMode = "ask"
 ): LoopState {
   const now = new Date().toISOString();
-  const agentStates = createDefaultAgentStates(pipeline);
+  const compiledPipeline = compilePipeline(pipeline, now);
+  const agentStates = createDefaultAgentStates(compiledPipeline.pipeline);
 
-  return {
+  const state: LoopState = {
     stateVersion: 2,
+    aggregateFormatVersion: 1,
+    aggregateRevision: 0,
+    fencingEpoch: 0,
+    aggregateChecksum: "",
+    processedRequestIds: [],
+    artifactRefs: {},
     sessionId,
     status: LoopStatus.RUNNING,
     phase: pipeline.startStageId,
     loopCount: 0,
     completedIterations: 0,
+    maxCycles,
+    cyclesStarted: 0,
+    cyclesCompleted: 0,
+    maxWorkflowSteps,
+    workflowStepsConsumed: 0,
+    currentActivation: null,
+    activationHistory: [],
     goal,
     targetProjectPath: path.resolve(targetProjectPath),
     additionalAllowedPaths: normalizeAdditionalAllowedPaths(
@@ -5364,20 +4828,35 @@ function createDefaultLoopState(
     statusReason: null,
     automaticRecovery: null,
     resilience: resilienceSettingsFromConfig(),
-    pipeline,
+    pipeline: compiledPipeline.pipeline,
+    pipelineCompilation: compiledPipeline.compilation,
     pipelineConfigPath,
     stageResults: {},
+    stageOutcomes: [],
+    domainEventSequence: 0,
+    domainEvents: [],
     requirements: deriveRequirementLedger(goal, now),
     convergence: { stagnantCycles: 0, history: [] },
     createdAt: now,
     updatedAt: now,
-    maxIterations,
+    maxIterations: maxCycles,
     phaseTimeoutMs,
     idleTimeoutMs,
     cliBinary,
     cliProfile,
     toolAccess: validateToolAccess(loopConfig.toolAccess),
   };
+  appendDomainEvent(
+    state,
+    {
+      type: "workflow.started",
+      stageId: state.phase,
+      summary: `Session ${sessionId} started at stage ${state.phase}.`,
+      detail: { status: state.status },
+    },
+    now
+  );
+  return state;
 }
 
 function resolveModelMapping(
@@ -5464,18 +4943,20 @@ function resolveVariantMapping(parsed: Record<string, string>): VariantMapping {
   return mapping;
 }
 
-async function resolveRootDir(parsed: Record<string, string>): Promise<string> {
-  if (parsed.root) return path.resolve(parsed.root);
-  const scriptDir = path.dirname(process.argv[1]);
-  if (await fse.pathExists(path.join(scriptDir, loopConfig.paths.registryFileName))) {
-    return scriptDir;
-  }
-  return process.cwd();
+async function loadSessionsProjection(rootDir: string): Promise<SessionRegistry | null> {
+  const indexPath = path.join(rootDir, loopConfig.paths.sessionsIndexFileName);
+  const current = await atomicReadJson<SessionRegistry>(indexPath);
+  if (current) return current;
+  const legacyPath = path.join(rootDir, loopConfig.paths.registryFileName);
+  const legacy = await atomicReadJson<SessionRegistry>(legacyPath);
+  if (!legacy) return null;
+  await atomicWriteJson(indexPath, legacy);
+  return legacy;
 }
 
 async function reconcileSessionRegistry(rootDir: string): Promise<void> {
-  const registryPath = path.join(rootDir, loopConfig.paths.registryFileName);
-  const registry = await atomicReadJson<SessionRegistry>(registryPath);
+  const registryPath = path.join(rootDir, loopConfig.paths.sessionsIndexFileName);
+  const registry = await loadSessionsProjection(rootDir);
   if (!registry) return;
   const sessionsRoot = path.join(rootDir, loopConfig.paths.sessionsRoot);
   const entries = await fse.readdir(sessionsRoot, { withFileTypes: true }).catch(() => []);
@@ -5501,7 +4982,10 @@ async function reconcileSessionRegistry(rootDir: string): Promise<void> {
       // Ignore malformed or unsafe session directories.
     }
   }
-  if (discovered.length === 0) return;
+  if (discovered.length === 0) {
+    await rebuildCurrentSessionsIndex(rootDir, registry);
+    return;
+  }
   const lockPath = path.join(rootDir, loopConfig.paths.registryLockFileName);
   await withShortFileLock(lockPath, async () => {
     const fresh = (await atomicReadJson<SessionRegistry>(registryPath)) ?? registry;
@@ -5514,7 +4998,24 @@ async function reconcileSessionRegistry(rootDir: string): Promise<void> {
       }
     }
     if (changed) await atomicWriteJson(registryPath, fresh);
+    await rebuildCurrentSessionsIndex(rootDir, fresh);
   });
+}
+
+function rebuildCurrentSessionsIndex(
+  rootDir: string,
+  fallback: SessionRegistry
+): Promise<SessionRegistry> {
+  return rebuildSessionsIndex(
+    rootDir,
+    {
+      sessionsRoot: loopConfig.paths.sessionsRoot,
+      stateFileName: loopConfig.paths.sessionFileNames.state,
+      stateLockFileName: loopConfig.paths.stateLockFileName,
+      indexFileName: loopConfig.paths.sessionsIndexFileName,
+    },
+    fallback
+  );
 }
 
 async function ensureAgentConfigFiles(rootDir: string): Promise<void> {
@@ -5534,12 +5035,14 @@ async function ensureAgentConfigFiles(rootDir: string): Promise<void> {
   }
 }
 
-async function cmdInit(rootDir: string): Promise<void> {
+async function cmdInit(roots: RootSet): Promise<void> {
+  const rootDir = roots.dataRoot;
   const cfg = loopConfig.paths;
   await fse.ensureDir(path.join(rootDir, cfg.sessionsRoot));
-  await ensureAgentConfigFiles(rootDir);
-  const registryPath = path.join(rootDir, cfg.registryFileName);
-  const existing = await atomicReadJson<SessionRegistry>(registryPath);
+  await fse.ensureDir(roots.configRoot);
+  await ensureAgentConfigFiles(roots.configRoot);
+  const registryPath = path.join(rootDir, cfg.sessionsIndexFileName);
+  const existing = await loadSessionsProjection(rootDir);
   if (existing) {
     console.log(`Already initialized at ${rootDir}`);
     return;
@@ -5556,27 +5059,30 @@ async function cmdInit(rootDir: string): Promise<void> {
     providerCatalog: {},
   };
   await atomicWriteJson(registryPath, registry);
-  console.log(`Initialized agent-loop system at ${rootDir}`);
+  await rebuildCurrentSessionsIndex(rootDir, registry);
+  console.log(`Initialized agent-loop data at ${rootDir}`);
+  console.log(`Configuration root: ${roots.configRoot}`);
   console.log(`Registry: ${registryPath}`);
   console.log(`Sessions dir: ${path.join(rootDir, loopConfig.paths.sessionsRoot)}`);
 }
 
-async function cmdModels(_parsed: Record<string, string>, rootDir: string): Promise<void> {
-  const registryPath = path.join(rootDir, loopConfig.paths.registryFileName);
-  const registry = await atomicReadJson<SessionRegistry>(registryPath);
+async function cmdModels(_parsed: Record<string, string>, roots: RootSet): Promise<void> {
+  const rootDir = roots.dataRoot;
+  const registryPath = path.join(rootDir, loopConfig.paths.sessionsIndexFileName);
+  const registry = await loadSessionsProjection(rootDir);
   const providers = normalizeProviders(loopConfig.providers);
   const catalog = await discoverProviderCatalog(providers, registry?.manualModelsOverride ?? null);
   const models = flatCatalogModels(catalog);
 
   if (registry) {
-    const modelVariantsConfig = await loadModelVariantsConfig(rootDir);
+    const modelVariantsConfig = await loadModelVariantsConfig(roots.configRoot);
     await mergeAndWriteRegistryFields(registryPath, registry, {
       availableModels: models,
       modelsDiscoveredAt: new Date().toISOString(),
       modelsDiscoveredCli: "all enabled providers",
       modelVariants: modelVariantsConfig ?? null,
       providerCatalog: catalog,
-    });
+    }, loopConfig.paths.registryLockFileName);
   }
 
   console.log(`Provider catalog (${Object.keys(catalog).length} providers, ${models.length} models):`);
@@ -5585,7 +5091,54 @@ async function cmdModels(_parsed: Record<string, string>, rootDir: string): Prom
   }
 }
 
-async function cmdRun(parsed: Record<string, string>, rootDir: string): Promise<void> {
+async function cmdCapabilities(_parsed: Record<string, string>, roots: RootSet): Promise<void> {
+  console.log(JSON.stringify(createCoreCapabilityHandshake(roots)));
+}
+
+async function cmdMigrateRoot(parsed: Record<string, string>, roots: RootSet): Promise<void> {
+  const sourceRoot = parsed.from;
+  if (!sourceRoot || sourceRoot === "true") {
+    throw new Error("--from <legacy-root> is required for 'migrate-root'.");
+  }
+  const manifest = await migrateLegacyRoot(sourceRoot, roots, {
+    registryFileName: loopConfig.paths.registryFileName,
+    sessionsRoot: loopConfig.paths.sessionsRoot,
+    ownerLockFileName: loopConfig.paths.ownerLockFileName,
+    leaseFileName: loopConfig.paths.leaseFileName,
+  });
+  console.log(
+    `Migrated ${manifest.files.length} file(s) from ${manifest.sourceRoot} to ${manifest.dataRoot}.`
+  );
+  console.log(`Migration manifest: ${path.join(manifest.dataRoot, "migration_manifest.json")}`);
+}
+
+export function printOperatorSnapshot(state: LoopState, asJson = false): void {
+  const snapshot = deriveOperatorSnapshot(state);
+  console.log(asJson ? JSON.stringify(snapshot, null, 2) : formatOperatorSnapshot(snapshot));
+}
+
+async function cmdStatus(parsed: Record<string, string>, roots: RootSet): Promise<void> {
+  const sessionId = parsed.session;
+  if (!sessionId || sessionId === "true") {
+    throw new Error("--session is required for 'status'.");
+  }
+  assertSafeSessionId(sessionId);
+  const sessionDir = resolveContainedSessionPath(
+    path.join(roots.dataRoot, loopConfig.paths.sessionsRoot),
+    sessionId
+  );
+  const statePath = path.join(sessionDir, loopConfig.paths.sessionFileNames.state);
+  if (!await fse.pathExists(statePath)) {
+    throw new Error(`No session found with ID ${sessionId}.`);
+  }
+  const state = normalizeLoopState(
+    await createFileSessionRepository(roots.dataRoot, sessionDir).load()
+  ).state;
+  printOperatorSnapshot(state, parsed.json === "true");
+}
+
+async function cmdRun(parsed: Record<string, string>, roots: RootSet): Promise<void> {
+  const rootDir = roots.dataRoot;
   const goal = parsed.goal;
   if (!goal || goal === "true") {
     console.error("Error: --goal is required for 'run'");
@@ -5593,32 +5146,40 @@ async function cmdRun(parsed: Record<string, string>, rootDir: string): Promise<
     process.exit(1);
   }
 
-  const targetProjectPath = parsed.target && parsed.target !== "true" ? parsed.target : process.cwd();
+  const targetProjectPath = roots.projectRoot;
   const additionalAllowedPaths: string[] = [];
   const accessMode: AccessMode = parsed["full-access"] === "true" ? "full_access" : "ask";
   const cliBinary = parsed.binary && parsed.binary !== "true" ? parsed.binary : loopConfig.defaults.cliBinary;
   const profile = resolveCliProfile(parsed.profile ?? null, cliBinary);
-  const maxIterations = parseIntSafe(parsed["max-iterations"], loopConfig.defaults.maxIterations);
+  const maxCycles = parseIntSafe(
+    parsed["max-cycles"] ?? parsed["max-iterations"],
+    loopConfig.defaults.maxIterations
+  );
+  const maxWorkflowSteps = parseIntSafe(
+    parsed["max-workflow-steps"],
+    deriveLegacyMaxWorkflowSteps(maxCycles)
+  );
   const phaseTimeoutMs = parseIntSafe(parsed["phase-timeout"], loopConfig.defaults.phaseTimeoutMs);
   const idleTimeoutMs = parseIntSafe(parsed["idle-timeout"], loopConfig.defaults.idleTimeoutMs);
   const resilience = applyResilienceOverrides(parsed, resilienceSettingsFromConfig());
-  validateRuntimeSettings(maxIterations, phaseTimeoutMs, idleTimeoutMs, resilience);
+  validateRuntimeSettings(maxCycles, phaseTimeoutMs, idleTimeoutMs, resilience);
+  if (maxWorkflowSteps < 1) throw new Error("maxWorkflowSteps must be a positive integer.");
   // This must precede registry initialization and provider model discovery: the
   // provider workspace must never contain mutable orchestration state.
   await assertMutableRootOutsideTarget(rootDir, targetProjectPath);
   if (accessMode === "full_access") warnFullAccessLimitations();
 
-  const registryPath = path.join(rootDir, loopConfig.paths.registryFileName);
-  let registry = await atomicReadJson<SessionRegistry>(registryPath);
+  const registryPath = path.join(rootDir, loopConfig.paths.sessionsIndexFileName);
+  let registry = await loadSessionsProjection(rootDir);
   if (!registry) {
-    await cmdInit(rootDir);
+    await cmdInit(roots);
     registry = await atomicReadJson<SessionRegistry>(registryPath);
   }
   if (!registry) {
     console.error("Error: Failed to initialize or read session registry.");
     process.exit(1);
   }
-  await ensureAgentConfigFiles(rootDir);
+  await ensureAgentConfigFiles(roots.configRoot);
   let reg: SessionRegistry = registry;
   const providers = normalizeProviders(loopConfig.providers);
   const defaultProviderId = providers[profile.name] ? profile.name : "opencode";
@@ -5642,7 +5203,7 @@ async function cmdRun(parsed: Record<string, string>, rootDir: string): Promise<
       modelsDiscoveredAt: new Date().toISOString(),
       modelsDiscoveredCli: "all enabled providers",
       providerCatalog,
-    });
+    }, loopConfig.paths.registryLockFileName);
   }
 
   if (models.length === 0) {
@@ -5668,11 +5229,11 @@ async function cmdRun(parsed: Record<string, string>, rootDir: string): Promise<
     console.log(`  ${role}: ${providerMapping[role] ?? defaultProviderId}/${model} (variant: ${vrnt})`);
   }
 
-  const modelVariantsConfig = await loadModelVariantsConfig(rootDir);
+  const modelVariantsConfig = await loadModelVariantsConfig(roots.configRoot);
   if (modelVariantsConfig) {
     reg = await mergeAndWriteRegistryFields(registryPath, reg, {
       modelVariants: modelVariantsConfig,
-    });
+    }, loopConfig.paths.registryLockFileName);
   }
 
   const sessionId = parsed.session && parsed.session !== "true" ? parsed.session : generateSessionId();
@@ -5713,8 +5274,8 @@ async function cmdRun(parsed: Record<string, string>, rootDir: string): Promise<
     requestedPipelinePath
       ? requestedPipelinePath
       : null;
-  const rolesConfigPath = explicitRolesPath ?? path.join(rootDir, "agent_roles.json");
-  const loopGraphConfigPath = explicitLoopPath ?? path.join(rootDir, "agent_loop.json");
+  const rolesConfigPath = explicitRolesPath ?? path.join(roots.configRoot, "agent_roles.json");
+  const loopGraphConfigPath = explicitLoopPath ?? path.join(roots.configRoot, "agent_loop.json");
   const pipeline = pipelineConfigPath
     ? await loadPipelineDefinition(pipelineConfigPath)
     : await loadSeparatedPipelineDefinition(rolesConfigPath, loopGraphConfigPath);
@@ -5745,7 +5306,8 @@ async function cmdRun(parsed: Record<string, string>, rootDir: string): Promise<
     variantMapping,
     cliBinary,
     profile.name,
-    maxIterations,
+    maxCycles,
+    maxWorkflowSteps,
     phaseTimeoutMs,
     idleTimeoutMs,
     pipeline,
@@ -5755,7 +5317,9 @@ async function cmdRun(parsed: Record<string, string>, rootDir: string): Promise<
   );
   state.resilience = resilience;
 
-  await atomicWriteJson(statePath, state);
+  const stateRepository = createFileSessionRepository(rootDir, sessionDir);
+  const initializedState = await stateRepository.initialize(state);
+  Object.assign(state, initializedState);
 
   reg = await mergeAndWriteSessionMeta(registryPath, reg, {
     sessionId,
@@ -5763,14 +5327,15 @@ async function cmdRun(parsed: Record<string, string>, rootDir: string): Promise<
     targetProjectPath: path.resolve(targetProjectPath),
     status: LoopStatus.RUNNING,
     createdAt: state.createdAt,
-  });
+  }, loopConfig.paths.registryLockFileName);
 
   const orchestrator = new LoopOrchestrator(rootDir, reg, state, rooms);
   await orchestrator.run();
 
-  const finalState = await atomicReadJson<LoopState>(statePath);
+  const finalState = await stateRepository.load();
   if (finalState) {
     console.log(`\n[orchestrator] Session ${sessionId} ended with status: ${finalState.status}`);
+    printOperatorSnapshot(finalState);
     if (finalState.status === LoopStatus.SUCCESS) {
       const summaryPath = path.join(sessionDir, loopConfig.paths.sessionFileNames.finalSummary);
       console.log(`[orchestrator] Final summary: ${summaryPath}`);
@@ -5799,7 +5364,8 @@ async function cmdRun(parsed: Record<string, string>, rootDir: string): Promise<
   }
 }
 
-async function cmdResume(parsed: Record<string, string>, rootDir: string): Promise<void> {
+async function cmdResume(parsed: Record<string, string>, roots: RootSet): Promise<void> {
+  const rootDir = roots.dataRoot;
   const sessionId = parsed.session;
   if (!sessionId || sessionId === "true") {
     console.error("Error: --session is required for 'resume'");
@@ -5808,8 +5374,8 @@ async function cmdResume(parsed: Record<string, string>, rootDir: string): Promi
   }
   assertSafeSessionId(sessionId);
 
-  const registryPath = path.join(rootDir, loopConfig.paths.registryFileName);
-  let registry = await atomicReadJson<SessionRegistry>(registryPath);
+  const registryPath = path.join(rootDir, loopConfig.paths.sessionsIndexFileName);
+  let registry = await loadSessionsProjection(rootDir);
   if (!registry) {
     console.error(`Error: No registry found at ${registryPath}. Run 'agent-loop init' first.`);
     process.exit(1);
@@ -5820,11 +5386,12 @@ async function cmdResume(parsed: Record<string, string>, rootDir: string): Promi
     sessionId
   );
   const statePath = path.join(sessionDir, loopConfig.paths.sessionFileNames.state);
-  const loadedState = await atomicReadJson<LoopState>(statePath);
-  if (!loadedState) {
+  if (!await fse.pathExists(statePath)) {
     console.error(`Error: No session found with ID ${sessionId}`);
     process.exit(1);
   }
+  const stateRepository = createFileSessionRepository(rootDir, sessionDir);
+  const loadedState = await stateRepository.load();
   const normalized = normalizeLoopState(loadedState);
   const state = normalized.state;
   await assertMutableRootOutsideTarget(
@@ -5870,16 +5437,29 @@ async function cmdResume(parsed: Record<string, string>, rootDir: string): Promi
     state.lastFailureDigest = null;
   }
 
-  if (parsed["max-iterations"]) state.maxIterations = parseIntSafe(parsed["max-iterations"], state.maxIterations);
+  const requestedMaxCycles = parsed["max-cycles"] ?? parsed["max-iterations"];
+  if (requestedMaxCycles) {
+    state.maxCycles = parseIntSafe(requestedMaxCycles, state.maxCycles);
+    state.maxIterations = state.maxCycles;
+  }
+  if (parsed["max-workflow-steps"]) {
+    state.maxWorkflowSteps = parseIntSafe(
+      parsed["max-workflow-steps"],
+      state.maxWorkflowSteps
+    );
+  }
   if (parsed["phase-timeout"]) state.phaseTimeoutMs = parseIntSafe(parsed["phase-timeout"], state.phaseTimeoutMs);
   if (parsed["idle-timeout"]) state.idleTimeoutMs = parseIntSafe(parsed["idle-timeout"], state.idleTimeoutMs);
   state.resilience = applyResilienceOverrides(parsed, state.resilience);
   validateRuntimeSettings(
-    state.maxIterations,
+    state.maxCycles,
     state.phaseTimeoutMs,
     state.idleTimeoutMs,
     state.resilience
   );
+  if (state.maxWorkflowSteps < 1) {
+    throw new Error("maxWorkflowSteps must be a positive integer.");
+  }
   if (parsed.binary && parsed.binary !== "true") state.cliBinary = parsed.binary;
   if (parsed.profile && parsed.profile !== "true") state.cliProfile = parsed.profile;
   if (!state.cliProfile) state.cliProfile = resolveCliProfile(null, state.cliBinary).name;
@@ -5888,15 +5468,23 @@ async function cmdResume(parsed: Record<string, string>, rootDir: string): Promi
   resetStaleRunningAgentStates(state.agentStates);
 
   const recoveryResume = parsed.recovery === "true";
+  const reconcileMutation = parsed["reconcile-mutation"];
+  if (reconcileMutation && reconcileMutation !== "retry") {
+    throw new Error("--reconcile-mutation currently accepts only 'retry'.");
+  }
+  if (state.currentActivation?.status === "unknown_mutation" && reconcileMutation !== "retry") {
+    console.log(
+      `Session ${sessionId} has an unknown mutation outcome. Inspect the target project, then ` +
+        `resume with --reconcile-mutation retry.`
+    );
+    return;
+  }
   const accessSettingsChanged =
     grantFullAccess || approvePendingAccess;
   if (state.status === LoopStatus.WAITING_USER && state.pendingAccessRequest) {
     if (normalized.migrated || accessSettingsChanged) {
       if (normalized.migrated) await backupFileOnce(statePath, "v1.backup");
-      await withShortFileLock(
-        path.join(sessionDir, loopConfig.paths.stateLockFileName),
-        () => atomicWriteJson(statePath, state)
-      );
+      await stateRepository.saveState(state);
     }
     console.log(`Session ${sessionId} is awaiting access approval and remains WAITING_USER.`);
     return;
@@ -5904,10 +5492,7 @@ async function cmdResume(parsed: Record<string, string>, rootDir: string): Promi
   if (state.status === LoopStatus.WAITING_USER && state.awaitingPlanApproval && !state.planApproved) {
     if (normalized.migrated || accessSettingsChanged) {
       if (normalized.migrated) await backupFileOnce(statePath, "v1.backup");
-      await withShortFileLock(
-        path.join(sessionDir, loopConfig.paths.stateLockFileName),
-        () => atomicWriteJson(statePath, state)
-      );
+      await stateRepository.saveState(state);
     }
     console.log(`Session ${sessionId} is awaiting plan approval and remains WAITING_USER.`);
     return;
@@ -5919,10 +5504,7 @@ async function cmdResume(parsed: Record<string, string>, rootDir: string): Promi
     Date.parse(state.automaticRecovery.resumeAt) > Date.now()
   ) {
     if (normalized.migrated) {
-      await withShortFileLock(
-        path.join(sessionDir, loopConfig.paths.stateLockFileName),
-        () => atomicWriteJson(statePath, state)
-      );
+      await stateRepository.saveState(state);
     }
     console.log(
       `Session ${sessionId} remains RECOVERING until ${state.automaticRecovery.resumeAt}.`
@@ -5942,12 +5524,19 @@ async function cmdResume(parsed: Record<string, string>, rootDir: string): Promi
   const ownershipResult = await ownership.acquire();
   let ownershipTransferred = false;
   try {
+    await stateRepository.beginOwnership(state);
+    if (state.currentActivation?.status === "unknown_mutation" && reconcileMutation === "retry") {
+      const unknownStage = state.currentActivation.stageId;
+      finishCurrentActivation(state, "unknown_mutation");
+      state.activeAttempt = null;
+      state.lastFailureDigest =
+        `[${unknownStage}] UNKNOWN_MUTATION_OUTCOME was explicitly reconciled by the operator. ` +
+        `Inspect existing changes and continue cumulatively; do not assume the prior attempt made no changes.`;
+      state.lastFailure = null;
+      resetStaleRunningAgentStates(state.agentStates);
+    }
     if (normalized.migrated) {
       await backupFileOnce(statePath, "v1.backup");
-      await withShortFileLock(
-        path.join(sessionDir, loopConfig.paths.stateLockFileName),
-        () => atomicWriteJson(statePath, state)
-      );
     }
 
     const startsManualRecoveryCycle = shouldStartManualRecoveryCycle(
@@ -6033,10 +5622,8 @@ async function cmdResume(parsed: Record<string, string>, rootDir: string): Promi
       }
     }
 
-    await withShortFileLock(
-      path.join(sessionDir, loopConfig.paths.stateLockFileName),
-      () => atomicWriteJson(statePath, state)
-    );
+    appendWorkflowStatusEventIfChanged(state);
+    await stateRepository.saveState(state);
 
     registry = await mergeAndWriteSessionMeta(registryPath, registry, {
       sessionId,
@@ -6044,7 +5631,7 @@ async function cmdResume(parsed: Record<string, string>, rootDir: string): Promi
       targetProjectPath: state.targetProjectPath,
       status: state.status,
       createdAt: state.createdAt,
-    });
+    }, loopConfig.paths.registryLockFileName);
 
     const orchestrator = new LoopOrchestrator(
       rootDir,
@@ -6059,9 +5646,10 @@ async function cmdResume(parsed: Record<string, string>, rootDir: string): Promi
       recoveryResume && needsRecoveredChildCleanup
     );
 
-    const finalState = await atomicReadJson<LoopState>(statePath);
+    const finalState = await stateRepository.load();
     if (finalState) {
       console.log(`\n[orchestrator] Session ${sessionId} ended with status: ${finalState.status}`);
+      printOperatorSnapshot(finalState);
     }
   } finally {
     if (!ownershipTransferred) {
@@ -6070,7 +5658,8 @@ async function cmdResume(parsed: Record<string, string>, rootDir: string): Promi
   }
 }
 
-async function cmdRevisePlan(parsed: Record<string, string>, rootDir: string): Promise<void> {
+async function cmdRevisePlan(parsed: Record<string, string>, roots: RootSet): Promise<void> {
+  const rootDir = roots.dataRoot;
   const sessionId = parsed.session;
   if (!sessionId || sessionId === "true") {
     console.error("Error: --session is required for 'revise-plan'");
@@ -6083,8 +5672,8 @@ async function cmdRevisePlan(parsed: Record<string, string>, rootDir: string): P
     process.exit(1);
   }
 
-  const registryPath = path.join(rootDir, loopConfig.paths.registryFileName);
-  const registry = await atomicReadJson<SessionRegistry>(registryPath);
+  const registryPath = path.join(rootDir, loopConfig.paths.sessionsIndexFileName);
+  const registry = await loadSessionsProjection(rootDir);
   if (!registry) {
     console.error(`Error: No registry found at ${registryPath}.`);
     process.exit(1);
@@ -6095,17 +5684,26 @@ async function cmdRevisePlan(parsed: Record<string, string>, rootDir: string): P
     sessionId
   );
   const statePath = path.join(sessionDir, loopConfig.paths.sessionFileNames.state);
-  const stateRaw = await atomicReadJson<LoopState>(statePath);
-  if (!stateRaw) {
+  if (!await fse.pathExists(statePath)) {
     console.error(`Error: No session found with ID ${sessionId}`);
     process.exit(1);
   }
-  const state = normalizeLoopState(stateRaw).state;
+  const stateRepository = createFileSessionRepository(rootDir, sessionDir);
+  const state = normalizeLoopState(await stateRepository.load()).state;
   await assertMutableRootOutsideTarget(
     rootDir,
     state.targetProjectPath,
     state.additionalAllowedPaths
   );
+  const planRevisionStatuses = new Set<LoopStatus>([
+    LoopStatus.PAUSED,
+    LoopStatus.WAITING_USER,
+    LoopStatus.STOPPED,
+    LoopStatus.BLOCKED,
+  ]);
+  if (!planRevisionStatuses.has(state.status)) {
+    throw new Error(`Session ${sessionId} must be held before its plan can be revised.`);
+  }
 
   const planPath = path.join(sessionDir, loopConfig.paths.sessionFileNames.plan);
   let currentPlan = "";
@@ -6133,7 +5731,6 @@ Output the full revised plan as markdown only. Do not include the original promp
   // Plan revision is a read-only role. MCP capabilities have no persisted
   // side-effect classification, so do not even resolve their credentials.
   const runtimeMcpServers: McpServerConfig[] = [];
-  const sensitiveValues = runtimeSensitiveValues(runtimeMcpServers);
   const invocation = buildProviderInvocation(provider, {
     model: planningRole.model ?? state.modelMapping[planningRole.modelRole],
     targetProjectPath: state.targetProjectPath,
@@ -6146,16 +5743,18 @@ Output the full revised plan as markdown only. Do not include the original promp
     webSearchMode: state.toolAccess.webSearch.mode,
     mcpServers: runtimeMcpServers,
   });
-  const supervised = await new ProcessSupervisor().run({
+  const providerEnvironment = {
+    ...Object.fromEntries(
+      Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined)
+    ),
+    ...invocation.env,
+  };
+  const sensitiveValues = runtimeSensitiveValues(runtimeMcpServers, providerEnvironment);
+  const supervised = await SUPERVISED_AGENT_RUNTIME.launch({
     binary: resolveBinaryOnWindows(invocation.binary),
     args: invocation.args,
     cwd: state.targetProjectPath,
-    env: {
-      ...Object.fromEntries(
-        Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined)
-      ),
-      ...invocation.env,
-    },
+    env: providerEnvironment,
     cols: loopConfig.defaults.ptyCols,
     rows: loopConfig.defaults.ptyRows,
     useConpty: process.platform === "win32" && !!process.stdin?.isTTY,
@@ -6202,39 +5801,26 @@ Output the full revised plan as markdown only. Do not include the original promp
     process.exit(1);
   }
 
-  const stateLockPath = path.join(
-    sessionDir,
-    loopConfig.paths.stateLockFileName
-  );
-  let committedLoopCount = state.loopCount;
-  await withShortFileLock(stateLockPath, async () => {
-    const latestRaw = await atomicReadJson<LoopState>(statePath);
-    if (!latestRaw) {
-      throw new Error(`Session state disappeared while revising plan: ${sessionId}`);
-    }
-    const latest = normalizeLoopState(latestRaw).state;
-    const planRevisionStatuses = new Set<LoopStatus>([
-      LoopStatus.PAUSED,
-      LoopStatus.WAITING_USER,
-      LoopStatus.STOPPED,
-      LoopStatus.BLOCKED,
-    ]);
-    if (!planRevisionStatuses.has(latest.status)) {
-      throw new Error(
-        `Session ${sessionId} is not in a user-controlled hold state; the revised plan was not committed.`
-      );
-    }
-    await atomicWriteText(planPath, `${revised}\n`);
-    latest.planPath = planPath;
-    latest.refinedGoal = revised;
-    if (latest.planningComplete) {
-      latest.planRevisionPending = true;
-    }
-    latest.convergence = { stagnantCycles: 0, history: [] };
-    latest.updatedAt = new Date().toISOString();
-    committedLoopCount = latest.loopCount;
-    await atomicWriteJson(statePath, latest);
-  });
+  const latest = normalizeLoopState(await stateRepository.load()).state;
+  if (!planRevisionStatuses.has(latest.status)) {
+    throw new Error(
+      `Session ${sessionId} is not in a user-controlled hold state; the revised plan was not committed.`
+    );
+  }
+  const artifactStore = new ImmutableArtifactStore(path.join(sessionDir, "artifacts"));
+  latest.artifactRefs.plan = await artifactStore.put(revised, "text/markdown");
+  latest.planPath = planPath;
+  latest.refinedGoal = revised;
+  if (latest.planningComplete) latest.planRevisionPending = true;
+  latest.convergence = { stagnantCycles: 0, history: [] };
+  latest.updatedAt = new Date().toISOString();
+  const requestId =
+    parsed["request-id"] && parsed["request-id"] !== "true"
+      ? parsed["request-id"]
+      : createId("plan_revision");
+  await stateRepository.saveOffline(latest, requestId);
+  await atomicWriteText(planPath, `${revised}\n`);
+  const committedLoopCount = latest.loopCount;
   const notesPath = path.join(sessionDir, loopConfig.paths.sessionFileNames.progressNotes);
   await atomicAppendLine(
     notesPath,
@@ -6246,54 +5832,33 @@ Output the full revised plan as markdown only. Do not include the original promp
 }
 
 async function main(): Promise<void> {
-  const args = process.argv.slice(2);
-  if (args.length === 0) {
-    printUsage();
-    process.exit(1);
-  }
-
-  const command = args[0];
-
-  if (command === "--help" || command === "-h") {
-    printUsage();
-    return;
-  }
-
-  const parsed = parseArgs(args.slice(1));
-  const rootDir = await resolveRootDir(parsed);
-  loopConfig = await loadLoopConfig(rootDir);
-  if (command === "run") {
-    const targetProjectPath = parsed.target && parsed.target !== "true"
-      ? parsed.target
-      : process.cwd();
-    await assertMutableRootOutsideTarget(rootDir, targetProjectPath);
-  }
-  if (command !== "init") {
-    await reconcileSessionRegistry(rootDir);
-  }
-
-  switch (command) {
-    case "init":
-      await cmdInit(rootDir);
-      break;
-    case "models":
-      await cmdModels(parsed, rootDir);
-      break;
-    case "run":
-      await cmdRun(parsed, rootDir);
-      break;
-    case "resume":
-      await cmdResume(parsed, rootDir);
-      break;
-    case "revise-plan":
-      await cmdRevisePlan(parsed, rootDir);
-      break;
-    default:
-      console.error(`Unknown command: ${command}`);
-      printUsage();
-      process.exit(1);
-  }
-  process.exit(0);
+  const exitCode = await runCliApplication(process.argv.slice(2), {
+    printUsage,
+    prepare: async (command: string, options: CliOptions) => {
+      const roots = await canonicalizeRootSet(resolveRootSet(options));
+      for (const warning of roots.warnings) console.warn(`[deprecated] ${warning}`);
+      loopConfig = await loadLoopConfig(roots.configRoot);
+      if (command === "run") {
+        await assertMutableRootOutsideTarget(roots.dataRoot, roots.projectRoot);
+      }
+      if (!["init", "capabilities", "migrate-root", "status"].includes(command)) {
+        await reconcileSessionRegistry(roots.dataRoot);
+      }
+      return roots;
+    },
+    handlers: {
+      init: async (_options, roots) => cmdInit(roots),
+      capabilities: cmdCapabilities,
+      "migrate-root": cmdMigrateRoot,
+      models: cmdModels,
+      status: cmdStatus,
+      run: cmdRun,
+      resume: cmdResume,
+      "revise-plan": cmdRevisePlan,
+    },
+    reportUnknown: (command) => console.error(`Unknown command: ${command}`),
+  });
+  process.exit(exitCode);
 }
 
 if (require.main === module) {

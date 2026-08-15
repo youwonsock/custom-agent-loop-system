@@ -16,6 +16,7 @@ export type AttemptStatus =
   | "process_exit"
   | "incomplete_response"
   | "cancelled"
+  | "unknown_outcome"
   | "orphaned_process";
 
 export type FailureKind =
@@ -50,6 +51,7 @@ export interface AttemptFailure {
 
 export interface AgentAttemptState {
   attemptId: string;
+  activationId?: string;
   role: string;
   phase: string;
   status: AttemptStatus;

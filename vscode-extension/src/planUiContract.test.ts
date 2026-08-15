@@ -60,12 +60,50 @@ test("access approval and full-access modes flow from the panel through state an
   assert.match(webview, /Ask when needed/);
   assert.match(webview, /Allow &amp; Resume/);
   assert.match(webview, /Allow Full Access &amp; Resume/);
+  assert.match(webview, /Unsafe mode: the provider/);
   assert.match(webview, /command:\s*"resolveAccessRequest"/);
   assert.doesNotMatch(webview, /composer-allowed-paths|session-allowed-paths/);
   assert.match(panel, /handleResolveAccessRequest/);
+  assert.match(panel, /confirmUnsafeFullAccess/);
+  assert.match(panel, /Enable Unsafe Full Access/);
+  assert.match(panel, /not a filesystem security boundary/);
   assert.match(store, /updateAccessMode/);
   assert.match(client, /args\.push\("--approve-access"\)/);
   assert.match(client, /args\.push\("--full-access"\)/);
+});
+
+test("operator status and timeline are projected from aggregate domain events", () => {
+  const panel = source("webviewPanel.ts");
+  const store = source("stateStore.ts");
+  const webview = media("webview.js");
+  const readBundle = store.match(/async readBundle[\s\S]*?\n  }/)?.[0] ?? "";
+  assert.match(panel, /deriveExtensionOperatorSnapshot\(state\)/);
+  assert.match(panel, /timeline = state\?\.domainEvents \?\? \[\]/);
+  assert.doesNotMatch(readBundle, /readHistory/);
+  assert.match(webview, /Domain Timeline/);
+  assert.match(webview, /state\.timeline/);
+  assert.doesNotMatch(webview, /state\.history/);
+  assert.match(webview, /Next action/);
+  assert.match(webview, /Cycle budget/);
+  assert.match(webview, /Workflow steps/);
+  assert.match(webview, /Stage attempts/);
+  assert.match(webview, /Completion recovery/);
+  assert.match(webview, /Phase recovery/);
+});
+
+test("the real Extension Host E2E runner covers all lifecycle boundaries", () => {
+  const suite = source(path.join("test", "extensionHostSuite.ts"));
+  const packageJson = manifest() as { scripts?: Record<string, string> };
+  assert.match(packageJson.scripts?.["test:host"] ?? "", /runExtensionHostE2E/);
+  assert.match(suite, /launchTrusted\(false/);
+  assert.match(suite, /selectPlanChoice/);
+  assert.match(suite, /approvePlan/);
+  assert.match(suite, /updateAccessMode/);
+  assert.match(suite, /stopSession/);
+  assert.match(suite, /interruptSession/);
+  assert.match(suite, /decideRecoveryAction/);
+  assert.match(suite, /saveSystemSettings/);
+  assert.match(suite, /protectMcpCredentialValue/);
 });
 
 test("completion recovery configuration and activity mode reach the CLI and status UI", () => {

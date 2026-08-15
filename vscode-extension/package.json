@@ -165,7 +165,7 @@
           "default": "",
           "scope": "machine",
           "restricted": true,
-          "description": "Orchestrator root directory (where sessions_registry.json lives). Empty = extension storage path."
+          "description": "Session/control data root. Empty = VS Code global storage. This path is never used to discover executable code."
         },
         "agentLoop.nodeBinary": {
           "type": "string",
@@ -179,7 +179,7 @@
           "default": "",
           "scope": "machine",
           "restricted": true,
-          "description": "Path to the compiled loop_orchestrator.js. Empty = auto-detect relative to rootDir."
+          "description": "Explicit path to the compiled loop_orchestrator.js. Empty = use the extension-bundled core."
         },
         "agentLoop.maxIterations": {
           "type": "number",
@@ -306,12 +306,15 @@
     "watch": "tsc -watch -p ./",
     "typecheck": "tsc -p ./ --noEmit",
     "test": "npm run compile && node ../scripts/run-node-tests.js --directory out",
+    "coverage": "npm run compile && node ../scripts/run-node-tests.js --directory out --coverage",
+    "test:host": "npm run compile && node out/test/runExtensionHostE2E.js",
     "prepack": "npm --prefix .. run build && node ../scripts/bundle-core-for-vsix.js && npm run compile",
     "package": "node ../scripts/package-vsix.js"
   },
   "devDependencies": {
     "@types/node": "^26.1.2",
     "@types/vscode": "^1.85.0",
+    "@vscode/test-electron": "^3.1.0",
     "@vscode/vsce": "^3.9.2",
     "typescript": "^7.0.2"
   }

@@ -12,16 +12,16 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  platform-build-test:
-    name: ${{ matrix.os }} / Node 20
+  source-validation:
+    name: Source / ${{ matrix.os }} / Node 20
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, ubuntu-latest, macos-latest]
+        os: [windows-2025, ubuntu-24.04, macos-15]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: 20
           cache: npm
@@ -33,39 +33,19 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       - run: npm run smoke
-      - run: npm run pack:check
       - run: npm ci
         working-directory: vscode-extension
       - run: npm run typecheck
         working-directory: vscode-extension
       - run: npm test
         working-directory: vscode-extension
-      - run: npm run package
-        working-directory: vscode-extension
-      - run: npm run verify:vsix
-      - run: npm run checksum:artifacts
-      - if: runner.os == 'Linux'
-        uses: actions/setup-node@v7
-        with:
-          node-version: 18
-      - if: runner.os == 'Linux'
-        name: Verify the same packaged artifact on Node 18
-        run: npm run verify:vsix
-      - uses: actions/upload-artifact@v7
-        with:
-          name: agent-loop-vsix-${{ matrix.os }}
-          path: |
-            vscode-extension/agent-loop-vscode-*.vsix
-            vscode-extension/agent-loop-vscode-*.vsix.sha256
-            vscode-extension/agent-loop-vscode-*.vsix.cdx.json
-          if-no-files-found: error
 
-  node-18-compatibility:
-    name: Root runtime / Node 18
-    runs-on: ubuntu-latest
+  node-18-source:
+    name: Source / Ubuntu / minimum Node 18
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: 18
           cache: npm
@@ -74,13 +54,50 @@ jobs:
       - run: npm test
       - run: npm run smoke
 
+  extension-host-e2e:
+    name: Real VS Code Extension Host E2E
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            vscode-extension/package-lock.json
+      - run: npm ci
+      - run: npm ci
+        working-directory: vscode-extension
+      - run: npm run test:host
+        working-directory: vscode-extension
+
+  coverage:
+    name: Core and extension coverage thresholds
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            vscode-extension/package-lock.json
+      - run: npm ci
+      - run: npm run coverage
+      - run: npm ci
+        working-directory: vscode-extension
+      - run: npm run coverage
+        working-directory: vscode-extension
+
   supply-chain:
-    name: Supply chain
-    runs-on: ubuntu-latest
+    name: Dependency audit and runtime SBOM
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: 20
           cache: npm
@@ -94,19 +111,140 @@ jobs:
         working-directory: vscode-extension
       - run: npm audit --audit-level=high
         working-directory: vscode-extension
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: agent-loop-sbom
+          name: diagnostic-runtime-sbom
           path: artifacts/agent-loop-npm-runtime-sbom.cdx.json
           if-no-files-found: error
+          retention-days: 14
 
-  coverage:
-    runs-on: windows-latest
+  npm-candidate:
+    name: Build npm candidate once
+    needs: source-validation
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
-          node-version: 22
+          node-version: 20
           cache: npm
       - run: npm ci
-      - run: npm run coverage
+      - run: npm run package:npm
+      - run: npm run sbom:npm-artifact
+      - run: npm run verify:npm-artifact
+      - run: npm run verify:release-bundle -- artifacts/npm --expected-commit ${{ github.sha }}
+      - if: github.event_name == 'push'
+        uses: actions/attest-build-provenance@43d14bc2b83dec42d39ecae14e916627a18bb661 # v3
+        with:
+          subject-path: artifacts/npm/*.tgz
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: release-npm
+          path: artifacts/npm/*
+          if-no-files-found: error
+          retention-days: 30
+
+  npm-artifact-matrix:
+    name: Exact npm artifact / ${{ matrix.os }} / Node 18
+    needs: npm-candidate
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2025, ubuntu-24.04, macos-15]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 18
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: release-npm
+          path: artifacts/npm
+      - run: npm run verify:npm-artifact
+      - run: npm run verify:release-bundle -- artifacts/npm --expected-commit ${{ github.sha }}
+
+  vsix-candidate:
+    name: Exact VSIX / ${{ matrix.target }} / Node 20 + 18
+    needs: source-validation
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-2025
+            target: win32-x64
+          - os: ubuntu-24.04
+            target: linux-x64
+          - os: macos-15
+            target: darwin-arm64
+          - os: macos-15-intel
+            target: darwin-x64
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            vscode-extension/package-lock.json
+      - run: npm ci
+      - run: npm ci
+        working-directory: vscode-extension
+      - name: Assert native candidate target
+        env:
+          EXPECTED_TARGET: ${{ matrix.target }}
+        run: node -e "const actual=process.platform+'-'+process.arch;if(actual!==process.env.EXPECTED_TARGET)throw new Error(actual+' != '+process.env.EXPECTED_TARGET)"
+      - run: npm run package
+        working-directory: vscode-extension
+      - run: npm run verify:vsix
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 18
+      - name: Reverify the same VSIX on the minimum Node runtime
+        run: npm run verify:vsix
+      - run: npm run checksum:artifacts
+      - run: npm run verify:release-bundle -- vscode-extension --expected-commit ${{ github.sha }}
+      - if: github.event_name == 'push'
+        uses: actions/attest-build-provenance@43d14bc2b83dec42d39ecae14e916627a18bb661 # v3
+        with:
+          subject-path: vscode-extension/agent-loop-vscode-${{ matrix.target }}-*.vsix
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: release-vsix-${{ matrix.target }}
+          path: |
+            vscode-extension/agent-loop-vscode-${{ matrix.target }}-*.vsix
+            vscode-extension/agent-loop-vscode-${{ matrix.target }}-*.vsix.sha256
+            vscode-extension/agent-loop-vscode-${{ matrix.target }}-*.vsix.cdx.json
+            vscode-extension/agent-loop-vscode-${{ matrix.target }}-*.vsix.manifest.json
+          if-no-files-found: error
+          retention-days: 30
+
+  release-gate:
+    name: Protected release candidate gate
+    if: always()
+    needs:
+      - source-validation
+      - node-18-source
+      - extension-host-e2e
+      - coverage
+      - supply-chain
+      - npm-artifact-matrix
+      - vsix-candidate
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Require every source, coverage, supply-chain, and exact-artifact job
+        env:
+          NEEDS_JSON: ${{ toJson(needs) }}
+        run: node -e "const needs=JSON.parse(process.env.NEEDS_JSON);const failed=Object.entries(needs).filter(([,v])=>v.result!=='success');if(failed.length)throw new Error(JSON.stringify(failed));"

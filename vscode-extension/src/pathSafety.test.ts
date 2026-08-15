@@ -15,6 +15,7 @@ import {
 const defaultPaths = {
   sessionsRoot: ".goal/sessions",
   registryFileName: "sessions_registry.json",
+  sessionsIndexFileName: "sessions_index.json",
   variantsConfigFileName: "model_variants.json",
   loopHistoryDirName: "loop_history",
   controlDirName: "control",

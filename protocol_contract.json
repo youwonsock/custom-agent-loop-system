@@ -1,0 +1,27 @@
+{
+  "protocolVersion": 1,
+  "stateSchemaVersion": 2,
+  "capabilities": [
+    "authoritative-aggregate-v1",
+    "compiled-pipeline-v1",
+    "domain-events-v1",
+    "durable-budgets-v1",
+    "operator-snapshot-v1",
+    "root-set-v1",
+    "control-queue-v1",
+    "plan-approval-v1",
+    "provider-capabilities-v1",
+    "session-state-v2",
+    "structured-stage-outcome-v1"
+  ],
+  "pathFields": [
+    "codeRoot",
+    "configRoot",
+    "projectRoot",
+    "dataRoot"
+  ],
+  "controlMessageTypes": [
+    "STOP",
+    "INTERRUPT"
+  ]
+}

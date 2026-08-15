@@ -1,6 +1,6 @@
 # ADR 0004: Session state authority
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-08-08
 
 ## Decision
@@ -17,4 +17,3 @@ Every commit validates the expected revision and owner fencing epoch. The active
 The recovery WAL stores complete durable state records, not semantic events, heartbeats, output chunks, or polling activity. It exists for bounded crash recovery rather than general event sourcing.
 
 Registry corruption is repaired from session aggregates. Corrupt aggregate data is quarantined and marked blocked; it is never replaced silently with an empty state.
-

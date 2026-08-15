@@ -71,6 +71,7 @@ export function validateLoopPathsConfig(paths: LoopPathsConfig): LoopPathsConfig
   assertSafeRelativePath(paths.sessionsRoot, "paths.sessionsRoot");
   for (const [key, value] of Object.entries({
     registryFileName: paths.registryFileName,
+    sessionsIndexFileName: paths.sessionsIndexFileName,
     variantsConfigFileName: paths.variantsConfigFileName,
     loopHistoryDirName: paths.loopHistoryDirName,
     controlDirName: paths.controlDirName,

@@ -1,0 +1,821 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://custom-agent-loop.local/shared-contracts.schema.json",
+  "title": "Custom Agent Loop Shared Core/Extension Contracts",
+  "$defs": {
+    "ArtifactReference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sha256",
+        "mediaType",
+        "bytes"
+      ],
+      "properties": {
+        "sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "mediaType": {
+          "type": "string",
+          "minLength": 1
+        },
+        "bytes": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "AggregateMetadata": {
+      "type": "object",
+      "required": [
+        "aggregateFormatVersion",
+        "aggregateRevision",
+        "fencingEpoch",
+        "aggregateChecksum",
+        "processedRequestIds",
+        "artifactRefs"
+      ],
+      "properties": {
+        "aggregateFormatVersion": {
+          "const": 1
+        },
+        "aggregateRevision": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "fencingEpoch": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "aggregateChecksum": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "processedRequestIds": {
+          "type": "array",
+          "maxItems": 256,
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"
+          }
+        },
+        "artifactRefs": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/ArtifactReference"
+          }
+        }
+      }
+    },
+    "StageActivationReservation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "activationId",
+        "sequence",
+        "stageId",
+        "executor",
+        "mutationCapable",
+        "workflowStep",
+        "cycleNumber",
+        "attemptsReserved",
+        "maxAgentAttempts",
+        "status",
+        "reservedAt",
+        "completedAt"
+      ],
+      "properties": {
+        "activationId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sequence": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "stageId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "executor": {
+          "enum": [
+            "planning",
+            "implementation",
+            "test",
+            "review",
+            "approval",
+            "interrupt"
+          ]
+        },
+        "mutationCapable": {
+          "type": "boolean"
+        },
+        "workflowStep": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "cycleNumber": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 1
+        },
+        "attemptsReserved": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "maxAgentAttempts": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "status": {
+          "enum": [
+            "reserved",
+            "running",
+            "completed",
+            "failed",
+            "cancelled",
+            "unknown_mutation"
+          ]
+        },
+        "reservedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "completedAt": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        }
+      }
+    },
+    "ExecutionBudget": {
+      "type": "object",
+      "required": [
+        "maxCycles",
+        "cyclesStarted",
+        "cyclesCompleted",
+        "maxWorkflowSteps",
+        "workflowStepsConsumed",
+        "currentActivation"
+      ],
+      "properties": {
+        "maxCycles": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "cyclesStarted": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "cyclesCompleted": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "maxWorkflowSteps": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "workflowStepsConsumed": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "currentActivation": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/StageActivationReservation"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "PipelineCompilation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "compilerVersion",
+        "pipelineHash",
+        "compiledAt",
+        "reachableStageIds",
+        "approvalGateStageIds",
+        "terminalTargets",
+        "cyclicComponents"
+      ],
+      "properties": {
+        "compilerVersion": {
+          "const": 1
+        },
+        "pipelineHash": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "compiledAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "reachableStageIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "approvalGateStageIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "terminalTargets": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "SUCCESS",
+              "PAUSED",
+              "BLOCKED"
+            ]
+          }
+        },
+        "cyclicComponents": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "stageIds",
+              "consumesCycle",
+              "consumesWorkflowStep"
+            ],
+            "properties": {
+              "stageIds": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "string"
+                }
+              },
+              "consumesCycle": {
+                "type": "boolean"
+              },
+              "consumesWorkflowStep": {
+                "const": true
+              }
+            }
+          }
+        }
+      }
+    },
+    "RootSet": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "codeRoot",
+        "configRoot",
+        "projectRoot",
+        "dataRoot"
+      ],
+      "properties": {
+        "codeRoot": {
+          "type": "string",
+          "minLength": 1
+        },
+        "configRoot": {
+          "type": "string",
+          "minLength": 1
+        },
+        "projectRoot": {
+          "type": "string",
+          "minLength": 1
+        },
+        "dataRoot": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "ProviderCapabilities": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "readOnlyFilesystem",
+        "workspaceWrites",
+        "additionalRoots",
+        "fullAccess",
+        "resumeSession",
+        "webSearchModes",
+        "mcpIsolation",
+        "readOnlyMcpToolFiltering",
+        "processContainment",
+        "structuredEvents"
+      ],
+      "properties": {
+        "readOnlyFilesystem": {
+          "enum": [
+            "enforced",
+            "best_effort",
+            "unsupported"
+          ]
+        },
+        "workspaceWrites": {
+          "enum": [
+            "enforced",
+            "best_effort",
+            "unsupported"
+          ]
+        },
+        "additionalRoots": {
+          "enum": [
+            "enforced",
+            "best_effort",
+            "unsupported"
+          ]
+        },
+        "fullAccess": {
+          "type": "boolean"
+        },
+        "resumeSession": {
+          "type": "boolean"
+        },
+        "webSearchModes": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "cached",
+              "live"
+            ]
+          }
+        },
+        "mcpIsolation": {
+          "enum": [
+            "explicit",
+            "inherited",
+            "none"
+          ]
+        },
+        "readOnlyMcpToolFiltering": {
+          "enum": [
+            "enforced",
+            "unsupported"
+          ]
+        },
+        "processContainment": {
+          "const": "supervised_tree"
+        },
+        "structuredEvents": {
+          "const": "jsonl"
+        }
+      }
+    },
+    "McpToolCapability": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "sideEffect"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$"
+        },
+        "sideEffect": {
+          "enum": [
+            "read_only",
+            "write",
+            "unknown"
+          ]
+        }
+      }
+    },
+    "StageOutcome": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "outcomeId",
+        "stageId",
+        "activationId",
+        "attemptId",
+        "role",
+        "executor",
+        "status",
+        "decision",
+        "requirementEvidence",
+        "artifacts",
+        "failure",
+        "outputSummary",
+        "source",
+        "compatibility",
+        "recordedAt"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": 1
+        },
+        "outcomeId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "stageId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "activationId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "attemptId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "role": {
+          "type": "string",
+          "minLength": 1
+        },
+        "executor": {
+          "enum": [
+            "planning",
+            "implementation",
+            "test",
+            "review",
+            "approval",
+            "interrupt"
+          ]
+        },
+        "status": {
+          "enum": [
+            "succeeded",
+            "failed",
+            "waiting_user",
+            "paused",
+            "blocked",
+            "stopped"
+          ]
+        },
+        "decision": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "pass",
+            "fail",
+            "approved",
+            "rejected",
+            null
+          ]
+        },
+        "requirementEvidence": {
+          "type": "array",
+          "maxItems": 200
+        },
+        "artifacts": {
+          "type": "array",
+          "maxItems": 128,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "key",
+              "sha256",
+              "mediaType",
+              "bytes"
+            ],
+            "properties": {
+              "key": {
+                "type": "string",
+                "minLength": 1
+              },
+              "sha256": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              "mediaType": {
+                "type": "string",
+                "minLength": 1
+              },
+              "bytes": {
+                "type": "integer",
+                "minimum": 0
+              }
+            }
+          }
+        },
+        "failure": {
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "outputSummary": {
+          "type": "string",
+          "maxLength": 4096
+        },
+        "source": {
+          "enum": [
+            "structured",
+            "legacy_text",
+            "system"
+          ]
+        },
+        "compatibility": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "legacyContract",
+            "legacyValidated",
+            "structuredSignalPresent",
+            "decisionsEquivalent"
+          ],
+          "properties": {
+            "legacyContract": {
+              "enum": [
+                "phase_done",
+                "plan_options",
+                "verdict",
+                "approval"
+              ]
+            },
+            "legacyValidated": {
+              "type": "boolean"
+            },
+            "structuredSignalPresent": {
+              "type": "boolean"
+            },
+            "decisionsEquivalent": {
+              "type": "boolean"
+            }
+          }
+        },
+        "recordedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    },
+    "DomainEvent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "sequence",
+        "eventId",
+        "type",
+        "recordedAt",
+        "stageId",
+        "activationId",
+        "attemptId",
+        "role",
+        "summary",
+        "detail"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": 1
+        },
+        "sequence": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "eventId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "type": {
+          "enum": [
+            "workflow.started",
+            "workflow.resumed",
+            "workflow.paused",
+            "workflow.completed",
+            "workflow.failed",
+            "stage.started",
+            "stage.completed",
+            "stage.failed",
+            "stage.paused",
+            "attempt.started",
+            "attempt.progressed",
+            "attempt.completed",
+            "attempt.failed"
+          ]
+        },
+        "recordedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "stageId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "activationId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "attemptId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "role": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "summary": {
+          "type": "string",
+          "maxLength": 1000
+        },
+        "detail": {
+          "type": "object",
+          "maxProperties": 16,
+          "additionalProperties": {
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
+          }
+        }
+      }
+    },
+    "OperatorSnapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "sessionId",
+        "status",
+        "currentStage",
+        "currentRole",
+        "activeAttempt",
+        "nextPermittedAction",
+        "pauseReason",
+        "progressSummary",
+        "budgets",
+        "latestEvent"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": 1
+        },
+        "sessionId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "status": {
+          "enum": [
+            "RUNNING",
+            "PAUSED",
+            "WAITING_USER",
+            "RECOVERING",
+            "STOPPED",
+            "BLOCKED",
+            "SUCCESS",
+            "FAILED"
+          ]
+        },
+        "currentStage": {
+          "type": "string",
+          "minLength": 1
+        },
+        "currentRole": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "activeAttempt": {
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "nextPermittedAction": {
+          "enum": [
+            "wait_for_attempt",
+            "execute_next_stage",
+            "wait_for_recovery",
+            "approve_filesystem_access",
+            "approve_plan",
+            "reconcile_unknown_mutation",
+            "resume_session",
+            "inspect_failure",
+            "none_complete"
+          ]
+        },
+        "pauseReason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "progressSummary": {
+          "type": "string"
+        },
+        "budgets": {
+          "type": "object"
+        },
+        "latestEvent": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/DomainEvent"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "ControlMessage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "requestId",
+        "type",
+        "createdAt",
+        "message"
+      ],
+      "properties": {
+        "requestId": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"
+        },
+        "type": {
+          "enum": [
+            "STOP",
+            "INTERRUPT"
+          ]
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "message": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 65536
+        }
+      }
+    },
+    "CoreCapabilityHandshake": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "protocolVersion",
+        "stateSchemaVersion",
+        "implementationVersion",
+        "capabilities",
+        "roots"
+      ],
+      "properties": {
+        "kind": {
+          "const": "agent-loop-capabilities"
+        },
+        "protocolVersion": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "stateSchemaVersion": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "implementationVersion": {
+          "type": "string",
+          "minLength": 1
+        },
+        "capabilities": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true
+        },
+        "roots": {
+          "$ref": "#/$defs/RootSet"
+        }
+      }
+    }
+  }
+}

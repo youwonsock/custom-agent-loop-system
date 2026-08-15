@@ -194,6 +194,14 @@ test("read-only roles reject observed file mutation events", () => {
   const toolWrite = result("done\n[PHASE_DONE]");
   toolWrite.events = [{ type: "tool_use", name: "mcp__filesystem__write_file" }];
   assert.equal(hasObservedFileMutation(toolWrite), true);
+
+  const shellAttempt = result("claimed success\n[PHASE_DONE]");
+  shellAttempt.events = [{ type: "tool_use", part: { tool: "Bash", state: { status: "completed" } } }];
+  assert.equal(hasObservedFileMutation(shellAttempt), true);
+  assert.equal(
+    validateAgentCompletion("approval", shellAttempt, 3, { forbidFileMutation: true }).valid,
+    false
+  );
   assert.equal(isReadOnlyModelRole("planner"), true);
   assert.equal(isReadOnlyModelRole("tester"), false);
 });

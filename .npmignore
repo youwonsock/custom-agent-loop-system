@@ -1,20 +1,3 @@
-*.ts
-*.test.js
-*.map
-*.vsix.sha256
-*.vsix.cdx.json
-.github/
-.vscode/
-.goal/
-.kilo/
-artifacts/
-.tmp/
-test/
-vscode-extension/
-tsconfig.json
-개선 사항.txt
-sessions_registry.json*
-registry.lock*
-model_variants.json
-scripts/*
-!scripts/fix-pty-permissions.js
+# Development-only framework evaluations must never enter the runtime package.
+experiments/
+.spike-dist/

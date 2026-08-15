@@ -1,7 +1,13 @@
 import * as path from "node:path";
 import { createHash } from "node:crypto";
+import {
+  ProviderAdapter,
+  ProviderCapabilities,
+  assertProviderCapabilities,
+  capabilitiesForAdapter,
+} from "./provider_capabilities";
 
-export type ProviderAdapter = "opencode" | "kilo" | "codex" | "claude";
+export { ProviderAdapter, ProviderCapabilities } from "./provider_capabilities";
 
 export interface ProviderConfig {
   label: string;
@@ -11,6 +17,14 @@ export interface ProviderConfig {
   modelsArgs: string[];
   fallbackModels: string[];
   interactionWhitelist?: string[];
+  capabilities: ProviderCapabilities;
+}
+
+export type McpToolSideEffect = "read_only" | "write" | "unknown";
+
+export interface McpToolConfig {
+  name: string;
+  sideEffect: McpToolSideEffect;
 }
 
 export interface McpServerConfig {
@@ -24,6 +38,9 @@ export interface McpServerConfig {
   environment?: Record<string, string>;
   headers?: Record<string, string>;
   timeoutMs?: number;
+  /** Explicit capability metadata used for read-only enforcement. */
+  tools?: McpToolConfig[];
+  /** Legacy name-only allowlist. It migrates to tools with an unknown side effect. */
   allowedTools?: string[];
 }
 
@@ -67,6 +84,7 @@ export const DEFAULT_PROVIDERS: Record<string, ProviderConfig> = {
     enabled: true,
     modelsArgs: ["models"],
     fallbackModels: ["opencode/big-pickle"],
+    capabilities: capabilitiesForAdapter("opencode"),
   },
   kilo: {
     label: "Kilo Code",
@@ -75,6 +93,7 @@ export const DEFAULT_PROVIDERS: Record<string, ProviderConfig> = {
     enabled: true,
     modelsArgs: ["models", "--pure"],
     fallbackModels: ["anthropic/claude-sonnet-4-5"],
+    capabilities: capabilitiesForAdapter("kilo"),
   },
   codex: {
     label: "OpenAI GPT / Codex",
@@ -83,6 +102,7 @@ export const DEFAULT_PROVIDERS: Record<string, ProviderConfig> = {
     enabled: true,
     modelsArgs: [],
     fallbackModels: ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"],
+    capabilities: capabilitiesForAdapter("codex"),
   },
   claude: {
     label: "Anthropic Claude Code",
@@ -91,6 +111,7 @@ export const DEFAULT_PROVIDERS: Record<string, ProviderConfig> = {
     enabled: true,
     modelsArgs: [],
     fallbackModels: ["sonnet", "opus"],
+    capabilities: capabilitiesForAdapter("claude"),
   },
 };
 
@@ -100,6 +121,7 @@ export const DEFAULT_TOOL_ACCESS: ToolAccessConfig = {
 };
 
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
+const SAFE_TOOL_NAME = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/;
 const SAFE_ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const SECRET_REFERENCE = /^\$\{secret:([^}]+)\}$/;
 const ENV_REFERENCE = /^\$\{env:([A-Za-z_][A-Za-z0-9_]*)\}$/;
@@ -144,6 +166,7 @@ export function resolveMcpServerSecrets(
   return servers.map((server) => ({
     ...server,
     args: [...(server.args ?? [])],
+    tools: (server.tools ?? []).map((tool) => ({ ...tool })),
     allowedTools: [...(server.allowedTools ?? [])],
     environment: Object.fromEntries(
       Object.entries(server.environment ?? {}).map(([key, value]) => [
@@ -175,6 +198,18 @@ export function collectMcpSensitiveValues(
   return [...values];
 }
 
+/** Host credentials inherited by a provider must join the streaming redaction set. */
+export function collectSensitiveEnvironmentValues(
+  environment: Readonly<Record<string, string | undefined>>
+): string[] {
+  const sensitiveName = /(?:^|_)(?:API_?KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIALS?|AUTH)(?:_|$)/i;
+  return [...new Set(
+    Object.entries(environment)
+      .filter(([name, value]) => sensitiveName.test(name) && Boolean(value))
+      .map(([, value]) => value as string)
+  )];
+}
+
 export function normalizeProviders(
   input?: Record<string, Partial<ProviderConfig>> | null
 ): Record<string, ProviderConfig> {
@@ -199,6 +234,7 @@ export function normalizeProviders(
       interactionWhitelist: Array.isArray(override.interactionWhitelist)
         ? override.interactionWhitelist.map(String)
         : base.interactionWhitelist,
+      capabilities: capabilitiesForAdapter(adapter),
     };
   }
   for (const [id, candidate] of Object.entries(input ?? {})) {
@@ -222,6 +258,7 @@ export function normalizeProviders(
       interactionWhitelist: Array.isArray(candidate.interactionWhitelist)
         ? candidate.interactionWhitelist.map(String)
         : undefined,
+      capabilities: capabilitiesForAdapter(adapter),
     };
   }
   return merged;
@@ -250,6 +287,24 @@ export function validateToolAccess(input?: Partial<ToolAccessConfig> | null): To
     if (timeoutMs !== undefined && (!Number.isFinite(timeoutMs) || timeoutMs <= 0)) {
       throw new Error(`MCP server ${id} timeoutMs must be positive.`);
     }
+    const legacyAllowedTools = Array.isArray(raw.allowedTools)
+      ? raw.allowedTools.map(String).filter(Boolean)
+      : [];
+    const toolCandidates = Array.isArray(raw.tools)
+      ? raw.tools
+      : legacyAllowedTools.map((name) => ({ name, sideEffect: "unknown" as const }));
+    const toolNames = new Set<string>();
+    const tools = toolCandidates.map((rawTool) => {
+      const name = String(rawTool.name ?? "").trim();
+      if (!SAFE_TOOL_NAME.test(name)) throw new Error(`MCP server ${id} has an unsafe tool name: ${name}`);
+      if (toolNames.has(name)) throw new Error(`MCP server ${id} has a duplicate tool: ${name}`);
+      toolNames.add(name);
+      const sideEffect = rawTool.sideEffect;
+      if (!(["read_only", "write", "unknown"] as const).includes(sideEffect)) {
+        throw new Error(`MCP server ${id} tool ${name} has an invalid side effect.`);
+      }
+      return { name, sideEffect };
+    });
     return {
       id,
       name: String(raw.name ?? id).trim() || id,
@@ -261,7 +316,8 @@ export function validateToolAccess(input?: Partial<ToolAccessConfig> | null): To
       environment: jsonObject(raw.environment),
       headers: jsonObject(raw.headers),
       timeoutMs,
-      allowedTools: Array.isArray(raw.allowedTools) ? raw.allowedTools.map(String).filter(Boolean) : [],
+      tools,
+      allowedTools: tools.map((tool) => tool.name),
     };
   });
   return { webSearch, mcpServers };
@@ -275,6 +331,63 @@ export function enabledMcpServers(
   return toolAccess.mcpServers.filter(
     (server) => server.enabled && (!selected || selected.has(server.id))
   );
+}
+
+/**
+ * Select only MCP capabilities that the provider can enforce for this role.
+ * Name-only legacy entries are `unknown`, so they are never promoted to a
+ * read-only capability merely because they were previously allowlisted.
+ */
+export function selectMcpServersForInvocation(
+  provider: ProviderConfig,
+  servers: readonly McpServerConfig[],
+  readOnly: boolean
+): McpServerConfig[] {
+  if (!readOnly) return servers.map((server) => ({
+    ...server,
+    args: [...(server.args ?? [])],
+    tools: (server.tools ?? []).map((tool) => ({ ...tool })),
+    allowedTools: [...(server.allowedTools ?? [])],
+  }));
+  const trustedCapabilities = capabilitiesForAdapter(provider.adapter);
+  if (
+    trustedCapabilities.mcpIsolation !== "explicit" ||
+    trustedCapabilities.readOnlyMcpToolFiltering !== "enforced"
+  ) {
+    return [];
+  }
+  return servers.flatMap((server) => {
+    const tools = (server.tools ?? []).filter((tool) => tool.sideEffect === "read_only");
+    if (tools.length === 0) return [];
+    return [{
+      ...server,
+      args: [...(server.args ?? [])],
+      tools: tools.map((tool) => ({ ...tool })),
+      allowedTools: tools.map((tool) => tool.name),
+    }];
+  });
+}
+
+export function assertProviderInvocationSupported(
+  provider: ProviderConfig,
+  opts: ProviderInvocationOptions,
+  selectedMcpServers: readonly McpServerConfig[] = opts.mcpServers
+): void {
+  const trustedCapabilities = capabilitiesForAdapter(provider.adapter);
+  assertProviderCapabilities(provider.adapter, trustedCapabilities, {
+    readOnly: opts.readOnly === true,
+    fullAccess: opts.fullAccess,
+    hasAdditionalRoots: (opts.additionalAllowedPaths?.length ?? 0) > 0,
+    resumeSession: Boolean(opts.resumeSessionId),
+    webSearch: opts.webSearch,
+    webSearchMode: opts.webSearchMode ?? trustedCapabilities.webSearchModes[0] ?? "cached",
+    hasMcpServers: selectedMcpServers.length > 0,
+  });
+  if (opts.readOnly && selectedMcpServers.some(
+    (server) => (server.tools ?? []).some((tool) => tool.sideEffect !== "read_only")
+  )) {
+    throw new Error(`${provider.adapter} read-only roles may receive only MCP tools marked read_only.`);
+  }
 }
 
 /** Persistent config may contain references, but never inline MCP credentials. */
@@ -411,12 +524,13 @@ export function buildProviderInvocation(
   opts: ProviderInvocationOptions
 ): ProviderInvocation {
   const env: Record<string, string> = {};
-  // MCP tools have no side-effect metadata in the current persisted format. Until
-  // that capability is explicit, exposing any MCP server to a read-only role would
-  // silently allow remote or local mutation outside the filesystem sandbox.
-  const mcpServers = opts.readOnly
-    ? []
-    : resolveMcpServerSecrets(opts.mcpServers, opts.secretValues);
+  const selectedMcpServers = selectMcpServersForInvocation(
+    provider,
+    opts.mcpServers,
+    opts.readOnly === true
+  );
+  assertProviderInvocationSupported(provider, opts, selectedMcpServers);
+  const mcpServers = resolveMcpServerSecrets(selectedMcpServers, opts.secretValues);
   let args: string[];
   switch (provider.adapter) {
     case "opencode": {
@@ -445,13 +559,6 @@ export function buildProviderInvocation(
       break;
     }
     case "codex": {
-      if (opts.readOnly) {
-        throw new Error(
-          "Codex read-only roles are unsupported: the native read-only sandbox does not reliably " +
-          "disable MCP servers inherited from user configuration. Use OpenCode, Kilo, or Claude " +
-          "for read-only roles until an isolated Codex configuration home is available."
-        );
-      }
       const globalArgs: string[] = [];
       if (opts.webSearch && opts.webSearchMode === "live") globalArgs.push("--search");
       args = [...globalArgs, "exec", "--json", "--model", opts.model, "--skip-git-repo-check"];
@@ -485,9 +592,14 @@ export function buildProviderInvocation(
         // mutation, skills, and MCP are absent unless explicitly listed here.
         const readOnlyTools = ["Read", "Glob", "Grep"];
         if (opts.webSearch) readOnlyTools.push("WebSearch", "WebFetch");
+        for (const server of mcpServers) {
+          for (const tool of server.tools ?? []) {
+            readOnlyTools.push(`mcp__${server.id}__${tool.name}`);
+          }
+        }
         args.push("--tools", readOnlyTools.join(","));
-        // Do not merge user, project, or plugin MCP configuration into a
-        // read-only role. The explicit safe --tools allowlist excludes MCP too.
+        // Do not merge user, project, or plugin MCP configuration. `--tools`
+        // contains only built-in readers and explicitly classified MCP readers.
         args.push("--strict-mcp-config");
       }
       if (opts.resumeSessionId) args.push("--resume", opts.resumeSessionId);
@@ -504,7 +616,7 @@ export function buildProviderInvocation(
         for (const tool of server.allowedTools ?? []) allowed.add(`mcp__${server.id}__${tool}`);
         if ((server.allowedTools ?? []).length === 0) allowed.add(`mcp__${server.id}__*`);
       }
-      if (allowed.size > 0) args.push("--allowedTools", [...allowed].join(","));
+      if (!opts.readOnly && allowed.size > 0) args.push("--allowedTools", [...allowed].join(","));
       break;
     }
   }

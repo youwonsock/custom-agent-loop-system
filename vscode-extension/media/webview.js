@@ -6,7 +6,8 @@
     selectedSessionId: null,
     state: null,
     progressNotes: "",
-    history: [],
+    timeline: [],
+    operatorSnapshot: null,
     finalSummary: null,
     isRunning: false,
     defaultTargetPath: "",
@@ -35,14 +36,6 @@
     qa_lead: "QA Lead",
     master: "Master",
     interrupter: "Interrupter",
-  };
-  const phaseToRole = {
-    PLANNING: { role: "planner", label: "Planner" },
-    IMPLEMENTATION: { role: "implementer", label: "Implementer" },
-    TEST_GENERATION: { role: "tester", label: "Tester" },
-    VERIFICATION: { role: "qa_lead", label: "QA Lead" },
-    MASTER_APPROVAL: { role: "master", label: "Master" },
-    INTERRUPT: { role: "interrupter", label: "Interrupter" },
   };
   let modelSelections = {};
   let providerSelections = {};
@@ -125,7 +118,9 @@
       providerCatalogHash,
       disc: state.registry?.modelsDiscoveredAt,
       notesLen: state.progressNotes.length,
-      histLen: (state.history || []).length,
+      eventSequence: st?.domainEventSequence || 0,
+      timelineLen: (state.timeline || []).length,
+      nextAction: state.operatorSnapshot?.nextPermittedAction,
       hasSummary: !!state.finalSummary,
       defTarget: state.defaultTargetPath,
       cliProfile: state.cliProfile,
@@ -343,7 +338,7 @@
           <input type="text" id="composer-target" class="composer-input" placeholder="${targetPlaceholder}" value="${targetVal}" title="Target project path where agents will modify and test code. Defaults to the current workspace folder." />
           <select id="composer-access-mode" class="composer-input composer-input-sm" title="Filesystem access mode">
             <option value="ask"${composerAccessMode === "ask" ? " selected" : ""}>Ask when needed</option>
-            <option value="full_access"${composerAccessMode === "full_access" ? " selected" : ""}>Full access</option>
+            <option value="full_access"${composerAccessMode === "full_access" ? " selected" : ""}>Unsafe full access</option>
           </select>
           <button class="btn" id="composer-start" ${hasInstalledProvider ? "" : "disabled"} title="${hasInstalledProvider ? "Start the agent loop" : "Discover and install at least one supported provider first"}">Start Session</button>
           ${cancelBtn}
@@ -409,6 +404,8 @@
 
     const modelGrid = buildModelGrid(st);
 
+    const operator = state.operatorSnapshot;
+    const budgets = operator?.budgets;
     const activeAttempt = st?.activeAttempt;
     const stageDefinition = st?.pipeline?.stages?.find((stage) => stage.id === st.phase);
     const lastProgressAge = activeAttempt?.lastProgressAt
@@ -436,11 +433,18 @@
       ? `
         <div class="status-row"><span class="label">Session</span><span class="value">${escapeHtml(st.sessionId)}</span></div>
         <div class="status-row"><span class="label">Status</span>${statusBadge}</div>
-        ${st.statusReason ? `<div class="status-row"><span class="label">Reason</span><span class="value">${escapeHtml(st.statusReason)}</span></div>` : ""}
+        ${operator?.pauseReason ? `<div class="status-row"><span class="label">Pause reason</span><span class="value">${escapeHtml(operator.pauseReason)}</span></div>` : ""}
+        ${operator ? `<div class="status-row"><span class="label">Next action</span><span class="value">${escapeHtml(operator.nextPermittedAction)}</span></div>` : ""}
+        ${operator ? `<div class="status-row"><span class="label">Progress</span><span class="value">${escapeHtml(operator.progressSummary)}</span></div>` : ""}
         <div class="status-row"><span class="label">Lease</span><span class="value">${escapeHtml(state.runtimeLeaseStatus || "none")}</span></div>
-        <div class="status-row"><span class="label">Phase</span><span class="value">${escapeHtml(st.phase)}</span></div>
-        <div class="status-row"><span class="label">Role</span><span class="value">${escapeHtml(stageDefinition?.role || "unknown")}</span></div>
-        <div class="status-row"><span class="label">Loop</span><span class="value">${st.loopCount} started · ${st.completedIterations ?? 0} completed / ${st.maxIterations}</span></div>
+        <div class="status-row"><span class="label">Phase</span><span class="value">${escapeHtml(operator?.currentStage || st.phase)}</span></div>
+        <div class="status-row"><span class="label">Role</span><span class="value">${escapeHtml(operator?.currentRole || stageDefinition?.role || "unknown")}</span></div>
+        ${budgets ? `<div class="status-row"><span class="label">Cycle budget</span><span class="value">${budgets.cycles.remaining} remaining · ${budgets.cycles.consumed}/${budgets.cycles.limit} consumed</span></div>` : `<div class="status-row"><span class="label">Loop</span><span class="value">${st.loopCount} started · ${st.completedIterations ?? 0} completed / ${st.maxIterations}</span></div>`}
+        ${budgets ? `<div class="status-row"><span class="label">Workflow steps</span><span class="value">${budgets.workflowSteps.remaining} remaining · ${budgets.workflowSteps.consumed}/${budgets.workflowSteps.limit} consumed</span></div>` : ""}
+        ${budgets && budgets.stageAttempts.remaining !== null ? `<div class="status-row"><span class="label">Stage attempts</span><span class="value">${budgets.stageAttempts.remaining} remaining · ${budgets.stageAttempts.consumed}/${budgets.stageAttempts.limit} consumed</span></div>` : ""}
+        ${budgets ? `<div class="status-row"><span class="label">Completion recovery</span><span class="value">${budgets.completionRecoveryAttempts.remaining} remaining · ${budgets.completionRecoveryAttempts.consumed}/${budgets.completionRecoveryAttempts.limit} consumed</span></div>` : ""}
+        ${budgets ? `<div class="status-row"><span class="label">Auto recovery</span><span class="value">${budgets.automaticRecoveryCycles.remaining} remaining · ${budgets.automaticRecoveryCycles.consumed}/${budgets.automaticRecoveryCycles.limit} consumed</span></div>` : ""}
+        ${budgets ? `<div class="status-row"><span class="label">Phase recovery</span><span class="value">${budgets.phaseRecoveryMs.remaining === null ? "n/a" : Math.ceil(budgets.phaseRecoveryMs.remaining / 1000) + "s remaining"} · ${Math.ceil(budgets.phaseRecoveryMs.limit / 1000)}s limit</span></div>` : ""}
         ${requirementItems.length > 0 ? `<div class="status-row"><span class="label">Requirements</span><span class="value">${satisfiedRequirements} satisfied · ${unresolvedRequirements} unresolved / ${requirementItems.length}</span></div>` : ""}
         ${st.convergence?.stagnantCycles ? `<div class="status-row"><span class="label">Stagnation</span><span class="value">${st.convergence.stagnantCycles} non-improving cycle(s)</span></div>` : ""}
         ${activeAttempt ? `
@@ -451,7 +455,7 @@
         ${activeAttempt.nextRetryAt ? `<div class="status-row"><span class="label">Retry at</span><span class="value">${escapeHtml(formatDate(activeAttempt.nextRetryAt))}</span></div>` : ""}
         ` : ""}
         ${st.lastFailure ? `<div class="status-row"><span class="label">Last failure</span><span class="value">${escapeHtml(st.lastFailure.kind)}</span></div>` : ""}
-        ${st.automaticRecovery ? `<div class="status-row"><span class="label">Auto recovery</span><span class="value">${st.automaticRecovery.cycle} / ${st.automaticRecovery.maxCycles} · ${escapeHtml(formatDate(st.automaticRecovery.resumeAt))}</span></div>` : ""}
+        ${st.automaticRecovery ? `<div class="status-row"><span class="label">Recovery schedule</span><span class="value">cycle ${st.automaticRecovery.cycle} · ${escapeHtml(formatDate(st.automaticRecovery.resumeAt))}</span></div>` : ""}
         ${st.interruptBriefing ? `<div class="error-queue"><div class="status-row" style="display:block"><span class="label">Local failure briefing</span></div><div class="error-queue-item">${escapeHtml(String(st.interruptBriefing).slice(0, 2000))}</div></div>` : ""}
         <div class="status-row"><span class="label">Goal</span><span class="value" style="text-align:right;max-width:60%;overflow:hidden;text-overflow:ellipsis">${escapeHtml(String(st.goal).slice(0, 80))}</span></div>
         ${st.referenceIdentity ? `<div class="status-row"><span class="label">Reference</span><span class="value" style="text-align:right;max-width:68%">${escapeHtml(st.referenceIdentity.title)} / ${escapeHtml(st.referenceIdentity.creator)} / ${escapeHtml(st.referenceIdentity.packageId)} <span class="badge success">${escapeHtml(st.referenceIdentity.identityMatch)} · ${escapeHtml(st.referenceIdentity.confidence)}</span></span></div>` : ""}
@@ -480,36 +484,24 @@
               <button class="btn" id="btn-allow-requested">Allow &amp; Resume</button>
               <button class="btn warn" id="btn-allow-full">Allow Full Access &amp; Resume</button>
             </div>
+            <div class="access-hint">Unsafe mode: the provider keeps your OS user privileges; this is not isolation from files outside the project or from Agent Loop control data.</div>
           ` : heldForAccess ? `
             <div class="access-editor-footer">
-              <span class="access-hint">${accessMode === "full_access" ? "Agents can access any filesystem path." : "The loop will pause and ask before using paths outside the target."}</span>
+              <span class="access-hint">${accessMode === "full_access" ? "Unsafe mode: the provider has your OS user privileges and this is not a security boundary." : "The loop will pause and ask before using paths outside the target."}</span>
               <button class="btn secondary" id="btn-toggle-access">${accessMode === "full_access" ? "Use Ask Mode" : "Grant Full Access"}</button>
             </div>
           ` : `<div class="access-hint">Stop or hold the session to change this mode.</div>`}
         </div>`
       : "";
 
-    let runningEntry = "";
-    if (state.isRunning && !isStopping && state.state) {
-      const currentPhase = state.state.phase;
-      const configuredStage = state.state.pipeline?.stages?.find((stage) => stage.id === currentPhase);
-      const mapped = configuredStage
-        ? { role: configuredStage.role, label: configuredStage.name || configuredStage.role }
-        : phaseToRole[currentPhase];
-      if (mapped) {
-        runningEntry = `<li class="history-item running">
-          <span><span class="phase">${escapeHtml(currentPhase)}</span> &middot; ${escapeHtml(mapped.label)} &middot; loop ${state.state.loopCount}</span>
-          <span class="result running-badge">RUNNING</span>
-        </li>`;
-      }
-    }
-
-    const historyList = runningEntry + (state.history || [])
+    const timeline = state.timeline || [];
+    const timelineList = [...timeline]
+      .reverse()
       .map(
-        (h) => `<li class="history-item">
-          <span><span class="phase">${escapeHtml(h.phase)}</span> &middot; ${escapeHtml(h.agentRole)} &middot; loop ${h.loopNumber}</span>
-          <span class="result ${escapeHtml(h.result)}">${escapeHtml(h.result)} (${h.exitCode})</span>
-          ${h.interruptMessage ? `<div class="interrupt-msg">Interrupt: ${escapeHtml(h.interruptMessage)}</div>` : ""}
+        (event) => `<li class="history-item">
+          <span><span class="phase">#${event.sequence} ${escapeHtml(event.type)}</span>${event.stageId ? ` &middot; ${escapeHtml(event.stageId)}` : ""}${event.role ? ` &middot; ${escapeHtml(event.role)}` : ""}</span>
+          <span class="result">${escapeHtml(formatDate(event.recordedAt))}</span>
+          <div class="interrupt-msg">${escapeHtml(event.summary)}</div>
         </li>`
       )
       .join("");
@@ -550,12 +542,12 @@
           <div class="model-grid">${modelGrid}</div>
         </div>
         <div class="card notes-card">
-          <h3>Progress Notes (Rolling Summary)${isStopping ? '<span class="pending-indicator"> \u2014 terminating agent now\u2026</span>' : ""}</h3>
+          <h3>Operator Notes${isStopping ? '<span class="pending-indicator"> \u2014 terminating agent now\u2026</span>' : ""}</h3>
           <div class="notes-content">${notesContent}</div>
         </div>
         <div class="card history-card">
-          <h3>Loop History (${(state.history || []).length + (runningEntry ? 1 : 0)})${isStopping ? '<span class="pending-indicator"> \u2014 terminating agent now\u2026</span>' : ""}</h3>
-          <ul class="history-list">${historyList || '<li class="notes-empty">(no history)</li>'}</ul>
+          <h3>Domain Timeline (${timeline.length})${isStopping ? '<span class="pending-indicator"> \u2014 terminating agent now\u2026</span>' : ""}</h3>
+          <ul class="history-list">${timelineList || '<li class="notes-empty">(no domain events yet)</li>'}</ul>
         </div>
         <div class="card log-card">
           <h3>Live Log Stream</h3>
@@ -811,6 +803,23 @@
     return values.map((value) => `<option value="${escapeHtml(value)}"${value === current ? " selected" : ""}>${escapeHtml(value)}</option>`).join("");
   }
 
+  function mcpToolCapabilityText(server) {
+    const explicit = Array.isArray(server.tools) ? server.tools : [];
+    if (explicit.length > 0) {
+      return explicit.map((tool) => `${tool.name}: ${tool.sideEffect || "unknown"}`).join("\n");
+    }
+    return (server.allowedTools || []).map((name) => `${name}: unknown`).join("\n");
+  }
+
+  function parseMcpToolCapabilities(value) {
+    return listValue(value).map((line) => {
+      const match = line.match(/^(.*?):\s*(read_only|write|unknown)$/i);
+      return match
+        ? { name: match[1].trim(), sideEffect: match[2].toLowerCase() }
+        : { name: line, sideEffect: "unknown" };
+    });
+  }
+
   function renderSettings(root) {
     if (!settingsDraft) settingsDraft = cloneSettings(state.systemSettings);
     const providers = settingsDraft.providers || {};
@@ -840,7 +849,7 @@
           <label class="wide">Arguments (one per line)<textarea rows="2" data-mcp="${index}" data-setting-field="args">${escapeHtml((server.args || []).join("\n"))}</textarea></label>
           <label class="wide">Remote URL <input value="${escapeHtml(server.url || "")}" data-mcp="${index}" data-setting-field="url" placeholder="https://..."></label>
           <label>Timeout ms <input type="number" min="1" value="${escapeHtml(server.timeoutMs || 60000)}" data-mcp="${index}" data-setting-field="timeoutMs"></label>
-          <label class="wide">Allowed tool names (one per line; empty = all)<textarea rows="2" data-mcp="${index}" data-setting-field="allowedTools">${escapeHtml((server.allowedTools || []).join("\n"))}</textarea></label>
+          <label class="wide">Tool capabilities (name: read_only | write | unknown; empty = mutation roles only)<textarea rows="3" data-mcp="${index}" data-setting-field="tools">${escapeHtml(mcpToolCapabilityText(server))}</textarea></label>
           <label class="wide">Environment JSON <textarea rows="2" data-mcp="${index}" data-setting-field="environment">${escapeHtml(JSON.stringify(server.environment || {}, null, 2))}</textarea></label>
           <label class="wide">Headers JSON <textarea rows="2" data-mcp="${index}" data-setting-field="headers">${escapeHtml(JSON.stringify(server.headers || {}, null, 2))}</textarea></label>
         </div>
@@ -930,9 +939,11 @@
       const field = event.target.dataset.settingField;
       try {
         server[field] = field === "enabled" ? event.target.checked
-          : ["args", "allowedTools"].includes(field) ? listValue(event.target.value)
+          : field === "args" ? listValue(event.target.value)
+          : field === "tools" ? parseMcpToolCapabilities(event.target.value)
           : ["environment", "headers"].includes(field) ? JSON.parse(event.target.value || "{}")
           : field === "timeoutMs" ? Number(event.target.value) : event.target.value;
+        if (field === "tools") server.allowedTools = server.tools.map((tool) => tool.name);
         event.target.setCustomValidity("");
       } catch {
         event.target.setCustomValidity("Enter a valid JSON object.");
@@ -965,7 +976,7 @@
     if (addMcp) addMcp.onclick = () => {
       const ids = settingsDraft.toolAccess.mcpServers.map((server) => server.id);
       const id = uniqueId("mcp", ids);
-      settingsDraft.toolAccess.mcpServers.push({ id, name: id, enabled: true, type: "local", command: "npx", args: [], environment: {}, headers: {}, allowedTools: [], timeoutMs: 60000 });
+      settingsDraft.toolAccess.mcpServers.push({ id, name: id, enabled: true, type: "local", command: "npx", args: [], environment: {}, headers: {}, tools: [], allowedTools: [], timeoutMs: 60000 });
       rerenderSettings();
     };
   }

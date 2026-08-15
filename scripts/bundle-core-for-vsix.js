@@ -11,7 +11,7 @@ fs.rmSync(destination, { recursive: true, force: true });
 fs.mkdirSync(distDestination, { recursive: true });
 
 for (const name of fs.readdirSync(path.join(root, "dist"))) {
-  if (!name.endsWith(".js") && name !== "runtime_defaults.json") continue;
+  if (!name.endsWith(".js") && !name.endsWith(".json")) continue;
   if (name.endsWith(".test.js")) continue;
   fs.copyFileSync(path.join(root, "dist", name), path.join(distDestination, name));
 }

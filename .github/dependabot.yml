@@ -14,6 +14,13 @@ updates:
     groups:
       extension-dependencies:
         patterns: ["*"]
+  - package-ecosystem: npm
+    directory: /experiments/langgraph
+    schedule:
+      interval: weekly
+    groups:
+      langgraph-evaluation-dependencies:
+        patterns: ["*"]
   - package-ecosystem: github-actions
     directory: /
     schedule:

@@ -16,9 +16,13 @@ interface CaseResult {
   eventsCount: number;
   eventBytes: number;
   rawLogIncludesSecret: boolean;
+  rawLogContainsCompletion: boolean;
+  backpressurePauseCount: number;
+  backpressureResumeCount: number;
   autoInjectedCount: number;
   providerSpawned: boolean;
   childLiveness: string;
+  descendantLiveness: string;
 }
 
 function runFake(
@@ -181,6 +185,19 @@ test("raw log finalization failures cannot preserve a nominal provider success",
   assert.equal(result.childLiveness, "dead");
 });
 
+test("raw log backpressure pauses and resumes the PTY without losing completion evidence", async () => {
+  const result = await runFake("raw-log-backpressure", {
+    transport: 1_000,
+    idle: 2_000,
+    phase: 3_000,
+  });
+  assert.equal(result.outcome, "succeeded");
+  assert.ok(result.backpressurePauseCount >= 1);
+  assert.ok(result.backpressureResumeCount >= 1);
+  assert.equal(result.rawLogContainsCompletion, true);
+  assert.match(result.assistantText, /\[PHASE_DONE\]/);
+});
+
 test("initial transport timeout stops after connection and model generation gets its own budget", async () => {
   const result = await runFake("delayed-model", {
     transport: 750,
@@ -229,6 +246,17 @@ test("an active tool uses the longer tool timeout and reports tool_timeout when 
 test("forced termination handles a process that ignores graceful signals", async () => {
   const result = await runFake("ignore-termination", { transport: 100, idle: 500, phase: 1_000 });
   assert.equal(result.outcome, "transport_timeout");
+});
+
+test("forced termination contains grandchildren in the provider process tree", async () => {
+  const result = await runFake("spawn-child", {
+    transport: 400,
+    idle: 1_000,
+    phase: 2_000,
+  });
+  assert.equal(result.outcome, "transport_timeout");
+  assert.equal(result.childLiveness, "dead");
+  assert.equal(result.descendantLiveness, "dead");
 });
 
 test("parsed JSON events are retained in a byte-bounded recent ring", async () => {

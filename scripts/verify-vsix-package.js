@@ -267,7 +267,9 @@ function forbiddenSidecars(directory) {
     if (entry.isDirectory()) found.push(...forbiddenSidecars(entryPath));
     else if (
       entry.isFile() &&
-      (entry.name.endsWith(".vsix.sha256") || entry.name.endsWith(".vsix.cdx.json"))
+      (entry.name.endsWith(".vsix.sha256") ||
+        entry.name.endsWith(".vsix.cdx.json") ||
+        entry.name.endsWith(".vsix.manifest.json"))
     ) {
       found.push(entryPath);
     }
@@ -317,6 +319,32 @@ function writeVsixSbom(extensionPath, manifest) {
     components,
   };
   fs.writeFileSync(`${vsixPath}.cdx.json`, `${JSON.stringify(sbom, null, 2)}\n`, "utf8");
+}
+
+function writeVsixArtifactManifest(manifest) {
+  const gitResult = spawnSync("git", ["rev-parse", "HEAD"], {
+    cwd: root,
+    encoding: "utf8",
+    windowsHide: true,
+  });
+  const artifact = fs.readFileSync(vsixPath);
+  const releaseManifest = {
+    schemaVersion: 1,
+    artifactType: "vsix",
+    artifactFile: path.basename(vsixPath),
+    packageVersion: extensionPackage.version,
+    coreVersion: corePackage.version,
+    targetPlatform: manifest.targetPlatform,
+    sha256: crypto.createHash("sha256").update(artifact).digest("hex"),
+    bytes: artifact.length,
+    sourceCommit: process.env.GITHUB_SHA ||
+      (gitResult.status === 0 ? gitResult.stdout.trim() : "unknown"),
+  };
+  fs.writeFileSync(
+    `${vsixPath}.manifest.json`,
+    `${JSON.stringify(releaseManifest, null, 2)}\n`,
+    "utf8"
+  );
 }
 
 async function extractArchive(archivePath, destination) {
@@ -500,6 +528,7 @@ async function main() {
     process.stdout.write("[verify-vsix] Starting bundled native PTY\n");
     await verifyNativePty(extensionPath);
     writeVsixSbom(extensionPath, manifest);
+    writeVsixArtifactManifest(manifest);
     verified = true;
   } catch (error) {
     primaryError = error;

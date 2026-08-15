@@ -1,6 +1,6 @@
 # ADR 0003: Workflow budget semantics
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-08-08
 
 ## Decision
@@ -16,4 +16,3 @@ A workflow step and any new cycle are durably reserved immediately before dispat
 `cyclesCompleted` is an observation and is never the sole termination guard. Budget exhaustion produces `PAUSED/BUDGET_EXHAUSTED` and permits no further automatic spawn.
 
 If a crash leaves a mutation-capable provider attempt with an unknown outcome, the attempt remains charged and the session pauses for reconciliation instead of replaying it automatically.
-

@@ -62,6 +62,15 @@ switch (mode) {
     // depend on platform-specific PTY close/drain ordering under CI load.
     setTimeout(() => process.exit(0), 250);
     break;
+  case "raw-log-backpressure":
+    for (let index = 0; index < 100; index++) {
+      emit({ type: "tool_result", id: `slow-log-${index}`, payload: "b".repeat(256) });
+    }
+    setTimeout(() => {
+      assistant("Completed after raw-log backpressure.\n[PHASE_DONE]", "backpressure-complete");
+      setTimeout(() => process.exit(0), 100);
+    }, 180);
+    break;
   case "no-output":
     setInterval(() => {}, 1000);
     break;
@@ -155,7 +164,13 @@ switch (mode) {
     setInterval(() => {}, 1000);
     break;
   case "spawn-child":
-    spawn(process.execPath, ["-e", "setInterval(()=>{},1000)"], {
+    spawn(process.execPath, ["-e", [
+      "const {spawn}=require('node:child_process')",
+      "const fs=require('node:fs')",
+      "const child=spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'ignore'})",
+      "fs.writeFileSync('descendant-pid.txt',String(child.pid))",
+      "setInterval(()=>{},1000)",
+    ].join("; ")], {
       detached: false,
       stdio: "ignore",
     });

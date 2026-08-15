@@ -7,8 +7,10 @@ import {
   buildProviderInvocation,
   claudeMcpDocument,
   collectMcpSensitiveValues,
+  collectSensitiveEnvironmentValues,
   normalizeProviders,
   resolveMcpServerSecrets,
+  selectMcpServersForInvocation,
   validateToolAccess,
 } from "./provider_runtime";
 import { extractAssistantText, findSessionId } from "./process_supervisor";
@@ -145,8 +147,35 @@ test("Codex read-only roles fail closed while inherited MCP cannot be isolated",
       webSearch: false,
       mcpServers: [localMcp],
     }),
-    /read-only roles are unsupported.*MCP servers inherited/i
+    /read-only roles are unsupported.*isolated inherited tool configuration/i
   );
+});
+
+test("provider capability profiles are adapter-owned and cannot be escalated by configuration", () => {
+  const providers = normalizeProviders({
+    codex: {
+      capabilities: {
+        ...DEFAULT_PROVIDERS.claude.capabilities,
+        readOnlyFilesystem: "enforced",
+        mcpIsolation: "explicit",
+        readOnlyMcpToolFiltering: "enforced",
+      },
+    },
+  });
+  assert.equal(providers.codex.capabilities.readOnlyFilesystem, "unsupported");
+  assert.equal(providers.codex.capabilities.mcpIsolation, "inherited");
+  assert.throws(() => buildProviderInvocation({
+    ...providers.codex,
+    capabilities: DEFAULT_PROVIDERS.claude.capabilities,
+  }, {
+    model: "gpt",
+    targetProjectPath: providerTargetPath,
+    prompt: "inspect",
+    fullAccess: false,
+    readOnly: true,
+    webSearch: false,
+    mcpServers: [],
+  }), /read-only roles are unsupported/i);
 });
 
 test("OpenCode-family access policies map approved roots and never bypass read-only roles", () => {
@@ -255,6 +284,61 @@ test("Claude read-only roles expose only an explicit safe tool allowlist", () =>
   assert.equal(invocation.args.includes("--dangerously-skip-permissions"), false);
 });
 
+test("Claude read-only MCP exposes only tools explicitly classified read_only", () => {
+  const classified = validateToolAccess({
+    webSearch: { enabled: false, mode: "live" },
+    mcpServers: [{
+      ...localMcp,
+      tools: [
+        { name: "search", sideEffect: "read_only" },
+        { name: "publish", sideEffect: "write" },
+        { name: "mystery", sideEffect: "unknown" },
+      ],
+    }],
+  }).mcpServers;
+  const selected = selectMcpServersForInvocation(DEFAULT_PROVIDERS.claude, classified, true);
+  assert.deepEqual(selected[0].tools, [{ name: "search", sideEffect: "read_only" }]);
+  assert.deepEqual(selected[0].allowedTools, ["search"]);
+
+  const invocation = buildProviderInvocation(DEFAULT_PROVIDERS.claude, {
+    model: "sonnet",
+    targetProjectPath: providerTargetPath,
+    prompt: "inspect",
+    fullAccess: false,
+    readOnly: true,
+    webSearch: false,
+    webSearchMode: "live",
+    mcpServers: classified,
+    claudeMcpConfigPath: providerMcpConfigPath,
+  });
+  const tools = invocation.args[invocation.args.indexOf("--tools") + 1];
+  assert.match(tools, /mcp__docs__search/);
+  assert.equal(tools.includes("publish"), false);
+  assert.equal(tools.includes("mystery"), false);
+  assert.equal(invocation.args.includes("--mcp-config"), true);
+});
+
+test("legacy MCP allowlists migrate to unknown and cannot enter read-only roles", () => {
+  const migrated = validateToolAccess({
+    webSearch: { enabled: false, mode: "cached" },
+    mcpServers: [localMcp],
+  }).mcpServers;
+  assert.deepEqual(migrated[0].tools, [{ name: "search", sideEffect: "unknown" }]);
+  assert.deepEqual(selectMcpServersForInvocation(DEFAULT_PROVIDERS.claude, migrated, true), []);
+});
+
+test("provider preflight rejects unsupported explicit web modes", () => {
+  assert.throws(() => buildProviderInvocation(DEFAULT_PROVIDERS.claude, {
+    model: "sonnet",
+    targetProjectPath: providerTargetPath,
+    prompt: "research",
+    fullAccess: false,
+    webSearch: true,
+    webSearchMode: "cached",
+    mcpServers: [],
+  }), /does not support cached web search/i);
+});
+
 test("OpenCode and Kilo receive runtime MCP and web search configuration without file edits", () => {
   const open = buildProviderInvocation(DEFAULT_PROVIDERS.opencode, {
     model: "open/model",
@@ -288,6 +372,13 @@ test("tool access validation rejects duplicate or malformed MCP entries", () => 
     webSearch: { enabled: false, mode: "cached" },
     mcpServers: [{ id: "remote", name: "Remote", enabled: true, type: "remote", url: "file://bad" }],
   }), /http\(s\) URL/);
+  assert.throws(() => validateToolAccess({
+    webSearch: { enabled: false, mode: "cached" },
+    mcpServers: [{
+      ...localMcp,
+      tools: [{ name: "search", sideEffect: "destructive" as any }],
+    }],
+  }), /invalid side effect/);
 });
 
 test("persistent MCP settings reject inline credentials and accept references", () => {
@@ -319,6 +410,16 @@ test("resolved MCP environment and header values are collected for streaming red
     new Set(collectMcpSensitiveValues(servers)),
     new Set(["environment-secret-value", "Bearer secret-storage-value"])
   );
+});
+
+test("credential-shaped inherited environment values join the redaction set", () => {
+  assert.deepEqual(new Set(collectSensitiveEnvironmentValues({
+    PATH: "ordinary-path",
+    OPENAI_API_KEY: "openai-secret",
+    CLAUDE_CODE_OAUTH_TOKEN: "oauth-secret",
+    DATABASE_PASSWORD: "database-secret",
+    EMPTY_SECRET: "",
+  })), new Set(["openai-secret", "oauth-secret", "database-secret"]));
 });
 
 test("supervisor extracts only provider assistant fields and all supported session IDs", () => {

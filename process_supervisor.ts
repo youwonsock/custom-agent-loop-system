@@ -402,6 +402,18 @@ async function execFileBounded(
   });
 }
 
+function checkProcessGroupLiveness(pid: number): ProcessLiveness {
+  if (process.platform === "win32" || pid <= 0) return "unknown";
+  try {
+    process.kill(-pid, 0);
+    return "alive";
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "ESRCH") return "dead";
+    return "unknown";
+  }
+}
+
 export async function terminateProcessTreeBounded(
   pid: number,
   timeoutMs: number
@@ -410,20 +422,48 @@ export async function terminateProcessTreeBounded(
   if (process.platform === "win32") {
     await execFileBounded("taskkill", ["/T", "/F", "/PID", String(pid)], timeoutMs);
   } else {
-    await execFileBounded("pkill", ["-TERM", "-P", String(pid)], Math.max(500, timeoutMs / 2));
+    let groupSignalSent = false;
     try {
-      process.kill(pid, "SIGTERM");
+      // forkpty creates the child as a session/process-group leader. Signalling
+      // the negative PID reaches descendants even if an intermediate child exits
+      // and they are re-parented while shutdown is in progress.
+      process.kill(-pid, "SIGTERM");
+      groupSignalSent = true;
     } catch {
-      // It may already have exited.
+      // Fall back for PTY implementations that do not create a process group.
+    }
+    if (!groupSignalSent) {
+      await execFileBounded("pkill", ["-TERM", "-P", String(pid)], Math.max(500, timeoutMs / 2));
+      try {
+        process.kill(pid, "SIGTERM");
+      } catch {
+        // It may already have exited.
+      }
     }
     await delay(Math.min(500, timeoutMs));
-    if (checkProcessLiveness(pid) === "alive") {
+    if (checkProcessGroupLiveness(pid) === "alive") {
+      try {
+        process.kill(-pid, "SIGKILL");
+      } catch {
+        // The group may have exited between checks.
+      }
+    } else if (checkProcessLiveness(pid) === "alive") {
       try {
         process.kill(pid, "SIGKILL");
       } catch {
         // It may already have exited.
       }
     }
+    const deadline = Date.now() + Math.max(0, timeoutMs - Math.min(500, timeoutMs));
+    while (Date.now() < deadline) {
+      const parent = checkProcessLiveness(pid);
+      const group = checkProcessGroupLiveness(pid);
+      if (parent === "dead" && group === "dead") return "dead";
+      await delay(Math.min(50, Math.max(1, deadline - Date.now())));
+    }
+    const group = checkProcessGroupLiveness(pid);
+    if (group === "alive") return "alive";
+    if (group === "unknown") return "unknown";
   }
   return checkProcessLiveness(pid);
 }
@@ -535,13 +575,24 @@ export class ProcessSupervisor {
     );
     let rawLogBytesWritten = 0;
     let rawLogTruncated = false;
+    let rawLogBackpressured = false;
+    let child: pty.IPty;
+    const pauseForRawLogBackpressure = (): void => {
+      if (rawLogBackpressured || rawLogFailure !== null) return;
+      rawLogBackpressured = true;
+      try {
+        child.pause();
+      } catch (err) {
+        recordRawLogFailure(err);
+      }
+    };
     const writeRawLog = (value: string): void => {
       if (!value || rawLogTruncated || rawLogFailure !== null) return;
       const remaining = maximumRawLogBytes - rawLogBytesWritten;
       const prefix = utf8Prefix(value, remaining);
       if (prefix) {
         try {
-          rawLog.write(prefix);
+          if (!rawLog.write(prefix)) pauseForRawLogBackpressure();
           rawLogBytesWritten += Buffer.byteLength(prefix, "utf8");
         } catch (err) {
           recordRawLogFailure(err);
@@ -550,7 +601,9 @@ export class ProcessSupervisor {
       }
       if (Buffer.byteLength(value, "utf8") > remaining) {
         try {
-          rawLog.write("\n[AGENT_LOOP_LOG_TRUNCATED]\n");
+          if (!rawLog.write("\n[AGENT_LOOP_LOG_TRUNCATED]\n")) {
+            pauseForRawLogBackpressure();
+          }
         } catch (err) {
           recordRawLogFailure(err);
           return;
@@ -559,7 +612,6 @@ export class ProcessSupervisor {
       }
     };
 
-    let child: pty.IPty;
     try {
       child = pty.spawn(options.binary, options.args, {
         name: "xterm-256color",
@@ -590,6 +642,15 @@ export class ProcessSupervisor {
         autoInjected: [],
       });
     }
+    rawLog.on("drain", () => {
+      if (!rawLogBackpressured || rawLogFailure !== null) return;
+      rawLogBackpressured = false;
+      try {
+        child.resume();
+      } catch (err) {
+        recordRawLogFailure(err);
+      }
+    });
 
     const pid = child.pid;
     const lineBuffer = new LineBuffer();

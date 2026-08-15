@@ -1,0 +1,185 @@
+name: Promote tested release artifacts
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing v-prefixed tag whose commit produced the candidate artifacts
+        required: true
+        type: string
+      ci_run_id:
+        description: Successful push CI run ID for the tagged commit
+        required: true
+        type: string
+      provider_conformance_run_id:
+        description: Successful protected provider-conformance run ID for the tagged commit
+        required: true
+        type: string
+      publish_npm:
+        description: Publish the exact downloaded tgz to npm with provenance
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  actions: read
+  attestations: read
+  contents: write
+  id-token: write
+
+concurrency:
+  group: promote-${{ github.ref_name }}-${{ inputs.release_tag }}
+  cancel-in-progress: false
+
+jobs:
+  promote:
+    name: Verify and promote without rebuilding
+    runs-on: ubuntu-24.04
+    environment: release
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+
+      - id: candidate
+        name: Resolve successful candidate and protected conformance runs
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MANUAL_TAG: ${{ inputs.release_tag }}
+          MANUAL_CI_RUN_ID: ${{ inputs.ci_run_id }}
+          MANUAL_PROVIDER_RUN_ID: ${{ inputs.provider_conformance_run_id }}
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
+            release_tag="$MANUAL_TAG"
+            ci_run_id="$MANUAL_CI_RUN_ID"
+            provider_run_id="$MANUAL_PROVIDER_RUN_ID"
+          else
+            release_tag="$GITHUB_REF_NAME"
+            expected_commit="$GITHUB_SHA"
+            ci_run_id="$(gh api \
+              "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$expected_commit&status=success&per_page=100" \
+              --jq '[.workflow_runs[] | select(.event == "push")][0].id // empty')"
+            provider_run_id="$(gh api \
+              "repos/$GITHUB_REPOSITORY/actions/workflows/provider-conformance.yml/runs?head_sha=$expected_commit&status=success&per_page=100" \
+              --jq '[.workflow_runs[] | select(.event == "workflow_dispatch")][0].id // empty')"
+          fi
+          [[ "$release_tag" == v* ]] || { echo "Release tag must start with v." >&2; exit 1; }
+          git rev-parse --verify "refs/tags/$release_tag^{commit}" >/dev/null
+          expected_commit="$(git rev-list -n 1 "$release_tag")"
+          [[ -n "$ci_run_id" ]] || { echo "No successful push CI run found." >&2; exit 1; }
+          [[ -n "$provider_run_id" ]] || { echo "No successful protected provider run found." >&2; exit 1; }
+
+          ci_sha="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$ci_run_id" --jq '.head_sha')"
+          ci_status="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$ci_run_id" --jq '.conclusion + ":" + .event + ":" + .name')"
+          provider_sha="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$provider_run_id" --jq '.head_sha')"
+          provider_status="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$provider_run_id" --jq '.conclusion + ":" + .event + ":" + .name')"
+          [[ "$ci_sha" == "$expected_commit" ]] || { echo "CI commit mismatch." >&2; exit 1; }
+          [[ "$provider_sha" == "$expected_commit" ]] || { echo "Provider commit mismatch." >&2; exit 1; }
+          [[ "$ci_status" == "success:push:CI" ]] || { echo "Invalid CI run: $ci_status" >&2; exit 1; }
+          [[ "$provider_status" == "success:workflow_dispatch:Authenticated provider conformance" ]] || {
+            echo "Invalid provider run: $provider_status" >&2; exit 1;
+          }
+          {
+            echo "release_tag=$release_tag"
+            echo "expected_commit=$expected_commit"
+            echo "ci_run_id=$ci_run_id"
+            echo "provider_run_id=$provider_run_id"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Checkout the exact candidate commit for verification scripts only
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ steps.candidate.outputs.expected_commit }}
+          fetch-depth: 1
+
+      - name: Select the release Node runtime and configure npm authentication
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 20
+          registry-url: https://registry.npmjs.org
+
+      - name: Match package versions to the immutable release tag
+        env:
+          RELEASE_TAG: ${{ steps.candidate.outputs.release_tag }}
+        run: >-
+          node -e "const fs=require('node:fs');const expected=process.env.RELEASE_TAG.slice(1);for(const file of ['package.json','vscode-extension/package.json']){const actual=JSON.parse(fs.readFileSync(file)).version;if(actual!==expected)throw new Error(file+' '+actual+' != '+expected)}"
+
+      - name: Download exact CI release candidates
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          pattern: release-*
+          path: release-bundle
+          merge-multiple: true
+          run-id: ${{ steps.candidate.outputs.ci_run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Download protected provider conformance evidence
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          pattern: provider-conformance-*
+          path: provider-conformance
+          merge-multiple: true
+          run-id: ${{ steps.candidate.outputs.provider_run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Verify checksums, SBOM bindings, manifests, source commit, and target set
+        run: >-
+          node scripts/verify-release-bundle.js release-bundle
+          --expected-commit ${{ steps.candidate.outputs.expected_commit }}
+          --expected-count 5
+          --expected-vsix-targets win32-x64,linux-x64,darwin-arm64,darwin-x64
+
+      - name: Verify all 24 authenticated provider/OS/mode reports
+        run: node scripts/verify-provider-conformance-bundle.js provider-conformance
+
+      - name: Verify GitHub build-provenance attestations
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          while IFS= read -r artifact; do
+            gh attestation verify "$artifact" --repo "$GITHUB_REPOSITORY"
+          done < <(find release-bundle -maxdepth 1 -type f \( -name '*.tgz' -o -name '*.vsix' \) -print | sort)
+
+      - name: Create recoverable draft release before publication
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.candidate.outputs.release_tag }}
+        run: |
+          set -euo pipefail
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            echo "Release $RELEASE_TAG already exists; refusing to overwrite assets." >&2
+            exit 1
+          fi
+          gh release create "$RELEASE_TAG" release-bundle/* \
+            --verify-tag \
+            --draft \
+            --generate-notes \
+            --title "Agent Loop $RELEASE_TAG"
+
+      - if: inputs.publish_npm == true
+        name: Publish the exact downloaded npm artifact
+        shell: bash
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -euo pipefail
+          artifact="$(find release-bundle -maxdepth 1 -type f -name '*.tgz' -print -quit)"
+          [[ -n "$artifact" ]] || { echo "npm artifact missing" >&2; exit 1; }
+          npm publish "$artifact" --access public --provenance
+
+      - name: Publish the verified draft GitHub release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.candidate.outputs.release_tag }}
+        run: |
+          set -euo pipefail
+          gh release edit "$RELEASE_TAG" --draft=false

@@ -21,7 +21,7 @@ export type AttemptStatus =
   | "transport_timeout" | "idle_timeout" | "phase_timeout"
   | "tool_timeout"
   | "spawn_error" | "process_exit" | "incomplete_response"
-  | "cancelled" | "orphaned_process";
+  | "cancelled" | "unknown_outcome" | "orphaned_process";
 export type FailureKind =
   | "transport_timeout" | "idle_timeout" | "phase_timeout" | "spawn_error"
   | "tool_timeout"
@@ -43,6 +43,19 @@ export type VariantMapping = Partial<Record<AgentRole, string>>;
 export type ProviderMapping = Record<AgentRole, string>;
 export type ProviderAdapter = "opencode" | "kilo" | "codex" | "claude";
 
+export interface ProviderCapabilities {
+  readOnlyFilesystem: "enforced" | "best_effort" | "unsupported";
+  workspaceWrites: "enforced" | "best_effort" | "unsupported";
+  additionalRoots: "enforced" | "best_effort" | "unsupported";
+  fullAccess: boolean;
+  resumeSession: boolean;
+  webSearchModes: Array<"cached" | "live">;
+  mcpIsolation: "explicit" | "inherited" | "none";
+  readOnlyMcpToolFiltering: "enforced" | "unsupported";
+  processContainment: "supervised_tree";
+  structuredEvents: "jsonl";
+}
+
 export interface ProviderConfig {
   label: string;
   adapter: ProviderAdapter;
@@ -51,6 +64,8 @@ export interface ProviderConfig {
   modelsArgs: string[];
   fallbackModels: string[];
   interactionWhitelist?: string[];
+  /** Informational only; the core derives the trusted profile from adapter. */
+  capabilities?: ProviderCapabilities;
 }
 
 export interface ProviderCatalogEntry {
@@ -78,6 +93,10 @@ export interface McpServerConfig {
   environment?: Record<string, string>;
   headers?: Record<string, string>;
   timeoutMs?: number;
+  tools?: Array<{
+    name: string;
+    sideEffect: "read_only" | "write" | "unknown";
+  }>;
   allowedTools?: string[];
 }
 
@@ -157,6 +176,7 @@ export interface AgentState {
 
 export interface AgentAttemptState {
   attemptId: string;
+  activationId?: string;
   role: AgentRole;
   phase: Phase;
   status: AttemptStatus;
@@ -276,13 +296,148 @@ export interface ConvergenceState {
   }>;
 }
 
+export interface ArtifactReference {
+  sha256: string;
+  mediaType: string;
+  bytes: number;
+}
+
+export type StageDecision = "pass" | "fail" | "approved" | "rejected";
+export type StageExecutionStatus =
+  | "succeeded" | "failed" | "waiting_user" | "paused" | "blocked" | "stopped";
+
+export interface StageOutcome {
+  schemaVersion: 1;
+  outcomeId: string;
+  stageId: string;
+  activationId: string | null;
+  attemptId: string | null;
+  role: string;
+  executor: PipelineStageExecutor;
+  status: StageExecutionStatus;
+  decision: StageDecision | null;
+  requirementEvidence: RequirementLedger["evidence"];
+  artifacts: Array<ArtifactReference & { key: string }>;
+  failure: {
+    kind: string;
+    message: string;
+    retryable: boolean;
+    exitCode: number | null;
+  } | null;
+  outputSummary: string;
+  source: "structured" | "legacy_text" | "system";
+  compatibility: {
+    legacyContract: PipelineCompletionContract;
+    legacyValidated: boolean;
+    structuredSignalPresent: boolean;
+    decisionsEquivalent: boolean;
+  };
+  recordedAt: string;
+}
+
+export type DomainEventType =
+  | "workflow.started" | "workflow.resumed" | "workflow.paused"
+  | "workflow.completed" | "workflow.failed"
+  | "stage.started" | "stage.completed" | "stage.failed" | "stage.paused"
+  | "attempt.started" | "attempt.progressed" | "attempt.completed" | "attempt.failed";
+
+export interface DomainEvent {
+  schemaVersion: 1;
+  sequence: number;
+  eventId: string;
+  type: DomainEventType;
+  recordedAt: string;
+  stageId: string | null;
+  activationId: string | null;
+  attemptId: string | null;
+  role: string | null;
+  summary: string;
+  detail: Record<string, string | number | boolean | null>;
+}
+
+export interface RemainingExecutionBudgets {
+  cycles: { remaining: number; consumed: number; limit: number };
+  workflowSteps: { remaining: number; consumed: number; limit: number };
+  stageAttempts: { remaining: number | null; consumed: number | null; limit: number | null };
+  completionRecoveryAttempts: { remaining: number; consumed: number; limit: number };
+  automaticRecoveryCycles: { remaining: number; consumed: number; limit: number };
+  phaseRecoveryMs: { remaining: number | null; limit: number };
+}
+
+export type NextPermittedAction =
+  | "wait_for_attempt" | "execute_next_stage" | "wait_for_recovery"
+  | "approve_filesystem_access" | "approve_plan" | "reconcile_unknown_mutation"
+  | "resume_session" | "inspect_failure" | "none_complete";
+
+export interface OperatorSnapshot {
+  schemaVersion: 1;
+  sessionId: string;
+  status: LoopStatus;
+  currentStage: string;
+  currentRole: string | null;
+  activeAttempt: {
+    attemptId: string;
+    number: number;
+    status: string;
+    activity: string;
+  } | null;
+  nextPermittedAction: NextPermittedAction;
+  pauseReason: string | null;
+  progressSummary: string;
+  budgets: RemainingExecutionBudgets;
+  latestEvent: DomainEvent | null;
+}
+
+export interface StageActivationReservation {
+  activationId: string;
+  sequence: number;
+  stageId: string;
+  executor: PipelineStageExecutor;
+  mutationCapable: boolean;
+  workflowStep: number;
+  cycleNumber: number | null;
+  attemptsReserved: number;
+  maxAgentAttempts: number;
+  status: "reserved" | "running" | "completed" | "failed" | "cancelled" | "unknown_mutation";
+  reservedAt: string;
+  completedAt: string | null;
+}
+
+export interface PipelineCompilation {
+  compilerVersion: 1;
+  pipelineHash: string;
+  compiledAt: string;
+  reachableStageIds: string[];
+  approvalGateStageIds: string[];
+  terminalTargets: string[];
+  cyclicComponents: Array<{
+    stageIds: string[];
+    consumesCycle: boolean;
+    consumesWorkflowStep: true;
+  }>;
+}
+
 export interface LoopState {
   stateVersion: number;
+  /** Aggregate metadata is optional only while reading pre-v3.4.1 sessions. */
+  aggregateFormatVersion?: 1;
+  aggregateRevision?: number;
+  fencingEpoch?: number;
+  aggregateChecksum?: string;
+  processedRequestIds?: string[];
+  artifactRefs?: Record<string, ArtifactReference>;
   sessionId: string;
   status: LoopStatus;
   phase: Phase;
   loopCount: number;
   completedIterations: number;
+  maxCycles?: number;
+  cyclesStarted?: number;
+  cyclesCompleted?: number;
+  maxWorkflowSteps?: number;
+  workflowStepsConsumed?: number;
+  currentActivation?: StageActivationReservation | null;
+  activationHistory?: StageActivationReservation[];
   goal: string;
   targetProjectPath: string;
   additionalAllowedPaths: string[];
@@ -332,6 +487,7 @@ export interface LoopState {
   automaticRecovery: AutomaticRecoveryState | null;
   resilience: ResilienceSettings;
   pipeline: PipelineDefinition;
+  pipelineCompilation?: PipelineCompilation;
   pipelineConfigPath: string | null;
   stageResults: Record<string, {
     stageId: string;
@@ -343,6 +499,9 @@ export interface LoopState {
     verdict: "PASS" | "FAIL" | "APPROVED" | "REJECTED" | null;
     attemptId: string | null;
   }>;
+  stageOutcomes?: StageOutcome[];
+  domainEventSequence?: number;
+  domainEvents?: DomainEvent[];
   requirements: RequirementLedger;
   convergence: ConvergenceState;
 }
@@ -402,7 +561,6 @@ export interface SessionBundle {
   registry: SessionRegistry;
   state: LoopState | null;
   progressNotes: string;
-  history: LoopHistoryEntry[];
   finalSummary: FinalSummary | null;
 }
 
@@ -458,7 +616,8 @@ export interface WebviewStatePayload {
   selectedSessionId: string | null;
   state: LoopState | null;
   progressNotes: string;
-  history: LoopHistoryEntry[];
+  timeline: DomainEvent[];
+  operatorSnapshot: OperatorSnapshot | null;
   finalSummary: FinalSummary | null;
   isRunning: boolean;
   defaultTargetPath: string;
@@ -500,6 +659,7 @@ export interface ExtensionConfig {
 export interface LoopPathsConfig {
   sessionsRoot: string;
   registryFileName: string;
+  sessionsIndexFileName: string;
   variantsConfigFileName: string;
   loopHistoryDirName: string;
   controlDirName: string;
@@ -546,6 +706,7 @@ function defaultLoopPaths(): LoopPathsConfig {
   return {
     sessionsRoot: ".goal/sessions",
     registryFileName: "sessions_registry.json",
+    sessionsIndexFileName: "sessions_index.json",
     variantsConfigFileName: "model_variants.json",
     loopHistoryDirName: "loop_history",
     controlDirName: "control",

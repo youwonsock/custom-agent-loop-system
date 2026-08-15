@@ -11,6 +11,7 @@
       "properties": {
         "sessionsRoot": { "$ref": "#/$defs/relativePath" },
         "registryFileName": { "$ref": "#/$defs/pathSegment" },
+        "sessionsIndexFileName": { "$ref": "#/$defs/pathSegment" },
         "variantsConfigFileName": { "$ref": "#/$defs/pathSegment" },
         "loopHistoryDirName": { "$ref": "#/$defs/pathSegment" },
         "sessionFileNames": {
@@ -155,7 +156,40 @@
           "type": "array",
           "items": { "type": "string", "minLength": 1 }
         },
-        "interactionWhitelist": { "$ref": "#/$defs/stringArray" }
+        "interactionWhitelist": { "$ref": "#/$defs/stringArray" },
+        "capabilities": { "$ref": "#/$defs/providerCapabilities" }
+      },
+      "additionalProperties": false
+    },
+    "providerCapabilities": {
+      "type": "object",
+      "required": [
+        "readOnlyFilesystem",
+        "workspaceWrites",
+        "additionalRoots",
+        "fullAccess",
+        "resumeSession",
+        "webSearchModes",
+        "mcpIsolation",
+        "readOnlyMcpToolFiltering",
+        "processContainment",
+        "structuredEvents"
+      ],
+      "properties": {
+        "readOnlyFilesystem": { "enum": ["enforced", "best_effort", "unsupported"] },
+        "workspaceWrites": { "enum": ["enforced", "best_effort", "unsupported"] },
+        "additionalRoots": { "enum": ["enforced", "best_effort", "unsupported"] },
+        "fullAccess": { "type": "boolean" },
+        "resumeSession": { "type": "boolean" },
+        "webSearchModes": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "enum": ["cached", "live"] }
+        },
+        "mcpIsolation": { "enum": ["explicit", "inherited", "none"] },
+        "readOnlyMcpToolFiltering": { "enum": ["enforced", "unsupported"] },
+        "processContainment": { "const": "supervised_tree" },
+        "structuredEvents": { "const": "jsonl" }
       },
       "additionalProperties": false
     },
@@ -184,6 +218,18 @@
           "additionalProperties": { "$ref": "#/$defs/credentialReference" }
         },
         "timeoutMs": { "$ref": "#/$defs/positiveInteger" },
+        "tools": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["name", "sideEffect"],
+            "properties": {
+              "name": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$" },
+              "sideEffect": { "enum": ["read_only", "write", "unknown"] }
+            },
+            "additionalProperties": false
+          }
+        },
         "allowedTools": { "$ref": "#/$defs/stringArray" }
       },
       "allOf": [

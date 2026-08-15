@@ -12,4 +12,5 @@ package-lock.json
 *.vsix
 *.vsix.sha256
 *.vsix.cdx.json
+*.vsix.manifest.json
 !core/**

@@ -19,7 +19,8 @@ code --install-extension agent-loop-vscode-win32-x64-3.4.1.vsix --force
 - Stages: 파일 기반 역할·단계 구조를 확인합니다.
 - Tools: 모든 에이전트에 공통인 Web Search와 MCP 서버를 설정합니다.
 - Plan Review: 세 개의 전체 계획 문서를 중앙 Markdown 미리보기로 열고 승인·수정합니다.
-- Session dashboard: attempt 번호, 재연결, 최근 진행 경과, retry 시각, 실패 종류, lease/orphan 상태, 요구사항 충족도를 표시합니다.
+- Session dashboard: aggregate domain event에서 파생한 현재 단계·역할·진행 요약·다음 허용 행동·정지 이유와 cycle/workflow-step/attempt/recovery 잔여 예산을 표시합니다.
+- Domain Timeline: raw terminal이나 별도 history 파일이 아니라 bounded aggregate event를 최신순으로 표시합니다.
 
 기본 데이터는 VS Code 전역 저장소에 저장됩니다. `agentLoop.rootDir`은 데이터 위치를 직접 관리해야 할 때만 설정하고, 워크스페이스 또는 대상 프로젝트 내부를 가리키지 않아야 합니다. 예를 들어 `rootDir="."`은 거부됩니다. 개발 중 외부 코어를 실행하려면 `agentLoop.orchestratorScript`를 지정하십시오.
 

@@ -4,7 +4,8 @@ import {
   WebviewMessage,
   WebviewStatePayload,
   LoopState,
-  LoopHistoryEntry,
+  DomainEvent,
+  OperatorSnapshot,
   FinalSummary,
   ModelMapping,
   VariantMapping,
@@ -18,6 +19,7 @@ import {
 } from "./types";
 import { StateStore } from "./stateStore";
 import { LoopClient, LogEntry } from "./loopClient";
+import { deriveExtensionOperatorSnapshot } from "./operatorProjection";
 
 export class LoopWebviewPanel {
   private static instance: LoopWebviewPanel | undefined;
@@ -241,11 +243,27 @@ export class LoopWebviewPanel {
     this.postMessage({ command: "focusComposer" });
   }
 
+  private async confirmUnsafeFullAccess(): Promise<boolean> {
+    const confirmation = await vscode.window.showWarningMessage(
+      "Full access is an unsafe mode, not a filesystem security boundary.",
+      {
+        modal: true,
+        detail:
+          "The provider process runs with your OS user privileges and may access files outside " +
+          "the project, including Agent Loop control data. Use a separate OS identity or an " +
+          "enforceable native deny boundary for true isolation.",
+      },
+      "Enable Unsafe Full Access"
+    );
+    return confirmation === "Enable Unsafe Full Access";
+  }
+
   private async handleNewSession(msg: { goal: string; targetProjectPath: string; accessMode: AccessMode; modelMapping: Partial<ModelMapping>; providerMapping?: Partial<ProviderMapping>; variantMapping?: Partial<VariantMapping> }): Promise<void> {
     if (!msg.goal || msg.goal.trim().length === 0) {
       vscode.window.showErrorMessage("Goal is required.");
       return;
     }
+    if (msg.accessMode === "full_access" && !(await this.confirmUnsafeFullAccess())) return;
     const target = msg.targetProjectPath && msg.targetProjectPath.length > 0
       ? msg.targetProjectPath
       : vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? process.cwd();
@@ -422,15 +440,17 @@ export class LoopWebviewPanel {
 
     let state: LoopState | null = null;
     let progressNotes = "";
-    let history: LoopHistoryEntry[] = [];
+    let timeline: DomainEvent[] = [];
+    let operatorSnapshot: OperatorSnapshot | null = null;
     let finalSummary: FinalSummary | null = null;
 
     if (this.selectedSessionId) {
       const bundle = await this.store.readBundle(this.selectedSessionId);
       state = bundle.state;
       progressNotes = bundle.progressNotes;
-      history = bundle.history;
       finalSummary = bundle.finalSummary;
+      timeline = state?.domainEvents ?? [];
+      operatorSnapshot = state ? deriveExtensionOperatorSnapshot(state) : null;
 
       const configuredPlanDocumentPath =
         state?.awaitingPlanApproval &&
@@ -496,7 +516,8 @@ export class LoopWebviewPanel {
       selectedSessionId: this.selectedSessionId,
       state,
       progressNotes,
-      history,
+      timeline,
+      operatorSnapshot,
       finalSummary,
       isRunning,
       defaultTargetPath,
@@ -538,6 +559,7 @@ export class LoopWebviewPanel {
 
   private async handleResolveAccessRequest(msg: { sessionId: string; decision: "allow_requested" | "full_access" }): Promise<void> {
     try {
+      if (msg.decision === "full_access" && !(await this.confirmUnsafeFullAccess())) return;
       await this.client.resumeSession(msg.sessionId, false, msg.decision);
       this.selectedSessionId = msg.sessionId;
       this.attachLogListener(msg.sessionId);
@@ -555,6 +577,7 @@ export class LoopWebviewPanel {
 
   private async handleSetAccessMode(msg: { sessionId: string; accessMode: AccessMode }): Promise<void> {
     try {
+      if (msg.accessMode === "full_access" && !(await this.confirmUnsafeFullAccess())) return;
       await this.store.updateAccessMode(msg.sessionId, msg.accessMode);
       vscode.window.showInformationMessage(
         msg.accessMode === "full_access"

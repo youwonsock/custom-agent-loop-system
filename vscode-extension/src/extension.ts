@@ -22,6 +22,13 @@ let recoveryPassPromise: Promise<void> | null = null;
 let recoveryPassPending = false;
 let recoveryMonitorEnabled = false;
 
+export interface AgentLoopExtensionApi {
+  readonly context: vscode.ExtensionContext;
+  readonly store: StateStore;
+  readonly client: LoopClient;
+  getConfig(): ExtensionConfig;
+}
+
 function requireTrustedWorkspace(action: string): boolean {
   if (vscode.workspace.isTrusted) return true;
   void vscode.window.showWarningMessage(
@@ -30,7 +37,9 @@ function requireTrustedWorkspace(action: string): boolean {
   return false;
 }
 
-export async function activate(context: vscode.ExtensionContext): Promise<void> {
+export async function activate(
+  context: vscode.ExtensionContext
+): Promise<AgentLoopExtensionApi | undefined> {
   const activationAllowed = activationSideEffectsAllowed(vscode.workspace.isTrusted);
   if (!activationAllowed) {
     console.warn("[agentLoop] Activation side effects are disabled for an untrusted workspace.");
@@ -315,6 +324,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       store?.stopPolling();
     },
   });
+
+  return {
+    context,
+    store,
+    client,
+    getConfig: () => config,
+  };
 }
 
 export async function deactivate(): Promise<void> {

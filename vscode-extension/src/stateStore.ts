@@ -47,6 +47,10 @@ import {
   protectMcpCredentialValue,
   SECRET_REFERENCE,
 } from "./mcpSecurityPolicy";
+import {
+  ExtensionAggregateStore,
+  ExtensionImmutableArtifactStore,
+} from "./aggregateStore";
 
 let globalContext: vscode.ExtensionContext | undefined;
 export const CORE_SECRET_VALUES_ENV = "AGENT_LOOP_SECRET_VALUES";
@@ -211,54 +215,29 @@ export class StateStore {
       await fs.mkdir(storagePath, { recursive: true });
       return storagePath;
     }
-    const envRoot = process.env.AGENT_LOOP_ROOT;
+    const envRoot = process.env.AGENT_LOOP_DATA_ROOT ?? process.env.AGENT_LOOP_ROOT;
     if (envRoot && envRoot.length > 0) {
-      const resolved = path.resolve(envRoot);
-      try {
-        await fs.access(path.join(resolved, "dist", "loop_orchestrator.js"));
-        await this.cacheDetectedRoot(resolved);
-        return resolved;
-      } catch {
-        // env var stale, continue
-      }
+      return resolveConfiguredDataRoot(envRoot);
     }
-    for (const folder of vscode.workspace.workspaceFolders ?? []) {
-      const distScript = path.join(folder.uri.fsPath, "dist", "loop_orchestrator.js");
-      const registry = path.join(folder.uri.fsPath, "sessions_registry.json");
-      try {
-        await fs.access(distScript);
-        await this.cacheDetectedRoot(folder.uri.fsPath);
-        return folder.uri.fsPath;
-      } catch {
-        // not here
-      }
-      try {
-        await fs.access(registry);
-        await this.cacheDetectedRoot(folder.uri.fsPath);
-        return folder.uri.fsPath;
-      } catch {
-        // not here
-      }
-    }
-    const defaultDir = path.join(os.homedir(), ".agent-loop");
+    const defaultDir = process.platform === "win32"
+      ? path.join(
+          process.env.LOCALAPPDATA ?? path.join(os.homedir(), "AppData", "Local"),
+          "CustomAgentLoopSystem"
+        )
+      : process.platform === "darwin"
+        ? path.join(os.homedir(), "Library", "Application Support", "CustomAgentLoopSystem")
+        : path.join(
+            process.env.XDG_DATA_HOME ?? path.join(os.homedir(), ".local", "share"),
+            "custom-agent-loop-system"
+          );
     await fs.mkdir(defaultDir, { recursive: true });
     return defaultDir;
-  }
-
-  private async cacheDetectedRoot(root: string): Promise<void> {
-    if (globalContext) {
-      try {
-        await globalContext.globalState.update("agentLoop.detectedRoot", root);
-      } catch {
-        // ignore persistence failure
-      }
-    }
   }
 
   getRegistryPath = async (): Promise<string> => {
     const root = await this.getRootDir();
     const cfg = await this.getPathsConfig();
-    return resolveContainedPath(root, cfg.registryFileName, "Session registry");
+    return resolveContainedPath(root, cfg.sessionsIndexFileName, "Sessions index");
   };
 
   getSessionDir = async (sessionId: string): Promise<string> => {
@@ -494,6 +473,7 @@ export class StateStore {
       mcpServers: await Promise.all(toolAccess.mcpServers.map(async (server) => ({
         ...server,
         args: [...(server.args ?? [])],
+        tools: (server.tools ?? []).map((tool) => ({ ...tool })),
         allowedTools: [...(server.allowedTools ?? [])],
         environment: await protectMap(server.id, "environment", server.environment),
         headers: await protectMap(server.id, "headers", server.headers),
@@ -533,6 +513,19 @@ export class StateStore {
       }
       if (server.timeoutMs !== undefined && (!Number.isFinite(server.timeoutMs) || server.timeoutMs <= 0)) {
         throw new Error(`MCP server ${server.id} timeout must be positive.`);
+      }
+      const toolNames = new Set<string>();
+      for (const tool of server.tools ?? []) {
+        if (!/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/.test(tool.name)) {
+          throw new Error(`MCP server ${server.id} has an unsafe tool name: ${tool.name}`);
+        }
+        if (toolNames.has(tool.name)) {
+          throw new Error(`MCP server ${server.id} has a duplicate tool: ${tool.name}`);
+        }
+        toolNames.add(tool.name);
+        if (!["read_only", "write", "unknown"].includes(tool.sideEffect)) {
+          throw new Error(`MCP server ${server.id} tool ${tool.name} has an invalid side effect.`);
+        }
       }
     }
     const pipeline = settings.pipeline;
@@ -586,7 +579,12 @@ export class StateStore {
     }
     for (const stage of pipeline.stages) {
       for (const target of [stage.onSuccess, stage.onFailure]) {
-        if (!stageIds.has(target) && target !== "SUCCESS" && target !== "PAUSED") {
+        if (
+          !stageIds.has(target) &&
+          target !== "SUCCESS" &&
+          target !== "PAUSED" &&
+          target !== "BLOCKED"
+        ) {
           throw new Error(`Stage ${stage.id} references unknown transition ${target}.`);
         }
       }
@@ -616,12 +614,19 @@ export class StateStore {
     const choice = choices?.find((candidate) => candidate.id === choiceId);
     if (!choice) throw new Error(`Plan option ${choiceId} was not found.`);
     const planPath = await this.getPlanMdPath(sessionId);
-    await this.writeTextAtomic(planPath, `${choice.body.trim()}\n`);
+    const sessionDir = await this.getSessionDir(sessionId);
+    const content = `${choice.body.trim()}\n`;
+    const artifact = await new ExtensionImmutableArtifactStore(
+      path.join(sessionDir, "artifacts")
+    ).put(content, "text/markdown");
     await this.updateState(sessionId, (state) => {
       state.planPath = planPath;
       state.selectedPlanChoiceId = choice.id;
       state.planApproved = false;
-    });
+      state.artifactRefs = state.artifactRefs ?? {};
+      state.artifactRefs["plan.selected"] = artifact;
+    }, this.createOfflineRequestId("select_plan"));
+    await this.writeTextAtomic(planPath, content);
     return {
       choice,
       markdownPath: await this.getPlanChoiceMarkdownPath(sessionId, choice),
@@ -630,16 +635,19 @@ export class StateStore {
 
   async clearPlanChoice(sessionId: string): Promise<void> {
     const planPath = await this.getPlanMdPath(sessionId);
-    await fs.rm(planPath, { force: true });
     await this.updateState(sessionId, (state) => {
       state.selectedPlanChoiceId = null;
       state.planApproved = false;
-    });
+      if (state.artifactRefs) delete state.artifactRefs["plan.selected"];
+    }, this.createOfflineRequestId("clear_plan"));
+    await fs.rm(planPath, { force: true });
   }
 
   async updateState(
     sessionId: string,
-    mutate: (state: LoopState) => void
+    mutate: (state: LoopState) => void,
+    requestId = this.createOfflineRequestId("state_update"),
+    expectedRevision?: number
   ): Promise<LoopState> {
     const cfg = await this.getPathsConfig();
     const sessionDir = await this.getSessionDir(sessionId);
@@ -647,13 +655,21 @@ export class StateStore {
       resolveContainedPath(sessionDir, cfg.sessionFileNames.state, "Session state file"),
       resolveContainedPath(sessionDir, cfg.stateLockFileName, "Session state lock"),
     ]);
+    const observed = await this.readJsonAtomic<LoopState>(statePath);
+    const observedRevision = Number.isSafeInteger(observed?.aggregateRevision)
+      ? Number(observed?.aggregateRevision)
+      : 0;
     const updated = await this.withFileLock(lockPath, async () => {
-      const state = await this.readJsonAtomic<LoopState>(statePath);
-      if (!state) throw new Error(`Session state not found: ${sessionId}`);
-      mutate(state);
-      state.updatedAt = new Date().toISOString();
-      await this.writeJsonAtomic(statePath, state);
-      return state;
+      const aggregateStore = new ExtensionAggregateStore(
+        sessionDir,
+        cfg.sessionFileNames.state
+      );
+      return aggregateStore.updateOfflineUnlocked({
+        expectedRevision: expectedRevision ?? observedRevision,
+        requestId,
+        mutate,
+        assertNoLiveOwner: () => this.assertNoLiveOwner(sessionDir, cfg),
+      });
     });
     this.stateCache.set(sessionId, updated);
     this.notifyListeners();
@@ -674,7 +690,7 @@ export class StateStore {
         if (state.lastFailure?.kind === "permission") state.lastFailure = null;
         state.lastFailureDigest = null;
       }
-    });
+    }, this.createOfflineRequestId("access_mode"));
   }
 
   async approvePlan(sessionId: string): Promise<LoopState> {
@@ -683,7 +699,7 @@ export class StateStore {
         throw new Error(`Session ${sessionId} is not awaiting plan approval.`);
       }
       state.planApproved = true;
-    });
+    }, this.createOfflineRequestId("approve_plan"));
   }
 
   async enqueueControlRequest(
@@ -823,7 +839,7 @@ export class StateStore {
           };
         }
       }
-    });
+    }, this.createOfflineRequestId("pause_legacy"));
     await this.syncRegistrySessionStatus(sessionId, "BLOCKED");
     return true;
   }
@@ -851,7 +867,7 @@ export class StateStore {
         current.activeAttempt.failureKind = "cancelled";
         current.activeAttempt.failureMessage = reason;
       }
-    });
+    }, this.createOfflineRequestId("mark_stopped"));
     await this.mergeSessionMetaStatus(sessionId, {
       status: "STOPPED",
       goal: state.goal,
@@ -950,6 +966,17 @@ export class StateStore {
       return data;
     }
     const cfg = await this.getPathsConfig();
+    const legacyPath = await resolveContainedPath(
+      await this.getRootDir(),
+      cfg.registryFileName,
+      "Legacy session registry"
+    );
+    const legacy = await this.readJsonAtomic<SessionRegistry>(legacyPath);
+    if (legacy) {
+      await this.writeJsonAtomic(registryPath, legacy);
+      this.registryCache = legacy;
+      return legacy;
+    }
     const lockPath = await resolveContainedPath(
       path.dirname(registryPath),
       cfg.registryLockFileName,
@@ -1198,11 +1225,7 @@ export class StateStore {
       if (!entry.isDirectory()) continue;
       try {
         assertSafeSessionId(entry.name);
-        const state = await this.readJsonAtomic<LoopState>(await this.resolveSessionRuntimePath(
-          entry.name,
-          cfg.sessionFileNames.state,
-          "Session state file"
-        ));
+        const state = await this.readState(entry.name);
         if (!state) continue;
         discovered.push({
           sessionId: entry.name,
@@ -1243,24 +1266,22 @@ export class StateStore {
   }
 
   async readState(sessionId: string): Promise<LoopState | null> {
-    const cached = this.stateCache.get(sessionId);
     const cfg = await this.getPathsConfig();
-    const statePath = await this.resolveSessionRuntimePath(
-      sessionId,
-      cfg.sessionFileNames.state,
-      "Session state file"
+    const sessionDir = await this.getSessionDir(sessionId);
+    const lockPath = await resolveContainedPath(
+      sessionDir,
+      cfg.stateLockFileName,
+      "Session state lock"
     );
-    const data = await this.readJsonAtomic<LoopState>(statePath);
+    const data = await this.withFileLock(lockPath, () =>
+      new ExtensionAggregateStore(sessionDir, cfg.sessionFileNames.state).loadUnlocked(true)
+    );
     if (data) {
       this.stateCache.set(sessionId, data);
       return data;
     }
-    const exists = await fs.stat(statePath).then((stat) => stat.isFile()).catch(() => false);
-    if (!exists) {
-      this.stateCache.delete(sessionId);
-      return null;
-    }
-    return cached ?? null;
+    this.stateCache.delete(sessionId);
+    return null;
   }
 
   async readProgressNotes(sessionId: string): Promise<string> {
@@ -1315,13 +1336,12 @@ export class StateStore {
 
   async readBundle(sessionId: string): Promise<SessionBundle> {
     const registry = await this.readRegistry();
-    const [state, progressNotes, history, finalSummary] = await Promise.all([
+    const [state, progressNotes, finalSummary] = await Promise.all([
       this.readState(sessionId),
       this.readProgressNotes(sessionId),
-      this.readHistory(sessionId),
       this.readFinalSummary(sessionId),
     ]);
-    return { registry, state, progressNotes, history, finalSummary };
+    return { registry, state, progressNotes, finalSummary };
   }
 
   startPolling(intervalMs: number): void {
@@ -1353,6 +1373,30 @@ export class StateStore {
       } catch (err) {
         console.error("[StateStore] listener error:", err);
       }
+    }
+  }
+
+  private createOfflineRequestId(operation: string): string {
+    return `${operation}_${Date.now().toString(36)}_${randomBytes(6).toString("hex")}`;
+  }
+
+  private async assertNoLiveOwner(
+    sessionDir: string,
+    cfg: LoopPathsConfig
+  ): Promise<void> {
+    const [leasePath, ownerLockPath] = await Promise.all([
+      resolveContainedPath(sessionDir, cfg.leaseFileName, "Session lease file"),
+      resolveContainedPath(sessionDir, cfg.ownerLockFileName, "Session owner lock"),
+    ]);
+    const [lease, ownerLock] = await Promise.all([
+      this.readJsonAtomic<SessionLease>(leasePath),
+      this.readJsonAtomic<SessionOwnerLock>(ownerLockPath),
+    ]);
+    if (lease && Date.parse(lease.expiresAt) > Date.now()) {
+      throw new Error(`Session has an active owner lease for pid ${lease.ownerPid}.`);
+    }
+    if (ownerLock && processLiveness(ownerLock.ownerPid) !== "dead") {
+      throw new Error(`Session owner pid ${ownerLock.ownerPid} may still be alive.`);
     }
   }
 

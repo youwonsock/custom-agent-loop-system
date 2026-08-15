@@ -5,6 +5,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import * as fsp from "node:fs/promises";
 import { PipelineDefinition } from "./pipeline";
+import { AuthoritativeSessionRepository } from "./authoritative_session_repository";
 
 function minimalImplementationPipeline(): PipelineDefinition {
   return {
@@ -28,6 +29,52 @@ function minimalImplementationPipeline(): PipelineDefinition {
         id: "INTERRUPT", name: "Interrupt", role: "failure_brief", kind: "interrupt",
         instructions: "", onSuccess: "PAUSED", onFailure: "PAUSED",
         countsIteration: false, requiresPlanApproval: false, planOptionsCount: 0,
+      },
+    ],
+  };
+}
+
+function nonCountingCyclePipeline(): PipelineDefinition {
+  return {
+    version: 1,
+    name: "non-counting-cycle",
+    startStageId: "CHECK",
+    interruptStageId: "INTERRUPT",
+    reentryStageId: "CHECK",
+    iterationCompletionStageId: "INTERRUPT",
+    roles: [
+      { id: "tester", modelRole: "tester", description: "Test", instructions: "" },
+      {
+        id: "failure_brief",
+        modelRole: "interrupter",
+        description: "Brief",
+        instructions: "",
+      },
+    ],
+    stages: [
+      {
+        id: "CHECK",
+        name: "Check",
+        role: "tester",
+        kind: "test",
+        instructions: "",
+        onSuccess: "INTERRUPT",
+        onFailure: "CHECK",
+        countsIteration: false,
+        requiresPlanApproval: false,
+        planOptionsCount: 0,
+      },
+      {
+        id: "INTERRUPT",
+        name: "Interrupt",
+        role: "failure_brief",
+        kind: "interrupt",
+        instructions: "",
+        onSuccess: "SUCCESS",
+        onFailure: "PAUSED",
+        countsIteration: true,
+        requiresPlanApproval: false,
+        planOptionsCount: 0,
       },
     ],
   };
@@ -139,6 +186,205 @@ test("run rejects an equal mutable root before spawning the provider", async () 
     );
     await assert.rejects(fsp.access(path.join(root, "provider-spawned.txt")));
     await assert.rejects(fsp.access(path.join(root, ".goal")));
+  } finally {
+    await removeTestRoot(root);
+  }
+});
+
+test("provider spawn observes a durably committed stage and attempt reservation", async () => {
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), "agent-loop-durable-reservation-"));
+  try {
+    const target = await prepareProviderTarget(root);
+    const sessionId = "durable-reservation-session";
+    const sessionDir = path.join(root, ".goal", "sessions", sessionId);
+    const statePath = path.join(sessionDir, "loop_state.json");
+    await fsp.writeFile(
+      path.join(root, "run"),
+      [
+        "const fs = require('node:fs');",
+        `const state = JSON.parse(fs.readFileSync(${JSON.stringify(statePath)}, 'utf8'));`,
+        `fs.writeFileSync(${JSON.stringify(path.join(root, "observed-reservation.json"))}, JSON.stringify({`,
+        "  revision: state.aggregateRevision,",
+        "  activation: state.currentActivation,",
+        "  attempt: state.activeAttempt",
+        "}));",
+        "console.log(JSON.stringify({type:'text',id:'done',part:{id:'done-part',text:'[PHASE_DONE]'}}));",
+      ].join("\n"),
+      "utf8"
+    );
+    const pipelinePath = path.join(root, "pipeline.json");
+    await fsp.writeFile(
+      pipelinePath,
+      JSON.stringify(minimalImplementationPipeline(), null, 2),
+      "utf8"
+    );
+
+    await execFileAsync(
+      process.execPath,
+      [
+        path.join(__dirname, "loop_orchestrator.js"),
+        "run",
+        "--goal", "verify durable reservation",
+        "--target", target,
+        "--root", root,
+        "--session", sessionId,
+        "--binary", process.execPath,
+        "--profile", "opencode",
+        "--pipeline", pipelinePath,
+        "--max-cycles", "1",
+        "--max-workflow-steps", "1",
+        "--phase-timeout", "2000",
+        "--idle-timeout", "1000",
+        "--tool-timeout", "1000",
+        "--transport-timeout", "1000",
+        "--phase-recovery-budget", "10000",
+        "--max-agent-attempts", "1",
+        "--completion-recovery-attempts", "0",
+      ],
+      root
+    );
+
+    const observed = JSON.parse(
+      await fsp.readFile(path.join(root, "observed-reservation.json"), "utf8")
+    ) as {
+      revision: number;
+      activation: { activationId: string; attemptsReserved: number; status: string };
+      attempt: { activationId: string; status: string };
+    };
+    assert.ok(observed.revision > 1);
+    assert.equal(observed.activation.status, "running");
+    assert.equal(observed.activation.attemptsReserved, 1);
+    assert.equal(observed.attempt.activationId, observed.activation.activationId);
+    const finalState = JSON.parse(await fsp.readFile(statePath, "utf8")) as {
+      status: string;
+      workflowStepsConsumed: number;
+      cyclesStarted: number;
+      activationHistory: Array<{ status: string; attemptsReserved: number }>;
+      stageOutcomes: Array<{
+        schemaVersion: number;
+        stageId: string;
+        source: string;
+        compatibility: { legacyValidated: boolean; structuredSignalPresent: boolean };
+      }>;
+      domainEvents: Array<{ sequence: number; type: string }>;
+    };
+    assert.equal(finalState.status, "SUCCESS");
+    assert.equal(finalState.workflowStepsConsumed, 1);
+    assert.equal(finalState.cyclesStarted, 1);
+    assert.deepEqual(finalState.activationHistory.map((entry) => entry.status), ["completed"]);
+    assert.equal(finalState.stageOutcomes.length, 1);
+    assert.equal(finalState.stageOutcomes[0].schemaVersion, 1);
+    assert.equal(finalState.stageOutcomes[0].stageId, "BUILD");
+    assert.equal(finalState.stageOutcomes[0].source, "legacy_text");
+    assert.equal(finalState.stageOutcomes[0].compatibility.legacyValidated, true);
+    assert.equal(finalState.stageOutcomes[0].compatibility.structuredSignalPresent, false);
+    const eventTypes = finalState.domainEvents.map((event) => event.type);
+    assert.deepEqual(eventTypes.slice(0, 3), [
+      "workflow.started",
+      "stage.started",
+      "attempt.started",
+    ]);
+    assert.ok(eventTypes.filter((type) => type === "attempt.progressed").length >= 1);
+    assert.deepEqual(eventTypes.slice(-3), [
+      "attempt.completed",
+      "stage.completed",
+      "workflow.completed",
+    ]);
+    assert.deepEqual(
+      finalState.domainEvents.map((event) => event.sequence),
+      finalState.domainEvents.map((_event, index) => index + 1)
+    );
+
+    const statusResult = await execFileAsync(
+      process.execPath,
+      [
+        path.join(__dirname, "loop_orchestrator.js"),
+        "status",
+        "--session", sessionId,
+        "--root", root,
+        "--json",
+      ],
+      root
+    );
+    const operator = JSON.parse(statusResult.stdout) as {
+      status: string;
+      currentStage: string;
+      nextPermittedAction: string;
+      budgets: { cycles: { remaining: number }; workflowSteps: { remaining: number } };
+    };
+    assert.equal(operator.status, "SUCCESS");
+    assert.equal(operator.currentStage, "BUILD");
+    assert.equal(operator.nextPermittedAction, "none_complete");
+    assert.equal(operator.budgets.cycles.remaining, 0);
+    assert.equal(operator.budgets.workflowSteps.remaining, 0);
+  } finally {
+    await removeTestRoot(root);
+  }
+});
+
+test("workflow-step fuse stops a reachable non-counting cycle before another spawn", async () => {
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), "agent-loop-workflow-fuse-"));
+  try {
+    const target = await prepareProviderTarget(root);
+    await fsp.writeFile(
+      path.join(root, "run"),
+      [
+        "const fs = require('node:fs');",
+        `const countPath = ${JSON.stringify(path.join(root, "spawn-count.txt"))};`,
+        "let count = 0; try { count = Number(fs.readFileSync(countPath, 'utf8')); } catch {}",
+        "fs.writeFileSync(countPath, String(count + 1));",
+        "console.log(JSON.stringify({type:'text',id:'failed-check',part:{id:'failed-part',text:'VERDICT: FAIL\\n[PHASE_DONE]'}}));",
+      ].join("\n"),
+      "utf8"
+    );
+    const pipelinePath = path.join(root, "pipeline.json");
+    await fsp.writeFile(
+      pipelinePath,
+      JSON.stringify(nonCountingCyclePipeline(), null, 2),
+      "utf8"
+    );
+
+    await execFileAsync(
+      process.execPath,
+      [
+        path.join(__dirname, "loop_orchestrator.js"),
+        "run",
+        "--goal", "bound a non-counting cycle",
+        "--target", target,
+        "--root", root,
+        "--session", "workflow-fuse-session",
+        "--binary", process.execPath,
+        "--profile", "opencode",
+        "--pipeline", pipelinePath,
+        "--max-cycles", "10",
+        "--max-workflow-steps", "2",
+        "--phase-timeout", "2000",
+        "--idle-timeout", "1000",
+        "--tool-timeout", "1000",
+        "--transport-timeout", "1000",
+        "--phase-recovery-budget", "10000",
+        "--max-agent-attempts", "1",
+        "--completion-recovery-attempts", "0",
+      ],
+      root
+    );
+
+    assert.equal(await fsp.readFile(path.join(root, "spawn-count.txt"), "utf8"), "2");
+    const state = JSON.parse(
+      await fsp.readFile(
+        path.join(root, ".goal", "sessions", "workflow-fuse-session", "loop_state.json"),
+        "utf8"
+      )
+    ) as {
+      status: string;
+      statusReason: string;
+      workflowStepsConsumed: number;
+      cyclesStarted: number;
+    };
+    assert.equal(state.status, "PAUSED");
+    assert.match(state.statusReason, /BUDGET_EXHAUSTED\/workflow_steps/);
+    assert.equal(state.workflowStepsConsumed, 2);
+    assert.equal(state.cyclesStarted, 0);
   } finally {
     await removeTestRoot(root);
   }
@@ -526,9 +772,20 @@ test("default planning waits for the user with full center-editor Markdown artif
     assert.equal(await fsp.readFile(planPath, "utf8"), committedPlan);
 
     const ownedStatePath = path.join(sessionDir, "loop_state.json");
-    const ownedState = JSON.parse(await fsp.readFile(ownedStatePath, "utf8"));
+    const aggregateRepository = new AuthoritativeSessionRepository({
+      sessionDir,
+      stateFileName: "loop_state.json",
+      stateLockFileName: "state_write.lock",
+      ownerLockFileName: "session_owner.lock",
+      leaseFileName: "session_lease.json",
+    });
+    const ownedState = await aggregateRepository.load();
     ownedState.planApproved = true;
-    await fsp.writeFile(ownedStatePath, JSON.stringify(ownedState, null, 2), "utf8");
+    await aggregateRepository.commitOffline(
+      ownedState,
+      ownedState.aggregateRevision,
+      "integration_plan_approval"
+    );
     const ownerId = "live-owner-from-integration-test";
     const now = Date.now();
     await fsp.writeFile(

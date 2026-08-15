@@ -1,0 +1,23 @@
+{
+  "name": "custom-agent-loop-langgraph-evaluation",
+  "version": "1.0.0",
+  "private": true,
+  "type": "commonjs",
+  "description": "Non-production LangGraph evaluation isolated from the Agent Loop runtime package.",
+  "scripts": {
+    "build:core": "npm --prefix ../.. run build",
+    "build": "tsc -p tsconfig.json",
+    "test": "npm run build:core && npm run build && node --test --test-concurrency=1 dist/experiments/langgraph/langgraph_adapter.test.js",
+    "evaluate": "npm test && node dist/experiments/langgraph/evaluate.js"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "devDependencies": {
+    "@langchain/core": "1.1.48",
+    "@langchain/langgraph": "1.4.10",
+    "@types/node": "26.1.2",
+    "typescript": "7.0.2",
+    "zod": "4.4.3"
+  }
+}
