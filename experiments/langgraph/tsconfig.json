@@ -4,30 +4,10 @@
     "rootDir": "../..",
     "outDir": "./dist",
     "declaration": false,
-    "sourceMap": false
+    "sourceMap": false,
+    "types": ["node"]
   },
   "include": [
-    "./*.ts",
-    "../../agent_runtime.ts",
-    "../../binary_resolution.ts",
-    "../../domain_events.ts",
-    "../../execution_budget.ts",
-    "../../loop_state.ts",
-    "../../pipeline.ts",
-    "../../pipeline_compiler.ts",
-    "../../process_supervisor.ts",
-    "../../provider_capabilities.ts",
-    "../../provider_runtime.ts",
-    "../../requirement_ledger.ts",
-    "../../resilience.ts",
-    "../../session_contracts.ts",
-    "../../session_repository.ts",
-    "../../stage_executor_registry.ts",
-    "../../workflow_contracts.ts",
-    "../../workflow_engine.ts",
-    "../../vscode-extension/src/operatorProjection.ts",
-    "../../vscode-extension/src/types.ts",
-    "../../vscode-extension/src/pathSafety.ts",
-    "../../vscode-extension/src/generated_runtime_defaults.json"
+    "./*.ts"
   ]
 }

@@ -2,7 +2,9 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import path from "node:path";
 import {
+  CODEX_DEFAULT_REASONING_EFFORT,
   DEFAULT_PROVIDERS,
+  OPENCODE_READ_ONLY_AGENT,
   assertMcpCredentialsAreReferenced,
   buildProviderInvocation,
   claudeMcpDocument,
@@ -14,6 +16,12 @@ import {
   validateToolAccess,
 } from "./provider_runtime";
 import { extractAssistantText, findSessionId } from "./process_supervisor";
+import {
+  DEFAULT_VISUAL_RESEARCH_MODEL,
+  REFERENCE_DISCOVERY_MCP_TOOL_NAME,
+  VISUAL_RESEARCH_MCP_TOOL_NAME,
+  createVisualResearchMcpServer,
+} from "./visual_research_mcp";
 
 const localMcp = {
   id: "docs",
@@ -23,6 +31,7 @@ const localMcp = {
   command: "npx",
   args: ["-y", "docs-mcp"],
   environment: { API_KEY: "secret" },
+  tools: [{ name: "search", sideEffect: "unknown" as const }],
   allowedTools: ["search"],
 };
 
@@ -94,6 +103,21 @@ test("Codex invocation maps live web search, resume, sandbox, and MCP configurat
   assert.equal(invocation.args.some((arg) => arg.includes("secret")), false);
 });
 
+test("Codex invocation pins a safe reasoning effort instead of inheriting global config", () => {
+  const invocation = buildProviderInvocation(DEFAULT_PROVIDERS.codex, {
+    model: "gpt-5.3-codex-spark",
+    targetProjectPath: providerTargetPath,
+    prompt: "implement",
+    fullAccess: false,
+    webSearch: false,
+    mcpServers: [],
+  });
+  assert.ok(invocation.args.some(
+    (arg) => arg === `model_reasoning_effort=${JSON.stringify(CODEX_DEFAULT_REASONING_EFFORT)}`
+  ));
+  assert.equal(invocation.args.some((arg) => arg.includes("ultra") || arg.includes("max")), false);
+});
+
 test("MCP secret and environment references resolve only at invocation time", () => {
   const resolved = resolveMcpServerSecrets([
     {
@@ -136,19 +160,28 @@ test("Codex remote MCP headers use environment references and never expose value
   assert.equal(Object.values(invocation.env).includes("Bearer top-secret"), true);
 });
 
-test("Codex read-only roles fail closed while inherited MCP cannot be isolated", () => {
-  assert.throws(
-    () => buildProviderInvocation(DEFAULT_PROVIDERS.codex, {
-      model: "gpt-5.6-sol",
-      targetProjectPath: providerTargetPath,
-      prompt: "inspect only",
-      fullAccess: true,
-      readOnly: true,
-      webSearch: false,
-      mcpServers: [localMcp],
-    }),
-    /read-only roles are unsupported.*isolated inherited tool configuration/i
+test("Codex read-only roles isolate inherited config and withhold MCP tools", () => {
+  const invocation = buildProviderInvocation(DEFAULT_PROVIDERS.codex, {
+    model: "gpt-5.6-sol",
+    targetProjectPath: providerTargetPath,
+    prompt: "inspect only",
+    fullAccess: true,
+    readOnly: true,
+    webSearch: false,
+    mcpServers: [localMcp],
+  });
+  assert.ok(invocation.args.includes("--ignore-user-config"));
+  assert.ok(invocation.args.includes("--ignore-rules"));
+  assert.equal(
+    invocation.args[invocation.args.indexOf("--ask-for-approval") + 1],
+    "never"
   );
+  assert.equal(invocation.args[invocation.args.indexOf("--sandbox") + 1], "read-only");
+  assert.ok(invocation.args.some((arg) =>
+    arg.startsWith("projects.") && arg.endsWith('trust_level="untrusted"')
+  ));
+  assert.equal(invocation.args.some((arg) => arg.includes("mcp_servers.docs")), false);
+  assert.equal(Object.values(invocation.env).includes("secret"), false);
 });
 
 test("provider capability profiles are adapter-owned and cannot be escalated by configuration", () => {
@@ -162,11 +195,14 @@ test("provider capability profiles are adapter-owned and cannot be escalated by 
       },
     },
   });
-  assert.equal(providers.codex.capabilities.readOnlyFilesystem, "unsupported");
+  assert.equal(providers.codex.capabilities.readOnlyFilesystem, "enforced");
   assert.equal(providers.codex.capabilities.mcpIsolation, "inherited");
-  assert.throws(() => buildProviderInvocation({
+  const readOnly = buildProviderInvocation({
     ...providers.codex,
-    capabilities: DEFAULT_PROVIDERS.claude.capabilities,
+    capabilities: {
+      ...providers.codex.capabilities,
+      readOnlyFilesystem: "unsupported",
+    },
   }, {
     model: "gpt",
     targetProjectPath: providerTargetPath,
@@ -175,7 +211,9 @@ test("provider capability profiles are adapter-owned and cannot be escalated by 
     readOnly: true,
     webSearch: false,
     mcpServers: [],
-  }), /read-only roles are unsupported/i);
+  });
+  assert.ok(readOnly.args.includes("--ignore-user-config"));
+  assert.equal(readOnly.args[readOnly.args.indexOf("--sandbox") + 1], "read-only");
 });
 
 test("OpenCode-family access policies map approved roots and never bypass read-only roles", () => {
@@ -190,6 +228,8 @@ test("OpenCode-family access policies map approved roots and never bypass read-o
     mcpServers: [localMcp],
   });
   assert.equal(readOnly.args.includes("--dangerously-skip-permissions"), false);
+  assert.ok(readOnly.args.includes("--pure"));
+  assert.equal(readOnly.args[readOnly.args.indexOf("--agent") + 1], OPENCODE_READ_ONLY_AGENT);
   const openConfig = JSON.parse(readOnly.env.OPENCODE_CONFIG_CONTENT) as any;
   assert.equal(openConfig.permission["*"], "deny");
   assert.equal(openConfig.permission.read, "allow");
@@ -201,6 +241,16 @@ test("OpenCode-family access policies map approved roots and never bypass read-o
   const outsidePermission = `${providerOutsidePath.replace(/\\/g, "/")}/**`;
   assert.equal(openConfig.permission["external_directory"][outsidePermission], "allow");
   assert.equal(openConfig.mcp, undefined);
+  assert.equal(openConfig.agent[OPENCODE_READ_ONLY_AGENT].tools.bash, false);
+  assert.equal(openConfig.agent[OPENCODE_READ_ONLY_AGENT].tools.edit, false);
+  assert.equal(openConfig.agent[OPENCODE_READ_ONLY_AGENT].tools.task, false);
+  assert.equal(openConfig.agent[OPENCODE_READ_ONLY_AGENT].tools.apply_patch, false);
+  assert.equal(openConfig.agent[OPENCODE_READ_ONLY_AGENT].tools.read, true);
+  assert.equal(openConfig.agent[OPENCODE_READ_ONLY_AGENT].tools.websearch, false);
+  assert.match(openConfig.agent[OPENCODE_READ_ONLY_AGENT].prompt, /authoritative role, goal, and output contract/i);
+  assert.match(openConfig.agent[OPENCODE_READ_ONLY_AGENT].prompt, /CurrentWork templates/i);
+  assert.equal(openConfig.agent[OPENCODE_READ_ONLY_AGENT].permission["*"], undefined);
+  assert.equal(openConfig.agent[OPENCODE_READ_ONLY_AGENT].permission.apply_patch, "deny");
 
   const kiloReadOnly = buildProviderInvocation(DEFAULT_PROVIDERS.kilo, {
     model: "anthropic/model",
@@ -211,11 +261,23 @@ test("OpenCode-family access policies map approved roots and never bypass read-o
     webSearch: false,
     mcpServers: [localMcp],
   });
+  assert.equal(
+    kiloReadOnly.args[kiloReadOnly.args.indexOf("--agent") + 1],
+    OPENCODE_READ_ONLY_AGENT
+  );
   const kiloReadOnlyConfig = JSON.parse(kiloReadOnly.env.KILO_CONFIG_CONTENT) as any;
   assert.equal(kiloReadOnlyConfig.permission["*"], "deny");
   assert.equal(kiloReadOnlyConfig.permission.bash, "deny");
   assert.equal(kiloReadOnlyConfig.permission.edit, "deny");
   assert.equal(kiloReadOnlyConfig.mcp, undefined);
+  assert.equal(kiloReadOnlyConfig.agent[OPENCODE_READ_ONLY_AGENT].tools.bash, false);
+  assert.equal(kiloReadOnlyConfig.agent[OPENCODE_READ_ONLY_AGENT].tools.write, false);
+  assert.equal(kiloReadOnlyConfig.agent[OPENCODE_READ_ONLY_AGENT].tools.read, true);
+  assert.match(kiloReadOnlyConfig.agent[OPENCODE_READ_ONLY_AGENT].prompt, /requested structured response/i);
+  assert.match(kiloReadOnlyConfig.agent[OPENCODE_READ_ONLY_AGENT].prompt, /never inspect parent or sibling/i);
+  assert.equal(kiloReadOnlyConfig.agent[OPENCODE_READ_ONLY_AGENT].permission["*"], undefined);
+  assert.equal(kiloReadOnlyConfig.agent[OPENCODE_READ_ONLY_AGENT].permission.external_directory["*"], "deny");
+  assert.equal(kiloReadOnlyConfig.agent[OPENCODE_READ_ONLY_AGENT].permission.apply_patch, "deny");
 
   const askMode = buildProviderInvocation(DEFAULT_PROVIDERS.kilo, {
     model: "anthropic/model",
@@ -235,6 +297,102 @@ test("OpenCode-family access policies map approved roots and never bypass read-o
     mcpServers: [],
   });
   assert.equal(fullAccess.args.includes("--auto"), true);
+});
+
+test("OpenCode read-only roles admit only runtime-owned classified MCP tools", () => {
+  const runtimeServer = createVisualResearchMcpServer({
+    nodeBinary: process.execPath,
+    scriptPath: path.join(process.cwd(), "dist", "visual_research_mcp.js"),
+    providerBinary: "C:\\tools\\opencode.exe",
+    tempRoot: path.join(providerFixtureRoot, "session", "visual-research"),
+  });
+  const selected = selectMcpServersForInvocation(
+    DEFAULT_PROVIDERS.opencode,
+    [localMcp, runtimeServer],
+    true
+  );
+  assert.equal(selected.length, 1);
+  assert.equal(selected[0].runtimeOwned, true);
+  assert.deepEqual(selected[0].tools, [
+    { name: "inspect_remote_images", sideEffect: "read_only" },
+    { name: "discover_reference_candidates", sideEffect: "read_only" },
+  ]);
+
+  const agentName = "agent-loop-readonly-deadbeef";
+  const invocation = buildProviderInvocation(DEFAULT_PROVIDERS.opencode, {
+    model: "opencode/deepseek-v4-flash-free",
+    targetProjectPath: providerTargetPath,
+    prompt: "inspect exact product screenshots",
+    fullAccess: false,
+    readOnly: true,
+    readOnlyAgentName: agentName,
+    webSearch: true,
+    webSearchMode: "live",
+    mcpServers: [localMcp, runtimeServer],
+  });
+  assert.equal(invocation.args[invocation.args.indexOf("--agent") + 1], agentName);
+  const config = JSON.parse(invocation.env.OPENCODE_CONFIG_CONTENT) as any;
+  assert.equal(config.mcp.servers, undefined);
+  assert.equal(config.mcp.agent_loop_visual.type, "local");
+  assert.equal(config.mcp.agent_loop_visual.enabled, true);
+  assert.equal(config.mcp.docs, undefined);
+  assert.equal(config.permission[VISUAL_RESEARCH_MCP_TOOL_NAME], "allow");
+  assert.equal(config.permission[REFERENCE_DISCOVERY_MCP_TOOL_NAME], "allow");
+  assert.equal(config.agent[agentName].tools["*"], false);
+  assert.equal(config.agent[agentName].tools[VISUAL_RESEARCH_MCP_TOOL_NAME], true);
+  assert.equal(config.agent[agentName].tools[REFERENCE_DISCOVERY_MCP_TOOL_NAME], true);
+  assert.equal(config.agent[agentName].permission[VISUAL_RESEARCH_MCP_TOOL_NAME], "allow");
+  assert.equal(config.agent[agentName].permission[REFERENCE_DISCOVERY_MCP_TOOL_NAME], "allow");
+  assert.match(JSON.stringify(config.mcp), new RegExp(DEFAULT_VISUAL_RESEARCH_MODEL.replace(/[./-]/g, "\\$&")));
+
+  const persisted = validateToolAccess({
+    webSearch: { enabled: false, mode: "cached" },
+    mcpServers: [{ ...runtimeServer, runtimeOwned: true }],
+  }).mcpServers[0];
+  assert.equal(persisted.runtimeOwned, undefined);
+  assert.deepEqual(
+    selectMcpServersForInvocation(DEFAULT_PROVIDERS.opencode, [persisted], true),
+    []
+  );
+});
+
+test("Kilo transports multiline prompts as one PTY-safe positional argument", () => {
+  const prompt = "PLANNER role\r\nORIGINAL USER GOAL: build the game\nReturn exactly PLAN_READY";
+  const invocation = buildProviderInvocation(DEFAULT_PROVIDERS.kilo, {
+    model: "kilo/model",
+    targetProjectPath: providerTargetPath,
+    prompt,
+    fullAccess: false,
+    readOnly: true,
+    webSearch: false,
+    mcpServers: [],
+  });
+  const transported = invocation.args[invocation.args.length - 1];
+  assert.equal(transported, "PLANNER role\u2028ORIGINAL USER GOAL: build the game\u2028Return exactly PLAN_READY");
+  assert.doesNotMatch(transported ?? "", /[\r\n]/);
+  assert.match(transported ?? "", /ORIGINAL USER GOAL/);
+  assert.match(transported ?? "", /PLAN_READY/);
+});
+
+test("Kilo can attach a runtime-owned prompt file to avoid Windows command-line limits", () => {
+  const prompt = "A".repeat(20_000) + "\n[PHASE_DONE]";
+  const promptFilePath = path.join(providerFixtureRoot, "runtime", "kilo_prompt_attempt.md");
+  const invocation = buildProviderInvocation(DEFAULT_PROVIDERS.kilo, {
+    model: "kilo/model",
+    targetProjectPath: providerTargetPath,
+    prompt,
+    promptFilePath,
+    fullAccess: false,
+    readOnly: true,
+    webSearch: false,
+    mcpServers: [],
+  });
+  const fileIndex = invocation.args.indexOf("--file");
+  assert.notEqual(fileIndex, -1);
+  assert.equal(invocation.args[fileIndex + 1], path.resolve(promptFilePath));
+  assert.match(invocation.args[fileIndex - 1], /complete authoritative instruction set/i);
+  assert.equal(fileIndex + 1, invocation.args.length - 1);
+  assert.equal(invocation.args.some((arg) => arg.includes("A".repeat(1_000))), false);
 });
 
 test("Claude invocation maps stream JSON, web tools, resume, and generated MCP document", () => {
@@ -318,13 +476,11 @@ test("Claude read-only MCP exposes only tools explicitly classified read_only", 
   assert.equal(invocation.args.includes("--mcp-config"), true);
 });
 
-test("legacy MCP allowlists migrate to unknown and cannot enter read-only roles", () => {
-  const migrated = validateToolAccess({
+test("removed name-only MCP allowlists are rejected instead of migrated", () => {
+  assert.throws(() => validateToolAccess({
     webSearch: { enabled: false, mode: "cached" },
-    mcpServers: [localMcp],
-  }).mcpServers;
-  assert.deepEqual(migrated[0].tools, [{ name: "search", sideEffect: "unknown" }]);
-  assert.deepEqual(selectMcpServersForInvocation(DEFAULT_PROVIDERS.claude, migrated, true), []);
+    mcpServers: [{ ...localMcp, tools: undefined }],
+  }), /removed name-only allowedTools contract/u);
 });
 
 test("provider preflight rejects unsupported explicit web modes", () => {
@@ -349,7 +505,10 @@ test("OpenCode and Kilo receive runtime MCP and web search configuration without
     mcpServers: [localMcp],
   });
   assert.equal(open.env.OPENCODE_ENABLE_EXA, "1");
-  assert.match(open.env.OPENCODE_CONFIG_CONTENT, /"docs"/);
+  const openConfig = JSON.parse(open.env.OPENCODE_CONFIG_CONTENT) as any;
+  assert.equal(openConfig.mcp.servers, undefined);
+  assert.equal(openConfig.mcp.docs.type, "local");
+  assert.equal(openConfig.mcp.docs.enabled, true);
 
   const kilo = buildProviderInvocation(DEFAULT_PROVIDERS.kilo, {
     model: "anthropic/model",
@@ -359,8 +518,10 @@ test("OpenCode and Kilo receive runtime MCP and web search configuration without
     webSearch: true,
     mcpServers: [localMcp],
   });
-  assert.match(kilo.env.KILO_CONFIG_CONTENT, /"websearch":"allow"/);
-  assert.match(kilo.env.KILO_CONFIG_CONTENT, /"docs"/);
+  const kiloConfig = JSON.parse(kilo.env.KILO_CONFIG_CONTENT) as any;
+  assert.equal(kiloConfig.permission.websearch, "allow");
+  assert.equal(kiloConfig.mcp.docs.type, "local");
+  assert.equal(kiloConfig.mcp.docs.enabled, true);
 });
 
 test("tool access validation rejects duplicate or malformed MCP entries", () => {

@@ -69,12 +69,12 @@ test("release bundle verification binds artifacts, sidecars, commit, count, and 
   try {
     const npmArtifact = writeArtifactBundle(
       temporaryRoot,
-      "custom-agent-loop-system-3.4.1.tgz",
+      "custom-agent-loop-system-4.0.0.tgz",
       commit
     );
     writeArtifactBundle(
       temporaryRoot,
-      "agent-loop-vscode-linux-x64-3.4.1.vsix",
+      "agent-loop-vscode-linux-x64-4.0.0.vsix",
       commit,
       "linux-x64"
     );
@@ -107,7 +107,7 @@ test("provider promotion gate requires all 24 passing protected reports", () => 
     for (const provider of providers) {
       for (const platform of platforms) {
         for (const mode of modes) {
-          const expectedFailClosed = provider === "codex" && mode === "read-only";
+          const expectedFailClosed = false;
           fs.writeFileSync(
             path.join(temporaryRoot, `${provider}-${platform}-${mode}.json`),
             `${JSON.stringify({
@@ -173,8 +173,8 @@ test("npm manifest allowlist excludes tests, experiments, and source maps", () =
     files: string[];
     dependencies: Record<string, string>;
   };
-  assert.ok(manifest.files.includes("!dist/*.test.js"));
-  assert.ok(manifest.files.includes("dist/*.js"));
+  assert.ok(manifest.files.includes("!dist/**/*.test.js"));
+  assert.ok(manifest.files.includes("dist/**/*.js"));
   assert.equal(manifest.dependencies["@langchain/langgraph"], undefined);
   assert.equal(manifest.files.some((entry) => entry.includes("experiments")), false);
   assert.equal(manifest.files.some((entry) => entry.endsWith(".js.map")), false);

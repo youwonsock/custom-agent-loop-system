@@ -8,7 +8,6 @@ export type LoopStatus =
   | "RUNNING"
   | "PAUSED"
   | "WAITING_USER"
-  | "RECOVERING"
   | "STOPPED"
   | "BLOCKED"
   | "SUCCESS"
@@ -106,14 +105,6 @@ export interface ToolAccessConfig {
 }
 
 export type PipelineStageExecutor = "planning" | "implementation" | "test" | "review" | "approval" | "interrupt";
-export type PipelineCompletionContract = "phase_done" | "plan_options" | "verdict" | "approval";
-export interface PipelineStageType {
-  id: string;
-  label: string;
-  executor: PipelineStageExecutor;
-  completionContract: PipelineCompletionContract;
-  description: string;
-}
 export interface PipelineRole {
   id: string;
   modelRole: "planner" | "implementer" | "tester" | "qa_lead" | "master" | "interrupter";
@@ -142,7 +133,6 @@ export interface PipelineDefinition {
   interruptStageId: string;
   reentryStageId: string;
   iterationCompletionStageId: string;
-  stageTypes?: PipelineStageType[];
   roles: PipelineRole[];
   stages: PipelineStage[];
 }
@@ -157,7 +147,6 @@ export interface AgentLoopDefinition {
   interruptStageId: string;
   reentryStageId: string;
   iterationCompletionStageId: string;
-  stageTypes?: PipelineStageType[];
   stages: PipelineStage[];
 }
 
@@ -186,7 +175,6 @@ export interface AgentAttemptState {
   attemptNumber: number;
   maxAttempts: number;
   reconnectUsed: boolean;
-  cycleStartedAt: string;
   startedAt: string;
   lastOutputAt: string | null;
   lastProgressAt: string | null;
@@ -198,8 +186,6 @@ export interface AgentAttemptState {
   failureMessage: string | null;
   outputLogPath: string | null;
   activity: "initial_transport" | "model_generation" | "tool_execution";
-  mode: "standard" | "completion_recovery";
-  completionRecoveryNumber: number;
 }
 
 export interface AttemptFailure {
@@ -242,25 +228,12 @@ export interface ResilienceSettings {
   transportTimeoutMs: number;
   toolTimeoutMs: number;
   maxAgentAttempts: number;
-  maxCompletionRecoveryAttempts: number;
-  maxAutomaticRecoveryCycles: number;
-  automaticRecoveryBackoffMs: number[];
   retryBackoffMs: number[];
-  phaseRecoveryBudgetMs: number;
   terminationGraceMs: number;
   killTimeoutMs: number;
   heartbeatIntervalMs: number;
   leaseTtlMs: number;
   maxInMemoryOutputBytes: number;
-}
-
-export interface AutomaticRecoveryState {
-  sourcePhase: Phase;
-  failureKind: FailureKind;
-  cycle: number;
-  maxCycles: number;
-  resumeAt: string;
-  reason: string;
 }
 
 export type RequirementEvidenceStatus = "SATISFIED" | "PARTIAL" | "FAILED" | "BLOCKED";
@@ -302,39 +275,6 @@ export interface ArtifactReference {
   bytes: number;
 }
 
-export type StageDecision = "pass" | "fail" | "approved" | "rejected";
-export type StageExecutionStatus =
-  | "succeeded" | "failed" | "waiting_user" | "paused" | "blocked" | "stopped";
-
-export interface StageOutcome {
-  schemaVersion: 1;
-  outcomeId: string;
-  stageId: string;
-  activationId: string | null;
-  attemptId: string | null;
-  role: string;
-  executor: PipelineStageExecutor;
-  status: StageExecutionStatus;
-  decision: StageDecision | null;
-  requirementEvidence: RequirementLedger["evidence"];
-  artifacts: Array<ArtifactReference & { key: string }>;
-  failure: {
-    kind: string;
-    message: string;
-    retryable: boolean;
-    exitCode: number | null;
-  } | null;
-  outputSummary: string;
-  source: "structured" | "legacy_text" | "system";
-  compatibility: {
-    legacyContract: PipelineCompletionContract;
-    legacyValidated: boolean;
-    structuredSignalPresent: boolean;
-    decisionsEquivalent: boolean;
-  };
-  recordedAt: string;
-}
-
 export type DomainEventType =
   | "workflow.started" | "workflow.resumed" | "workflow.paused"
   | "workflow.completed" | "workflow.failed"
@@ -359,13 +299,10 @@ export interface RemainingExecutionBudgets {
   cycles: { remaining: number; consumed: number; limit: number };
   workflowSteps: { remaining: number; consumed: number; limit: number };
   stageAttempts: { remaining: number | null; consumed: number | null; limit: number | null };
-  completionRecoveryAttempts: { remaining: number; consumed: number; limit: number };
-  automaticRecoveryCycles: { remaining: number; consumed: number; limit: number };
-  phaseRecoveryMs: { remaining: number | null; limit: number };
 }
 
 export type NextPermittedAction =
-  | "wait_for_attempt" | "execute_next_stage" | "wait_for_recovery"
+  | "wait_for_attempt" | "execute_next_stage"
   | "approve_filesystem_access" | "approve_plan" | "reconcile_unknown_mutation"
   | "resume_session" | "inspect_failure" | "none_complete";
 
@@ -403,29 +340,8 @@ export interface StageActivationReservation {
   completedAt: string | null;
 }
 
-export interface PipelineCompilation {
-  compilerVersion: 1;
-  pipelineHash: string;
-  compiledAt: string;
-  reachableStageIds: string[];
-  approvalGateStageIds: string[];
-  terminalTargets: string[];
-  cyclicComponents: Array<{
-    stageIds: string[];
-    consumesCycle: boolean;
-    consumesWorkflowStep: true;
-  }>;
-}
-
 export interface LoopState {
-  stateVersion: number;
-  /** Aggregate metadata is optional only while reading pre-v3.4.1 sessions. */
-  aggregateFormatVersion?: 1;
-  aggregateRevision?: number;
-  fencingEpoch?: number;
-  aggregateChecksum?: string;
-  processedRequestIds?: string[];
-  artifactRefs?: Record<string, ArtifactReference>;
+  stateVersion: 4;
   sessionId: string;
   status: LoopStatus;
   phase: Phase;
@@ -462,7 +378,6 @@ export interface LoopState {
   masterApproved: boolean;
   createdAt: string;
   updatedAt: string;
-  maxIterations: number;
   phaseTimeoutMs: number;
   idleTimeoutMs: number;
   cliBinary: string;
@@ -473,7 +388,7 @@ export interface LoopState {
   planApproved: boolean;
   planPath: string | null;
   planOverviewPath: string | null;
-  selectedPlanChoiceId: number | null;
+  selectedPlanChoiceId: string | null;
   interruptMessage?: string | null;
   interruptBriefing?: string | null;
   lastFailureDigest?: string | null;
@@ -484,10 +399,8 @@ export interface LoopState {
   recoveryCount: number;
   totalAgentAttempts: number;
   statusReason: string | null;
-  automaticRecovery: AutomaticRecoveryState | null;
   resilience: ResilienceSettings;
   pipeline: PipelineDefinition;
-  pipelineCompilation?: PipelineCompilation;
   pipelineConfigPath: string | null;
   stageResults: Record<string, {
     stageId: string;
@@ -499,7 +412,6 @@ export interface LoopState {
     verdict: "PASS" | "FAIL" | "APPROVED" | "REJECTED" | null;
     attemptId: string | null;
   }>;
-  stageOutcomes?: StageOutcome[];
   domainEventSequence?: number;
   domainEvents?: DomainEvent[];
   requirements: RequirementLedger;
@@ -507,7 +419,7 @@ export interface LoopState {
 }
 
 export interface PlanChoice {
-  id: number;
+  id: string;
   title: string;
   body: string;
   markdownPath?: string;
@@ -581,7 +493,7 @@ export type WebviewMessage =
   | { command: "saveSystemSettings"; settings: SystemSettings }
   | { command: "openSessionFolder"; sessionId: string }
   | { command: "interruptSession"; sessionId: string; message: string }
-  | { command: "selectPlanChoice"; sessionId: string; choiceId: number }
+  | { command: "selectPlanChoice"; sessionId: string; choiceId: string }
   | { command: "revisePlan"; sessionId: string; message: string }
   | { command: "approvePlan"; sessionId: string }
   | { command: "requestPlanReviewState"; sessionId: string }
@@ -607,7 +519,7 @@ export interface PlanReviewStatePayload {
   interruptBriefing: string | null;
   planRevisionPending: boolean;
   interruptStageId: string;
-  selectedPlanChoiceId: number | null;
+  selectedPlanChoiceId: string | null;
   sessions: PlanReviewSessionInfo[];
 }
 
@@ -637,17 +549,13 @@ export interface ExtensionConfig {
   rootDir: string;
   nodeBinary: string;
   orchestratorScript: string;
-  maxIterations: number;
+  maxCycles: number;
   phaseTimeoutMs: number;
   idleTimeoutMs: number;
   toolTimeoutMs: number;
   pollIntervalMs: number;
   transportTimeoutMs: number;
-  phaseRecoveryBudgetMs: number;
   maxAgentAttempts: number;
-  maxCompletionRecoveryAttempts: number;
-  maxAutomaticRecoveryCycles: number;
-  automaticRecoveryBackoffMs: number[];
   retryBackoffMs: number[];
   terminationGraceMs: number;
   killTimeoutMs: number;
@@ -716,7 +624,7 @@ function defaultLoopPaths(): LoopPathsConfig {
     registryLockFileName: "registry.lock",
     attemptLogsDirName: "attempt_logs",
     sessionFileNames: {
-      state: "loop_state.json",
+      state: "run_projection.json",
       progressNotes: "progress_notes.txt",
       finalSummary: "final_summary.json",
       plan: "plan.md",
@@ -819,20 +727,13 @@ export function readExtensionConfig(): ExtensionConfig {
     rootDir: normalizePathSetting(cfg.get<string>("rootDir", "")),
     nodeBinary: normalizePathSetting(cfg.get<string>("nodeBinary", "node")) || "node",
     orchestratorScript: normalizePathSetting(cfg.get<string>("orchestratorScript", "")),
-    maxIterations: cfg.get<number>("maxIterations", runtimeDefaults.maxIterations),
+    maxCycles: cfg.get<number>("maxCycles", runtimeDefaults.maxCycles),
     phaseTimeoutMs: cfg.get<number>("phaseTimeoutMs", runtimeDefaults.phaseTimeoutMs),
     idleTimeoutMs: cfg.get<number>("idleTimeoutMs", runtimeDefaults.idleTimeoutMs),
     toolTimeoutMs: cfg.get<number>("toolTimeoutMs", runtimeDefaults.toolTimeoutMs),
     pollIntervalMs: cfg.get<number>("pollIntervalMs", runtimeDefaults.pollIntervalMs),
     transportTimeoutMs: cfg.get<number>("transportTimeoutMs", runtimeDefaults.transportTimeoutMs),
-    phaseRecoveryBudgetMs: cfg.get<number>("phaseRecoveryBudgetMs", runtimeDefaults.phaseRecoveryBudgetMs),
     maxAgentAttempts: cfg.get<number>("maxAgentAttempts", runtimeDefaults.maxAgentAttempts),
-    maxCompletionRecoveryAttempts: cfg.get<number>("maxCompletionRecoveryAttempts", runtimeDefaults.maxCompletionRecoveryAttempts),
-    maxAutomaticRecoveryCycles: cfg.get<number>("maxAutomaticRecoveryCycles", runtimeDefaults.maxAutomaticRecoveryCycles),
-    automaticRecoveryBackoffMs: cfg.get<number[]>(
-      "automaticRecoveryBackoffMs",
-      [...runtimeDefaults.automaticRecoveryBackoffMs]
-    ),
     retryBackoffMs: cfg.get<number[]>("retryBackoffMs", [...runtimeDefaults.retryBackoffMs]),
     terminationGraceMs: cfg.get<number>("terminationGraceMs", runtimeDefaults.terminationGraceMs),
     killTimeoutMs: cfg.get<number>("killTimeoutMs", runtimeDefaults.killTimeoutMs),
@@ -846,13 +747,12 @@ export function readExtensionConfig(): ExtensionConfig {
 
 export function validateExtensionConfig(config: ExtensionConfig): void {
   const positive = [
-    config.maxIterations,
+    config.maxCycles,
     config.phaseTimeoutMs,
     config.idleTimeoutMs,
     config.toolTimeoutMs,
     config.pollIntervalMs,
     config.transportTimeoutMs,
-    config.phaseRecoveryBudgetMs,
     config.maxAgentAttempts,
     config.terminationGraceMs,
     config.killTimeoutMs,
@@ -862,31 +762,6 @@ export function validateExtensionConfig(config: ExtensionConfig): void {
   ];
   if (positive.some((value) => !Number.isSafeInteger(value) || value <= 0)) {
     throw new Error("All Agent Loop numeric settings must be positive integers.");
-  }
-  if (
-    !Number.isSafeInteger(config.maxCompletionRecoveryAttempts) ||
-    config.maxCompletionRecoveryAttempts < 0 ||
-    config.maxCompletionRecoveryAttempts > 3
-  ) {
-    throw new Error("maxCompletionRecoveryAttempts must be between 0 and 3.");
-  }
-  if (
-    !Number.isSafeInteger(config.maxAutomaticRecoveryCycles) ||
-    config.maxAutomaticRecoveryCycles < 0 ||
-    config.maxAutomaticRecoveryCycles > 10
-  ) {
-    throw new Error("maxAutomaticRecoveryCycles must be between 0 and 10.");
-  }
-  if (
-    config.maxAutomaticRecoveryCycles > 0 &&
-    (config.automaticRecoveryBackoffMs.length === 0 ||
-      config.automaticRecoveryBackoffMs.some(
-        (value) => !Number.isSafeInteger(value) || value <= 0
-      ))
-  ) {
-    throw new Error(
-      "automaticRecoveryBackoffMs must contain positive delays when automatic recovery is enabled."
-    );
   }
   if (
     config.transportTimeoutMs > config.phaseTimeoutMs ||
@@ -905,15 +780,5 @@ export function validateExtensionConfig(config: ExtensionConfig): void {
     config.retryBackoffMs.some((value) => !Number.isSafeInteger(value) || value <= 0)
   ) {
     throw new Error("retryBackoffMs must contain positive delays for every retry.");
-  }
-  const minimumBudget =
-    config.phaseTimeoutMs * config.maxAgentAttempts +
-    Math.ceil(
-      config.retryBackoffMs
-        .slice(0, Math.max(0, config.maxAgentAttempts - 1))
-        .reduce((sum, value) => sum + value, 0) * 1.2
-    );
-  if (config.phaseRecoveryBudgetMs < minimumBudget) {
-    throw new Error(`phaseRecoveryBudgetMs must be at least ${minimumBudget}ms.`);
   }
 }

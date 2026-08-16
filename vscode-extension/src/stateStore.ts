@@ -12,22 +12,15 @@ import {
   LoopHistoryEntry,
   FinalSummary,
   SessionMeta,
-  AgentRole,
   loadLoopPathsConfig,
   LoopPathsConfig,
-  ControlRequest,
-  ControlAck,
   PlanChoice,
   SystemSettings,
   ProviderConfig,
   ToolAccessConfig,
   PipelineDefinition,
-  PipelineCompletionContract,
   PipelineRole,
   PipelineStageExecutor,
-  PipelineStageType,
-  AgentRolesDefinition,
-  AgentLoopDefinition,
 } from "./types";
 import {
   LeaseDisposition,
@@ -37,20 +30,16 @@ import {
   evaluateOwnership,
   processLiveness,
 } from "./resilience";
-import generatedAgentRoles from "./generated_agent_roles.json";
-import generatedAgentLoop from "./generated_agent_loop.json";
+import generatedAgents from "./generated_agents.json";
+import generatedTasks from "./generated_tasks.json";
+import generatedWorkflow from "./generated_workflow.json";
 import { resolveConfiguredDataRoot, resolveContainedPath } from "./pathSafety";
 import {
   assertSecureRemoteMcpTransport,
-  legacyMcpSecretStorageKey,
   namespacedMcpSecretStorageKey,
   protectMcpCredentialValue,
   SECRET_REFERENCE,
 } from "./mcpSecurityPolicy";
-import {
-  ExtensionAggregateStore,
-  ExtensionImmutableArtifactStore,
-} from "./aggregateStore";
 
 let globalContext: vscode.ExtensionContext | undefined;
 export const CORE_SECRET_VALUES_ENV = "AGENT_LOOP_SECRET_VALUES";
@@ -58,82 +47,79 @@ export const CORE_SECRET_VALUES_ENV = "AGENT_LOOP_SECRET_VALUES";
 const STAGE_EXECUTORS: PipelineStageExecutor[] = [
   "planning", "implementation", "test", "review", "approval", "interrupt",
 ];
-const COMPLETION_CONTRACTS: PipelineCompletionContract[] = [
-  "phase_done", "plan_options", "verdict", "approval",
-];
-
-function completionContractForExecutor(executor: PipelineStageExecutor): PipelineCompletionContract {
-  if (executor === "planning") return "plan_options";
-  if (executor === "test") return "verdict";
-  if (executor === "review" || executor === "approval") return "approval";
-  return "phase_done";
-}
-
-function defaultStageTypes(): PipelineStageType[] {
-  return STAGE_EXECUTORS.map((executor) => ({
-    id: executor,
-    label: executor.charAt(0).toUpperCase() + executor.slice(1),
-    executor,
-    completionContract: completionContractForExecutor(executor),
-    description: `Built-in ${executor} stage behavior.`,
-  }));
-}
-
 function fixedPipelineDefinition(existing?: PipelineDefinition | null): PipelineDefinition {
-  const canonicalRoles = generatedAgentRoles as AgentRolesDefinition;
-  const canonicalLoop = generatedAgentLoop as AgentLoopDefinition;
   const existingRoles = new Map((existing?.roles ?? []).map((role) => [role.id, role]));
-  const role = (
-    id: string,
-    modelRole: PipelineRole["modelRole"],
-    description: string,
-    instructions: string
-  ): PipelineRole => {
-    const previous = existingRoles.get(id);
-    return {
-      id,
-      modelRole,
-      description,
-      instructions,
-      ...(previous?.provider ? { provider: previous.provider } : {}),
-      ...(previous?.model ? { model: previous.model } : {}),
-      ...(previous?.variant ? { variant: previous.variant } : {}),
-    };
-  };
+  const taskExecutors = new Map<string, PipelineStageExecutor>([
+    ["produce_plan", "planning"],
+    ["implement_changes", "implementation"],
+    ["run_tests", "test"],
+    ["audit_quality", "review"],
+    ["approve_completion", "approval"],
+    ["analyze_interrupt", "interrupt"],
+  ]);
+  const tasks = new Map(generatedTasks.tasks.map((task) => [task.id, task]));
+  const transitions = new Map<string, Array<{ on: string; to: string }>>();
+  for (const transition of generatedWorkflow.transitions) {
+    const entries = transitions.get(transition.from) ?? [];
+    entries.push({ on: transition.on, to: transition.to });
+    transitions.set(transition.from, entries);
+  }
   return {
     version: 1,
-    name: canonicalLoop.name,
-    startStageId: canonicalLoop.startStageId,
-    interruptStageId: canonicalLoop.interruptStageId,
-    reentryStageId: canonicalLoop.reentryStageId,
-    iterationCompletionStageId: canonicalLoop.iterationCompletionStageId,
-    stageTypes: canonicalLoop.stageTypes ?? defaultStageTypes(),
-    roles: canonicalRoles.roles.map((candidate) => role(
-      candidate.id,
-      candidate.modelRole,
-      candidate.description,
-      candidate.instructions
-    )),
-    stages: canonicalLoop.stages,
-  };
-}
-
-function combinePipelineDefinitions(
-  rolesDefinition?: AgentRolesDefinition | null,
-  loopDefinition?: AgentLoopDefinition | null
-): PipelineDefinition {
-  const defaults = fixedPipelineDefinition();
-  return {
-    version: 1,
-    name: loopDefinition?.name ?? defaults.name,
-    startStageId: loopDefinition?.startStageId ?? defaults.startStageId,
-    interruptStageId: loopDefinition?.interruptStageId ?? defaults.interruptStageId,
-    reentryStageId: loopDefinition?.reentryStageId ?? defaults.reentryStageId,
-    iterationCompletionStageId:
-      loopDefinition?.iterationCompletionStageId ?? defaults.iterationCompletionStageId,
-    stageTypes: loopDefinition?.stageTypes ?? defaults.stageTypes,
-    roles: rolesDefinition?.roles ?? defaults.roles,
-    stages: loopDefinition?.stages ?? defaults.stages,
+    name: generatedWorkflow.name,
+    startStageId: generatedWorkflow.startNodeId,
+    interruptStageId: generatedWorkflow.applicationPolicy.interruptNodeId,
+    reentryStageId: generatedWorkflow.cyclePolicy.startNodeId,
+    iterationCompletionStageId: generatedWorkflow.cyclePolicy.completionNodeId,
+    roles: generatedAgents.agents.map((agent) => {
+      const previous = existingRoles.get(agent.id);
+      const runtimeDefaults = agent.runtimeDefaults as {
+        provider?: string;
+        model?: string;
+        variant?: string;
+      };
+      return {
+        id: agent.id,
+        modelRole: agent.id as PipelineRole["modelRole"],
+        description: agent.objective,
+        instructions: agent.instructions,
+        ...(previous?.provider ?? runtimeDefaults.provider
+          ? { provider: previous?.provider ?? runtimeDefaults.provider }
+          : {}),
+        ...(previous?.model ?? runtimeDefaults.model
+          ? { model: previous?.model ?? runtimeDefaults.model }
+          : {}),
+        ...(previous?.variant ?? runtimeDefaults.variant
+          ? { variant: previous?.variant ?? runtimeDefaults.variant }
+          : {}),
+      };
+    }),
+    stages: generatedWorkflow.nodes.map((node) => {
+      const taskId = "taskId" in node && typeof node.taskId === "string"
+        ? node.taskId
+        : null;
+      const agentId = "agentId" in node && typeof node.agentId === "string"
+        ? node.agentId
+        : "planner";
+      const gateType = "gate" in node && node.gate
+        ? node.gate.type
+        : null;
+      const task = taskId ? tasks.get(taskId) : undefined;
+      const executor = task ? taskExecutors.get(task.id) ?? "planning" : "planning";
+      const routes = transitions.get(node.id) ?? [];
+      return {
+        id: node.id,
+        name: node.id.replaceAll("_", " "),
+        role: agentId,
+        kind: executor,
+        instructions: "",
+        onSuccess: routes[0]?.to ?? "PAUSED",
+        onFailure: routes[1]?.to ?? routes[0]?.to ?? "PAUSED",
+        countsIteration: node.id === generatedWorkflow.cyclePolicy.startNodeId,
+        requiresPlanApproval: node.kind === "human_gate" && gateType === "plan_approval",
+        planOptionsCount: task?.id === "produce_plan" ? 3 : 0,
+      };
+    }),
   };
 }
 
@@ -187,6 +173,7 @@ export class StateStore {
   private listeners: Array<() => void> = [];
   private pathsCache: LoopPathsConfig | null = null;
   private secretNamespaceCache: string | null = null;
+  private readonly pendingPlanSelections = new Map<string, string>();
 
   constructor(private config: ExtensionConfig) {}
 
@@ -313,8 +300,7 @@ export class StateStore {
   async readSystemSettings(): Promise<SystemSettings> {
     const root = await this.getRootDir();
     const loopConfigPath = path.join(root, "loop_config.json");
-    const rolesPath = path.join(root, "agent_roles.json");
-    const agentLoopPath = path.join(root, "agent_loop.json");
+    const agentsPath = path.join(root, "agents.json");
     let loopConfig = await this.readJsonAtomic<{
       providers?: Record<string, ProviderConfig>;
       toolAccess?: ToolAccessConfig;
@@ -343,17 +329,28 @@ export class StateStore {
       codex: { label: "OpenAI GPT / Codex", adapter: "codex", binary: "codex", enabled: true, modelsArgs: [], fallbackModels: ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"] },
       claude: { label: "Anthropic Claude Code", adapter: "claude", binary: "claude", enabled: true, modelsArgs: [], fallbackModels: ["sonnet", "opus"] },
     };
-    const storedRoles = await this.readJsonAtomic<AgentRolesDefinition>(rolesPath);
-    const storedLoop = await this.readJsonAtomic<AgentLoopDefinition>(agentLoopPath);
-    if (storedRoles && storedRoles.version !== 1) {
-      throw new Error("Agent roles version must be 1.");
+    const storedAgents = await this.readJsonAtomic<{
+      schemaVersion: number;
+      agents: Array<{
+        id: string;
+        runtimeDefaults?: { provider?: string; model?: string; variant?: string };
+      }>;
+    }>(agentsPath);
+    if (storedAgents && storedAgents.schemaVersion !== 1) {
+      throw new Error("Agent definitions schemaVersion must be 1.");
     }
-    if (storedLoop && storedLoop.version !== 1) {
-      throw new Error("Agent loop version must be 1.");
+    const runtimePipeline = fixedPipelineDefinition();
+    if (storedAgents) {
+      const byId = new Map(storedAgents.agents.map((agent) => [agent.id, agent]));
+      for (const role of runtimePipeline.roles) {
+        const runtime = byId.get(role.id)?.runtimeDefaults;
+        if (runtime?.provider) role.provider = runtime.provider;
+        if (runtime?.model) role.model = runtime.model;
+        if (runtime?.variant) role.variant = runtime.variant;
+      }
     }
-    const pipeline = combinePipelineDefinitions(storedRoles, storedLoop);
-    this.normalizePipelineStageTypes(pipeline);
-    this.stripLegacyRoleToolOverrides(pipeline);
+    const pipeline = runtimePipeline;
+    this.stripUnsupportedRoleToolOverrides(pipeline);
     const settings: SystemSettings = {
       providers: { ...fallbackProviders, ...(loopConfig.providers ?? {}) },
       toolAccess: loopConfig.toolAccess ?? {
@@ -367,11 +364,10 @@ export class StateStore {
   }
 
   async saveSystemSettings(settings: SystemSettings): Promise<void> {
-    this.normalizePipelineStageTypes(settings.pipeline);
-    this.stripLegacyRoleToolOverrides(settings.pipeline);
+    this.stripUnsupportedRoleToolOverrides(settings.pipeline);
     this.validateSystemSettings(settings);
     const root = await this.getRootDir();
-    const rolesPath = path.join(root, "agent_roles.json");
+    const agentsPath = path.join(root, "agents.json");
     const loopConfigPath = path.join(root, "loop_config.json");
     const lockPath = path.join(root, "settings_write.lock");
     let removedSecrets = new Set<string>();
@@ -385,11 +381,27 @@ export class StateStore {
       current.toolAccess = protectedToolAccess;
       current.$schema = "./loop_config.schema.json";
       await this.writeJsonAtomic(loopConfigPath, current);
-      await this.writeJsonAtomic(rolesPath, {
-        $schema: "./agent_roles.schema.json",
-        version: 1,
-        roles: settings.pipeline.roles,
-      });
+      const agentsDocument = await this.readJsonAtomic<{
+        $schema?: string;
+        schemaVersion: 1;
+        agents: Array<Record<string, unknown> & {
+          id: string;
+          runtimeDefaults?: Record<string, string>;
+        }>;
+      }>(agentsPath) ?? structuredClone(generatedAgents);
+      const rolesById = new Map(settings.pipeline.roles.map((role) => [role.id, role]));
+      for (const agent of agentsDocument.agents) {
+        const role = rolesById.get(agent.id);
+        if (!role) continue;
+        agent.runtimeDefaults = {
+          ...(role.provider ? { provider: role.provider } : {}),
+          ...(role.model ? { model: role.model } : {}),
+          ...(role.variant ? { variant: role.variant } : {}),
+        };
+      }
+      agentsDocument.$schema = "./agents.schema.json";
+      agentsDocument.schemaVersion = 1;
+      await this.writeJsonAtomic(agentsPath, agentsDocument);
     });
     if (globalContext) {
       const namespace = await this.getSecretNamespace();
@@ -457,11 +469,9 @@ export class StateStore {
       const protectedValues: Record<string, string> = {};
       for (const [fieldName, value] of Object.entries(values ?? {})) {
         const currentKey = namespacedMcpSecretStorageKey(namespace, serverId, scope, fieldName);
-        const legacyKey = legacyMcpSecretStorageKey(serverId, scope, fieldName);
         protectedValues[fieldName] = await protectMcpCredentialValue(
           value,
           currentKey,
-          legacyKey,
           globalContext?.secrets
         );
       }
@@ -541,37 +551,20 @@ export class StateStore {
       }
       if (role.provider && !settings.providers[role.provider]) throw new Error(`Role ${role.id} references unknown provider ${role.provider}.`);
     }
-    const stageTypeIds = new Set<string>();
-    for (const stageType of pipeline.stageTypes ?? []) {
-      if (!safeId.test(stageType.id) || stageTypeIds.has(stageType.id)) {
-        throw new Error(`Invalid or duplicate stage type id: ${stageType.id}`);
-      }
-      if (!STAGE_EXECUTORS.includes(stageType.executor)) {
-        throw new Error(`Stage type ${stageType.id} has an invalid executor.`);
-      }
-      if (!COMPLETION_CONTRACTS.includes(stageType.completionContract)) {
-        throw new Error(`Stage type ${stageType.id} has an invalid completion contract.`);
-      }
-      const expectedContract = completionContractForExecutor(stageType.executor);
-      if (stageType.completionContract !== expectedContract) {
-        throw new Error(`Stage type ${stageType.id} executor ${stageType.executor} requires ${expectedContract}.`);
-      }
-      if (!stageType.label?.trim()) throw new Error(`Stage type ${stageType.id} needs a label.`);
-      stageTypeIds.add(stageType.id);
-    }
     const stageIds = new Set<string>();
     for (const stage of pipeline.stages) {
       if (!safeId.test(stage.id) || stageIds.has(stage.id)) throw new Error(`Invalid or duplicate stage id: ${stage.id}`);
       if (!roleIds.has(stage.role)) throw new Error(`Stage ${stage.id} references unknown role ${stage.role}.`);
-      if (!stageTypeIds.has(stage.kind)) throw new Error(`Stage ${stage.id} references unknown stage type ${stage.kind}.`);
+      if (!STAGE_EXECUTORS.includes(stage.kind as PipelineStageExecutor)) {
+        throw new Error(`Stage ${stage.id} has an invalid task kind ${stage.kind}.`);
+      }
       stageIds.add(stage.id);
     }
     for (const required of [pipeline.startStageId, pipeline.interruptStageId, pipeline.reentryStageId, pipeline.iterationCompletionStageId]) {
       if (!stageIds.has(required)) throw new Error(`Pipeline references unknown required stage ${required}.`);
     }
     const interruptStage = pipeline.stages.find((stage) => stage.id === pipeline.interruptStageId);
-    const interruptType = pipeline.stageTypes?.find((stageType) => stageType.id === interruptStage?.kind);
-    if (interruptType?.executor !== "interrupt") {
+    if (interruptStage?.kind !== "interrupt") {
       throw new Error("The interrupt stage must use the interrupt kind.");
     }
     if (!pipeline.stages.some((stage) => stage.countsIteration)) {
@@ -591,42 +584,25 @@ export class StateStore {
     }
   }
 
-  private normalizePipelineStageTypes(pipeline: PipelineDefinition): void {
-    const legacy = pipeline as PipelineDefinition & { stageTypes?: PipelineStageType[] };
-    if (!Array.isArray(legacy.stageTypes) || legacy.stageTypes.length === 0) {
-      pipeline.stageTypes = defaultStageTypes();
-    }
-  }
-
-  private stripLegacyRoleToolOverrides(pipeline: PipelineDefinition): void {
+  private stripUnsupportedRoleToolOverrides(pipeline: PipelineDefinition): void {
     for (const role of pipeline.roles) {
-      const legacy = role as typeof role & { webSearch?: boolean; mcpServers?: string[] };
-      delete legacy.webSearch;
-      delete legacy.mcpServers;
+      const candidate = role as typeof role & { webSearch?: boolean; mcpServers?: string[] };
+      delete candidate.webSearch;
+      delete candidate.mcpServers;
     }
   }
 
   async selectPlanChoice(
     sessionId: string,
-    choiceId: number
+    choiceId: string
   ): Promise<{ choice: PlanChoice; markdownPath: string }> {
     const choices = await this.readPlanChoices(sessionId);
     const choice = choices?.find((candidate) => candidate.id === choiceId);
     if (!choice) throw new Error(`Plan option ${choiceId} was not found.`);
-    const planPath = await this.getPlanMdPath(sessionId);
-    const sessionDir = await this.getSessionDir(sessionId);
-    const content = `${choice.body.trim()}\n`;
-    const artifact = await new ExtensionImmutableArtifactStore(
-      path.join(sessionDir, "artifacts")
-    ).put(content, "text/markdown");
-    await this.updateState(sessionId, (state) => {
-      state.planPath = planPath;
-      state.selectedPlanChoiceId = choice.id;
-      state.planApproved = false;
-      state.artifactRefs = state.artifactRefs ?? {};
-      state.artifactRefs["plan.selected"] = artifact;
-    }, this.createOfflineRequestId("select_plan"));
-    await this.writeTextAtomic(planPath, content);
+    this.pendingPlanSelections.set(sessionId, choice.id);
+    const cached = this.stateCache.get(sessionId);
+    if (cached) cached.selectedPlanChoiceId = choice.id;
+    this.notifyListeners();
     return {
       choice,
       markdownPath: await this.getPlanChoiceMarkdownPath(sessionId, choice),
@@ -634,160 +610,21 @@ export class StateStore {
   }
 
   async clearPlanChoice(sessionId: string): Promise<void> {
-    const planPath = await this.getPlanMdPath(sessionId);
-    await this.updateState(sessionId, (state) => {
-      state.selectedPlanChoiceId = null;
-      state.planApproved = false;
-      if (state.artifactRefs) delete state.artifactRefs["plan.selected"];
-    }, this.createOfflineRequestId("clear_plan"));
-    await fs.rm(planPath, { force: true });
-  }
-
-  async updateState(
-    sessionId: string,
-    mutate: (state: LoopState) => void,
-    requestId = this.createOfflineRequestId("state_update"),
-    expectedRevision?: number
-  ): Promise<LoopState> {
-    const cfg = await this.getPathsConfig();
-    const sessionDir = await this.getSessionDir(sessionId);
-    const [statePath, lockPath] = await Promise.all([
-      resolveContainedPath(sessionDir, cfg.sessionFileNames.state, "Session state file"),
-      resolveContainedPath(sessionDir, cfg.stateLockFileName, "Session state lock"),
-    ]);
-    const observed = await this.readJsonAtomic<LoopState>(statePath);
-    const observedRevision = Number.isSafeInteger(observed?.aggregateRevision)
-      ? Number(observed?.aggregateRevision)
-      : 0;
-    const updated = await this.withFileLock(lockPath, async () => {
-      const aggregateStore = new ExtensionAggregateStore(
-        sessionDir,
-        cfg.sessionFileNames.state
-      );
-      return aggregateStore.updateOfflineUnlocked({
-        expectedRevision: expectedRevision ?? observedRevision,
-        requestId,
-        mutate,
-        assertNoLiveOwner: () => this.assertNoLiveOwner(sessionDir, cfg),
-      });
-    });
-    this.stateCache.set(sessionId, updated);
+    this.pendingPlanSelections.delete(sessionId);
+    const cached = this.stateCache.get(sessionId);
+    if (cached) cached.selectedPlanChoiceId = null;
     this.notifyListeners();
-    return updated;
-  }
-
-  async updateAccessMode(
-    sessionId: string,
-    accessMode: "ask" | "full_access"
-  ): Promise<LoopState> {
-    return this.updateState(sessionId, (state) => {
-      if (["RUNNING", "SUCCESS", "FAILED"].includes(state.status)) {
-        throw new Error("Access mode can only be changed while the session is held.");
-      }
-      state.accessMode = accessMode;
-      if (accessMode === "full_access") {
-        state.pendingAccessRequest = null;
-        if (state.lastFailure?.kind === "permission") state.lastFailure = null;
-        state.lastFailureDigest = null;
-      }
-    }, this.createOfflineRequestId("access_mode"));
   }
 
   async approvePlan(sessionId: string): Promise<LoopState> {
-    return this.updateState(sessionId, (state) => {
-      if (!state.awaitingPlanApproval) {
-        throw new Error(`Session ${sessionId} is not awaiting plan approval.`);
-      }
-      state.planApproved = true;
-    }, this.createOfflineRequestId("approve_plan"));
-  }
-
-  async enqueueControlRequest(
-    sessionId: string,
-    type: ControlRequest["type"],
-    message: string | null = null
-  ): Promise<ControlRequest> {
-    const cfg = await this.getPathsConfig();
-    const sessionDir = await this.getSessionDir(sessionId);
-    const controlDir = await resolveContainedPath(sessionDir, cfg.controlDirName, "Session control directory");
-    const requestDir = await resolveContainedPath(controlDir, "requests", "Control request directory");
-    await fs.mkdir(requestDir, { recursive: true });
-    const request: ControlRequest = {
-      requestId: `control_${Date.now().toString(36)}_${randomBytes(6).toString("hex")}`,
-      type,
-      createdAt: new Date().toISOString(),
-      message: message?.trim() || null,
-    };
-    await this.writeJsonAtomic(
-      await resolveContainedPath(requestDir, `${request.requestId}.json`, "Control request file"),
-      request
-    );
-    return request;
-  }
-
-  async readControlAck(sessionId: string, requestId: string): Promise<ControlAck | null> {
-    const cfg = await this.getPathsConfig();
-    const sessionDir = await this.getSessionDir(sessionId);
-    const controlDir = await resolveContainedPath(sessionDir, cfg.controlDirName, "Session control directory");
-    const ackDir = await resolveContainedPath(controlDir, "acks", "Control acknowledgement directory");
-    return this.readJsonAtomic<ControlAck>(
-      await resolveContainedPath(ackDir, `${requestId}.json`, "Control acknowledgement file")
-    );
-  }
-
-  async completeQueuedControlRequest(
-    sessionId: string,
-    request: ControlRequest,
-    result: ControlAck["result"],
-    message: string
-  ): Promise<void> {
-    const cfg = await this.getPathsConfig();
-    const sessionDir = await this.getSessionDir(sessionId);
-    const controlDir = await resolveContainedPath(sessionDir, cfg.controlDirName, "Session control directory");
-    const [ackDir, requestDir, processingDir] = await Promise.all([
-      resolveContainedPath(controlDir, "acks", "Control acknowledgement directory"),
-      resolveContainedPath(controlDir, "requests", "Control request directory"),
-      resolveContainedPath(controlDir, "processing", "Control processing directory"),
-    ]);
-    const ackPath = await resolveContainedPath(ackDir, `${request.requestId}.json`, "Control acknowledgement file");
-    const existing = await this.readJsonAtomic<ControlAck>(ackPath);
-    await this.writeJsonAtomic(ackPath, {
-      requestId: request.requestId,
-      type: request.type,
-      acceptedAt: existing?.acceptedAt ?? new Date().toISOString(),
-      completedAt: new Date().toISOString(),
-      result,
-      message,
-    } satisfies ControlAck);
-    await Promise.all([
-      resolveContainedPath(requestDir, `${request.requestId}.json`, "Control request file")
-        .then((target) => fs.rm(target, { force: true })),
-      resolveContainedPath(processingDir, `${request.requestId}.json`, "Control processing file")
-        .then((target) => fs.rm(target, { force: true })),
-    ]);
-  }
-
-  async waitForControlCompletion(
-    sessionId: string,
-    requestId: string,
-    timeoutMs = 8_000
-  ): Promise<boolean> {
-    const deadline = Date.now() + timeoutMs;
-    while (Date.now() < deadline) {
-      const [ack, state] = await Promise.all([
-        this.readControlAck(sessionId, requestId),
-        this.readState(sessionId),
-      ]);
-      if (
-        (state?.status === "STOPPED" || state?.status === "PAUSED") &&
-        ack &&
-        (ack.result === "completed" || ack.result === "cancelled")
-      ) {
-        return true;
-      }
-      await delay(Math.min(100, Math.max(1, deadline - Date.now())));
+    const state = await this.readState(sessionId);
+    if (!state?.awaitingPlanApproval) {
+      throw new Error(`Session ${sessionId} is not awaiting plan approval.`);
     }
-    return false;
+    const choiceId = this.pendingPlanSelections.get(sessionId) ?? state.selectedPlanChoiceId;
+    if (!choiceId) throw new Error("Select a plan choice before approval.");
+    state.selectedPlanChoiceId = choiceId;
+    return state;
   }
 
   async inspectLease(
@@ -823,82 +660,15 @@ export class StateStore {
     };
   }
 
-  async pauseLegacyRunningSession(sessionId: string): Promise<boolean> {
-    const current = await this.readState(sessionId);
-    if (!current || current.status !== "RUNNING") return false;
-    await this.updateState(sessionId, (state) => {
-      if (state.status !== "RUNNING") return;
-      state.status = "BLOCKED";
-      state.statusReason = "Legacy RUNNING session has no verifiable ownership lease.";
-      for (const role of Object.keys(state.agentStates) as AgentRole[]) {
-        if (state.agentStates[role].status === "running") {
-          state.agentStates[role] = {
-            status: "idle",
-            lastExitCode: -1,
-            lastRunAt: new Date().toISOString(),
-          };
-        }
-      }
-    }, this.createOfflineRequestId("pause_legacy"));
-    await this.syncRegistrySessionStatus(sessionId, "BLOCKED");
-    return true;
-  }
-
-  async markSessionStopped(sessionId: string, reason: string): Promise<void> {
-    const state = await this.updateState(sessionId, (current) => {
-      current.status = "STOPPED";
-      current.statusReason = reason;
-      current.automaticRecovery = null;
-      for (const role of Object.keys(current.agentStates) as AgentRole[]) {
-        if (
-          current.agentStates[role].status === "running" ||
-          current.agentStates[role].status === "retry_wait"
-        ) {
-          current.agentStates[role] = {
-            status: "idle",
-            lastExitCode: -1,
-            lastRunAt: new Date().toISOString(),
-          };
-        }
-      }
-      if (current.activeAttempt && ["starting", "running", "retry_wait"].includes(current.activeAttempt.status)) {
-        current.activeAttempt.status = "cancelled";
-        current.activeAttempt.endedAt = new Date().toISOString();
-        current.activeAttempt.failureKind = "cancelled";
-        current.activeAttempt.failureMessage = reason;
-      }
-    }, this.createOfflineRequestId("mark_stopped"));
-    await this.mergeSessionMetaStatus(sessionId, {
-      status: "STOPPED",
-      goal: state.goal,
-      targetProjectPath: state.targetProjectPath,
-      createdAt: state.createdAt,
-    });
-  }
-
   async ensureInitialized(): Promise<void> {
     const root = await this.getRootDir();
     const settingsLockPath = path.join(root, "settings_write.lock");
     await this.withFileLock(settingsLockPath, async () => {
-      const pipeline = fixedPipelineDefinition();
       const context = getGlobalContext();
       const configurationFiles: Array<[string, unknown]> = [
-        ["agent_roles.json", {
-          $schema: "./agent_roles.schema.json",
-          version: 1,
-          roles: pipeline.roles,
-        }],
-        ["agent_loop.json", {
-          $schema: "./agent_loop.schema.json",
-          version: 1,
-          name: pipeline.name,
-          startStageId: pipeline.startStageId,
-          interruptStageId: pipeline.interruptStageId,
-          reentryStageId: pipeline.reentryStageId,
-          iterationCompletionStageId: pipeline.iterationCompletionStageId,
-          stageTypes: pipeline.stageTypes,
-          stages: pipeline.stages,
-        }],
+        ["agents.json", generatedAgents],
+        ["tasks.json", generatedTasks],
+        ["workflow.json", generatedWorkflow],
       ];
       for (const [fileName, contents] of configurationFiles) {
         const target = path.join(root, fileName);
@@ -919,8 +689,9 @@ export class StateStore {
 
       if (context) {
         for (const schemaName of [
-          "agent_roles.schema.json",
-          "agent_loop.schema.json",
+          "agents.schema.json",
+          "tasks.schema.json",
+          "workflow.schema.json",
           "loop_config.schema.json",
         ]) {
           const target = path.join(root, schemaName);
@@ -966,17 +737,6 @@ export class StateStore {
       return data;
     }
     const cfg = await this.getPathsConfig();
-    const legacyPath = await resolveContainedPath(
-      await this.getRootDir(),
-      cfg.registryFileName,
-      "Legacy session registry"
-    );
-    const legacy = await this.readJsonAtomic<SessionRegistry>(legacyPath);
-    if (legacy) {
-      await this.writeJsonAtomic(registryPath, legacy);
-      this.registryCache = legacy;
-      return legacy;
-    }
     const lockPath = await resolveContainedPath(
       path.dirname(registryPath),
       cfg.registryLockFileName,
@@ -1131,16 +891,6 @@ export class StateStore {
     return { removedFromRegistry, dirRemoved };
   }
 
-  async healOrphanedSession(sessionId: string): Promise<boolean> {
-    const state = await this.readState(sessionId);
-    if (!state || state.status !== "RUNNING") {
-      return false;
-    }
-    const runtime = await this.inspectLease(sessionId);
-    if (runtime.disposition !== "missing") return false;
-    return this.pauseLegacyRunningSession(sessionId);
-  }
-
   async syncRegistrySessionStatus(sessionId: string, status: LoopStatus): Promise<void> {
     const state = await this.readState(sessionId);
     const registry = await this.readRegistry();
@@ -1268,20 +1018,260 @@ export class StateStore {
   async readState(sessionId: string): Promise<LoopState | null> {
     const cfg = await this.getPathsConfig();
     const sessionDir = await this.getSessionDir(sessionId);
-    const lockPath = await resolveContainedPath(
+    const projectionPath = await resolveContainedPath(
       sessionDir,
-      cfg.stateLockFileName,
-      "Session state lock"
+      cfg.sessionFileNames.state,
+      "Run projection"
     );
-    const data = await this.withFileLock(lockPath, () =>
-      new ExtensionAggregateStore(sessionDir, cfg.sessionFileNames.state).loadUnlocked(true)
-    );
-    if (data) {
+    const raw = await this.readJsonAtomic<Record<string, unknown>>(projectionPath);
+    if (raw?.projectionSchemaVersion === 1 && raw.stateVersion === 4) {
+      const data = this.projectRunState(raw, cfg);
+      const pendingSelection = this.pendingPlanSelections.get(sessionId);
+      if (pendingSelection && data.awaitingPlanApproval) {
+        data.selectedPlanChoiceId = pendingSelection;
+      }
       this.stateCache.set(sessionId, data);
       return data;
     }
     this.stateCache.delete(sessionId);
     return null;
+  }
+
+  private projectRunState(
+    raw: Record<string, unknown>,
+    cfg: LoopPathsConfig
+  ): LoopState {
+    const pipeline = fixedPipelineDefinition();
+    const status = String(raw.status) as LoopStatus;
+    const phase = typeof raw.phase === "string" ? raw.phase : "PLANNING";
+    const active = raw.activeActivation && typeof raw.activeActivation === "object"
+      ? raw.activeActivation as Record<string, unknown>
+      : null;
+    const pending = raw.pendingInput && typeof raw.pendingInput === "object"
+      ? raw.pendingInput as Record<string, unknown>
+      : null;
+    const budgets = raw.budgets && typeof raw.budgets === "object"
+      ? raw.budgets as Record<string, Record<string, unknown>>
+      : {};
+    const workflowSteps = budgets.workflowSteps ?? {};
+    const cycles = budgets.cycles ?? {};
+    const rawRequirements = Array.isArray(raw.requirements) ? raw.requirements : [];
+    const rawEvidence = Array.isArray(raw.requirementEvidence)
+      ? raw.requirementEvidence
+      : [];
+    const rawEvents = Array.isArray(raw.events) ? raw.events : [];
+    const pendingContext = pending?.context && typeof pending.context === "object" &&
+      !Array.isArray(pending.context)
+      ? pending.context as Record<string, unknown>
+      : null;
+    const pendingRequestedPaths = Array.isArray(pendingContext?.requestedPaths)
+      ? pendingContext.requestedPaths.filter(
+          (value): value is string => typeof value === "string"
+        )
+      : [];
+    const modelMapping = {
+      planner: "",
+      implementer: "",
+      tester: "",
+      qa_lead: "",
+      master: "",
+      interrupter: "",
+    };
+    const agentStates = Object.fromEntries(
+      pipeline.roles.map((role) => [role.id, {
+        status: "idle" as const,
+        lastExitCode: null,
+        lastRunAt: null,
+      }])
+    );
+    const currentExecutor: PipelineStageExecutor = phase === "PLANNING"
+      ? "planning"
+      : phase === "IMPLEMENTATION"
+        ? "implementation"
+        : phase === "TEST"
+          ? "test"
+          : phase === "QA_REVIEW"
+            ? "review"
+            : phase === "MASTER_APPROVAL"
+              ? "approval"
+              : "interrupt";
+    const result: LoopState = {
+      stateVersion: 4,
+      sessionId: String(raw.sessionId ?? raw.runId ?? ""),
+      status,
+      phase,
+      loopCount: Number(cycles.consumed ?? 0),
+      completedIterations: Number(cycles.completed ?? 0),
+      maxCycles: Number(cycles.limit ?? this.config.maxCycles),
+      cyclesStarted: Number(cycles.consumed ?? 0),
+      cyclesCompleted: Number(cycles.completed ?? 0),
+      maxWorkflowSteps: Number(workflowSteps.limit ?? 100),
+      workflowStepsConsumed: Number(workflowSteps.consumed ?? 0),
+      currentActivation: active
+        ? {
+            activationId: String(active.activationId ?? ""),
+            sequence: Number(active.workflowStep ?? 0),
+            stageId: String(active.nodeId ?? phase),
+            executor: currentExecutor,
+            mutationCapable: active.sideEffect === "workspace_mutation",
+            workflowStep: Number(active.workflowStep ?? 0),
+            cycleNumber: null,
+            attemptsReserved: Array.isArray(active.attemptIds) ? active.attemptIds.length : 0,
+            maxAgentAttempts: this.config.maxAgentAttempts,
+            status: String(active.status) === "unknown_mutation"
+              ? "unknown_mutation"
+              : String(active.status) === "completed"
+                ? "completed"
+                : String(active.status) === "failed"
+                  ? "failed"
+                  : String(active.status) === "running"
+                    ? "running"
+                    : "reserved",
+            reservedAt: String(raw.updatedAt ?? raw.createdAt ?? new Date().toISOString()),
+            completedAt: null,
+          }
+        : null,
+      activationHistory: [],
+      goal: String(raw.goal ?? ""),
+      targetProjectPath: String(raw.targetProjectPath ?? ""),
+      additionalAllowedPaths: Array.isArray(raw.additionalAllowedPaths)
+        ? raw.additionalAllowedPaths.filter((value): value is string => typeof value === "string")
+        : [],
+      accessMode: raw.accessMode === "full_access" ? "full_access" : "ask",
+      pendingAccessRequest: pending?.kind === "access_approval"
+        ? {
+            requestId: String(pending.requestId ?? ""),
+            requestedPaths: pendingRequestedPaths,
+            requestedAt: String(pending.createdAt ?? raw.updatedAt ?? ""),
+            sourcePhase: phase,
+            reason: typeof pendingContext?.failure === "string"
+              ? pendingContext.failure
+              : String(pending.prompt ?? "Provider access approval is required."),
+          }
+        : null,
+      modelMapping,
+      providerMapping: {},
+      providerConfigs: {},
+      errorQueue: [],
+      agentStates,
+      refinedGoal: null,
+      referenceIdentity: null,
+      planningComplete: phase !== "PLANNING",
+      masterApproved: status === "SUCCESS",
+      createdAt: String(raw.createdAt ?? ""),
+      updatedAt: String(raw.updatedAt ?? ""),
+      phaseTimeoutMs: this.config.phaseTimeoutMs,
+      idleTimeoutMs: this.config.idleTimeoutMs,
+      cliBinary: this.config.cliBinary,
+      cliProfile: this.config.cliProfile,
+      variantMapping: {},
+      toolAccess: { webSearch: { enabled: true, mode: "live" }, mcpServers: [] },
+      awaitingPlanApproval:
+        raw.awaitingPlanApproval === true ||
+        (status === "WAITING_USER" && pending?.kind === "plan_approval"),
+      planApproved: raw.planApproved === true,
+      planPath: cfg.sessionFileNames.plan,
+      planOverviewPath: cfg.sessionFileNames.planOverview,
+      selectedPlanChoiceId:
+        typeof raw.selectedPlanChoiceId === "string" ? raw.selectedPlanChoiceId : null,
+      interruptBriefing:
+        typeof raw.interruptBriefing === "string" ? raw.interruptBriefing : null,
+      planRevisionPending: false,
+      interruptedFromPhase: null,
+      activeAttempt: null,
+      lastFailure: null,
+      recoveryCount: 0,
+      totalAgentAttempts: active && Array.isArray(active.attemptIds)
+        ? active.attemptIds.length
+        : 0,
+      statusReason: typeof raw.statusReason === "string" ? raw.statusReason : null,
+      resilience: {
+        transportTimeoutMs: this.config.transportTimeoutMs,
+        toolTimeoutMs: this.config.toolTimeoutMs,
+        maxAgentAttempts: this.config.maxAgentAttempts,
+        retryBackoffMs: [...this.config.retryBackoffMs],
+        terminationGraceMs: this.config.terminationGraceMs,
+        killTimeoutMs: this.config.killTimeoutMs,
+        heartbeatIntervalMs: this.config.heartbeatIntervalMs,
+        leaseTtlMs: this.config.leaseTtlMs,
+        maxInMemoryOutputBytes: this.config.maxInMemoryOutputBytes,
+      },
+      pipeline,
+      pipelineConfigPath: null,
+      stageResults: {},
+      domainEventSequence: rawEvents.length,
+      domainEvents: rawEvents.map((candidate, index) => {
+        const event = candidate && typeof candidate === "object"
+          ? candidate as Record<string, unknown>
+          : {};
+        const rawType = String(event.type ?? "node.completed");
+        const type = rawType === "run.completed"
+          ? "workflow.completed"
+          : rawType === "run.started"
+            ? "workflow.started"
+            : rawType === "run.resumed"
+              ? "workflow.resumed"
+              : rawType === "run.paused"
+                ? "workflow.paused"
+                : rawType === "node.failed"
+                  ? "stage.failed"
+                  : rawType === "node.completed"
+                    ? "stage.completed"
+                    : "stage.started";
+        return {
+          schemaVersion: 1,
+          sequence: Number(event.sequence ?? index + 1),
+          eventId: String(event.eventId ?? `event_${index + 1}`),
+          type,
+          recordedAt: String(event.recordedAt ?? raw.updatedAt ?? ""),
+          stageId: typeof event.nodeId === "string" ? event.nodeId : null,
+          activationId: typeof event.activationId === "string" ? event.activationId : null,
+          attemptId: typeof event.attemptId === "string" ? event.attemptId : null,
+          role: null,
+          summary: String(event.summary ?? ""),
+          detail: event.detail && typeof event.detail === "object"
+            ? event.detail as Record<string, string | number | boolean | null>
+            : {},
+        };
+      }),
+      requirements: {
+        version: 1,
+        derivedAt: String(raw.createdAt ?? ""),
+        items: rawRequirements.map((candidate, index) => {
+          const item = candidate && typeof candidate === "object"
+            ? candidate as Record<string, unknown>
+            : {};
+          return {
+            id: String(item.id ?? `REQ-${index + 1}`),
+            text: String(item.text ?? ""),
+            category: "deliverable" as const,
+            mandatory: true as const,
+            source: "original_goal" as const,
+          };
+        }),
+        evidence: rawEvidence.map((candidate) => {
+          const item = candidate && typeof candidate === "object"
+            ? candidate as Record<string, unknown>
+            : {};
+          const evidenceStatus = String(item.status ?? "unknown");
+          return {
+            requirementId: String(item.requirementId ?? ""),
+            stageId: phase,
+            role: String(raw.currentAgentId ?? "core"),
+            status: evidenceStatus === "satisfied"
+              ? "SATISFIED" as const
+              : evidenceStatus === "unsatisfied"
+                ? "FAILED" as const
+                : "PARTIAL" as const,
+            summary: String(item.evidence ?? ""),
+            attemptId: null,
+            recordedAt: String(raw.updatedAt ?? ""),
+          };
+        }),
+      },
+      convergence: { stagnantCycles: 0, history: [] },
+    };
+    return result;
   }
 
   async readProgressNotes(sessionId: string): Promise<string> {
@@ -1376,30 +1366,6 @@ export class StateStore {
     }
   }
 
-  private createOfflineRequestId(operation: string): string {
-    return `${operation}_${Date.now().toString(36)}_${randomBytes(6).toString("hex")}`;
-  }
-
-  private async assertNoLiveOwner(
-    sessionDir: string,
-    cfg: LoopPathsConfig
-  ): Promise<void> {
-    const [leasePath, ownerLockPath] = await Promise.all([
-      resolveContainedPath(sessionDir, cfg.leaseFileName, "Session lease file"),
-      resolveContainedPath(sessionDir, cfg.ownerLockFileName, "Session owner lock"),
-    ]);
-    const [lease, ownerLock] = await Promise.all([
-      this.readJsonAtomic<SessionLease>(leasePath),
-      this.readJsonAtomic<SessionOwnerLock>(ownerLockPath),
-    ]);
-    if (lease && Date.parse(lease.expiresAt) > Date.now()) {
-      throw new Error(`Session has an active owner lease for pid ${lease.ownerPid}.`);
-    }
-    if (ownerLock && processLiveness(ownerLock.ownerPid) !== "dead") {
-      throw new Error(`Session owner pid ${ownerLock.ownerPid} may still be alive.`);
-    }
-  }
-
   private async withFileLock<T>(
     lockPath: string,
     operation: () => Promise<T>,
@@ -1480,14 +1446,6 @@ export class StateStore {
     await fs.mkdir(dir, { recursive: true });
     const tmpPath = `${filePath}.tmp.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2, 10)}`;
     await fs.writeFile(tmpPath, JSON.stringify(data, null, 2), "utf8");
-    await this.renameWithRetry(tmpPath, filePath);
-  }
-
-  private async writeTextAtomic(filePath: string, content: string): Promise<void> {
-    const dir = path.dirname(filePath);
-    await fs.mkdir(dir, { recursive: true });
-    const tmpPath = `${filePath}.tmp.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2, 10)}`;
-    await fs.writeFile(tmpPath, content, "utf8");
     await this.renameWithRetry(tmpPath, filePath);
   }
 

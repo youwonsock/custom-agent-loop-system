@@ -19,7 +19,7 @@ export function createCoreCapabilityHandshake(roots: RootSet): CoreCapabilityHan
     kind: "agent-loop-capabilities",
     protocolVersion: CORE_PROTOCOL_VERSION,
     stateSchemaVersion: CORE_STATE_SCHEMA_VERSION,
-    implementationVersion: process.env.npm_package_version ?? "3.4.1",
+    implementationVersion: process.env.npm_package_version ?? "4.0.0",
     capabilities: [...CORE_CAPABILITIES],
     roots: {
       codeRoot: roots.codeRoot,
@@ -60,4 +60,3 @@ export function validateCoreCapabilityHandshake(
   }
   return handshake as CoreCapabilityHandshake;
 }
-

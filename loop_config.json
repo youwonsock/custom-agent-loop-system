@@ -7,7 +7,7 @@
     "variantsConfigFileName": "model_variants.json",
     "loopHistoryDirName": "loop_history",
     "sessionFileNames": {
-      "state": "loop_state.json",
+      "state": "run_projection.json",
       "progressNotes": "progress_notes.txt",
       "finalSummary": "final_summary.json",
       "plan": "plan.md",
@@ -40,7 +40,7 @@
   },
   "defaults": {
     "cliBinary": "opencode",
-    "maxIterations": 20,
+    "maxCycles": 20,
     "phaseTimeoutMs": 900000,
     "idleTimeoutMs": 300000,
     "ptyCols": 100000,
@@ -48,18 +48,10 @@
     "transportTimeoutMs": 120000,
     "toolTimeoutMs": 600000,
     "maxAgentAttempts": 3,
-    "maxCompletionRecoveryAttempts": 1,
-    "maxAutomaticRecoveryCycles": 3,
-    "automaticRecoveryBackoffMs": [
-      60000,
-      300000,
-      900000
-    ],
     "retryBackoffMs": [
       5000,
       30000
     ],
-    "phaseRecoveryBudgetMs": 2880000,
     "terminationGraceMs": 3000,
     "killTimeoutMs": 5000,
     "heartbeatIntervalMs": 5000,

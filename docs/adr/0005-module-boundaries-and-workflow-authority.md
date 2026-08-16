@@ -1,6 +1,6 @@
 # ADR 0005: Module boundaries and workflow authority
 
-- Status: Accepted
+- Status: Superseded by ADR 0008
 - Date: 2026-08-16
 
 ## Context
@@ -107,4 +107,3 @@ evaluate another workflow engine without replacing provider supervision. During 
 layers and compatibility exports add temporary code. Some existing helpers must remain in the
 composition module until their owning layer is clear; moving code is incremental rather than a
 single large rewrite.
-

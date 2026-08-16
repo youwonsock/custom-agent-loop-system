@@ -89,18 +89,14 @@
         st.phase,
         st.loopCount,
         st.updatedAt,
-        st.maxIterations,
+        st.maxCycles,
         st.activeAttempt?.attemptId,
         st.activeAttempt?.status,
         st.activeAttempt?.activity,
-        st.activeAttempt?.mode,
-        st.activeAttempt?.completionRecoveryNumber,
         st.activeAttempt?.lastProgressAt,
         st.activeAttempt?.nextRetryAt,
         st.lastFailure?.kind,
         st.statusReason,
-        st.automaticRecovery?.cycle,
-        st.automaticRecovery?.resumeAt,
         st.accessMode,
         st.pendingAccessRequest?.requestId,
         st.referenceIdentity?.packageId,
@@ -417,9 +413,7 @@
       : attemptActivity === "model_generation"
       ? st?.idleTimeoutMs
       : st?.resilience?.transportTimeoutMs;
-    const attemptDisplay = activeAttempt?.mode === "completion_recovery"
-      ? `completion recovery ${activeAttempt.completionRecoveryNumber || 1} / ${st?.resilience?.maxCompletionRecoveryAttempts || 1}`
-      : `${activeAttempt?.attemptNumber || 0} / ${Math.min(activeAttempt?.maxAttempts || 0, st?.resilience?.maxAgentAttempts || activeAttempt?.maxAttempts || 0)}`;
+    const attemptDisplay = `${activeAttempt?.attemptNumber || 0} / ${Math.min(activeAttempt?.maxAttempts || 0, st?.resilience?.maxAgentAttempts || activeAttempt?.maxAttempts || 0)}`;
     const latestRequirementStatuses = new Map();
     for (const evidence of st?.requirements?.evidence || []) {
       latestRequirementStatuses.set(evidence.requirementId, evidence.status);
@@ -439,12 +433,9 @@
         <div class="status-row"><span class="label">Lease</span><span class="value">${escapeHtml(state.runtimeLeaseStatus || "none")}</span></div>
         <div class="status-row"><span class="label">Phase</span><span class="value">${escapeHtml(operator?.currentStage || st.phase)}</span></div>
         <div class="status-row"><span class="label">Role</span><span class="value">${escapeHtml(operator?.currentRole || stageDefinition?.role || "unknown")}</span></div>
-        ${budgets ? `<div class="status-row"><span class="label">Cycle budget</span><span class="value">${budgets.cycles.remaining} remaining · ${budgets.cycles.consumed}/${budgets.cycles.limit} consumed</span></div>` : `<div class="status-row"><span class="label">Loop</span><span class="value">${st.loopCount} started · ${st.completedIterations ?? 0} completed / ${st.maxIterations}</span></div>`}
+        ${budgets ? `<div class="status-row"><span class="label">Cycle budget</span><span class="value">${budgets.cycles.remaining} remaining · ${budgets.cycles.consumed}/${budgets.cycles.limit} consumed</span></div>` : `<div class="status-row"><span class="label">Loop</span><span class="value">${st.loopCount} started · ${st.completedIterations ?? 0} completed / ${st.maxCycles}</span></div>`}
         ${budgets ? `<div class="status-row"><span class="label">Workflow steps</span><span class="value">${budgets.workflowSteps.remaining} remaining · ${budgets.workflowSteps.consumed}/${budgets.workflowSteps.limit} consumed</span></div>` : ""}
         ${budgets && budgets.stageAttempts.remaining !== null ? `<div class="status-row"><span class="label">Stage attempts</span><span class="value">${budgets.stageAttempts.remaining} remaining · ${budgets.stageAttempts.consumed}/${budgets.stageAttempts.limit} consumed</span></div>` : ""}
-        ${budgets ? `<div class="status-row"><span class="label">Completion recovery</span><span class="value">${budgets.completionRecoveryAttempts.remaining} remaining · ${budgets.completionRecoveryAttempts.consumed}/${budgets.completionRecoveryAttempts.limit} consumed</span></div>` : ""}
-        ${budgets ? `<div class="status-row"><span class="label">Auto recovery</span><span class="value">${budgets.automaticRecoveryCycles.remaining} remaining · ${budgets.automaticRecoveryCycles.consumed}/${budgets.automaticRecoveryCycles.limit} consumed</span></div>` : ""}
-        ${budgets ? `<div class="status-row"><span class="label">Phase recovery</span><span class="value">${budgets.phaseRecoveryMs.remaining === null ? "n/a" : Math.ceil(budgets.phaseRecoveryMs.remaining / 1000) + "s remaining"} · ${Math.ceil(budgets.phaseRecoveryMs.limit / 1000)}s limit</span></div>` : ""}
         ${requirementItems.length > 0 ? `<div class="status-row"><span class="label">Requirements</span><span class="value">${satisfiedRequirements} satisfied · ${unresolvedRequirements} unresolved / ${requirementItems.length}</span></div>` : ""}
         ${st.convergence?.stagnantCycles ? `<div class="status-row"><span class="label">Stagnation</span><span class="value">${st.convergence.stagnantCycles} non-improving cycle(s)</span></div>` : ""}
         ${activeAttempt ? `
@@ -455,7 +446,6 @@
         ${activeAttempt.nextRetryAt ? `<div class="status-row"><span class="label">Retry at</span><span class="value">${escapeHtml(formatDate(activeAttempt.nextRetryAt))}</span></div>` : ""}
         ` : ""}
         ${st.lastFailure ? `<div class="status-row"><span class="label">Last failure</span><span class="value">${escapeHtml(st.lastFailure.kind)}</span></div>` : ""}
-        ${st.automaticRecovery ? `<div class="status-row"><span class="label">Recovery schedule</span><span class="value">cycle ${st.automaticRecovery.cycle} · ${escapeHtml(formatDate(st.automaticRecovery.resumeAt))}</span></div>` : ""}
         ${st.interruptBriefing ? `<div class="error-queue"><div class="status-row" style="display:block"><span class="label">Local failure briefing</span></div><div class="error-queue-item">${escapeHtml(String(st.interruptBriefing).slice(0, 2000))}</div></div>` : ""}
         <div class="status-row"><span class="label">Goal</span><span class="value" style="text-align:right;max-width:60%;overflow:hidden;text-overflow:ellipsis">${escapeHtml(String(st.goal).slice(0, 80))}</span></div>
         ${st.referenceIdentity ? `<div class="status-row"><span class="label">Reference</span><span class="value" style="text-align:right;max-width:68%">${escapeHtml(st.referenceIdentity.title)} / ${escapeHtml(st.referenceIdentity.creator)} / ${escapeHtml(st.referenceIdentity.packageId)} <span class="badge success">${escapeHtml(st.referenceIdentity.identityMatch)} · ${escapeHtml(st.referenceIdentity.confidence)}</span></span></div>` : ""}
@@ -469,7 +459,7 @@
 
     const pendingAccess = st?.pendingAccessRequest;
     const accessMode = st?.accessMode || "ask";
-    const heldForAccess = st && ["PAUSED", "WAITING_USER", "RECOVERING", "STOPPED", "BLOCKED"].includes(st.status);
+    const heldForAccess = st && ["PAUSED", "WAITING_USER", "STOPPED", "BLOCKED"].includes(st.status);
     const accessEditor = st
       ? `<div class="access-editor ${pendingAccess ? "access-request" : ""}">
           <div class="access-mode-row">
@@ -515,15 +505,15 @@
       ? `<div class="log-content">${escapeHtml(currentLogBuffer)}</div>`
       : '<div class="log-empty">(no log output yet)</div>';
 
-    const canResume = st && ["PAUSED", "WAITING_USER", "RECOVERING", "STOPPED", "BLOCKED"].includes(st.status) &&
+    const canResume = st && ["PAUSED", "WAITING_USER", "STOPPED", "BLOCKED"].includes(st.status) &&
       !st.pendingAccessRequest && !(st.awaitingPlanApproval && !st.planApproved);
-    const canStop = state.isRunning || st?.status === "RECOVERING";
+    const canStop = state.isRunning;
     root.innerHTML = `
       ${summaryBanner}
       <div class="toolbar">
         <select id="session-select">${sessionOptions}</select>
         <button class="btn secondary" id="btn-resume" ${canResume ? "" : "disabled"}>Resume</button>
-        <button class="btn danger" id="btn-stop" ${(isStopping || !canStop) ? "disabled" : ""}>${isStopping ? "Terminating..." : st?.status === "RECOVERING" ? "Cancel Recovery" : "Stop"}</button>
+        <button class="btn danger" id="btn-stop" ${(isStopping || !canStop) ? "disabled" : ""}>${isStopping ? "Terminating..." : "Stop"}</button>
         <button class="btn danger" id="btn-delete" ${!state.selectedSessionId ? "disabled" : ""} title="Delete this session and all its data">Delete</button>
         <button class="btn secondary" id="btn-discover">Models</button>
         <button class="btn secondary" id="btn-settings">Settings</button>

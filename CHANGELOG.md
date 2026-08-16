@@ -2,6 +2,24 @@
 
 All notable changes to this project are documented here. Published versions are immutable; fixes are released under a new version.
 
+## 4.0.0 - 2026-08-16
+
+### Architecture
+
+- Replace stage-specific executors with Agent, Task, Workflow, and one common `AgentTaskRunner`.
+- Add compiled deterministic graph validation, activation-based aggregate state, reducer-owned effects,
+  revision CAS, fencing, immutable artifacts, and explicit human gates.
+- Require versioned JSON task envelopes and remove text completion markers and compatibility fallback.
+- Snapshot every compiled workflow definition into its run and reject all pre-v4 state and definitions.
+
+### Safety and integration
+
+- Reserve mutation attempts before dispatch and prohibit automatic replay of unknown mutation outcomes.
+- Route plan/access approval, Stop, Interrupt, and Resume through idempotent core commands.
+- Convert VS Code to a read-only v4 projection consumer and remove its aggregate/WAL writers.
+- Keep LangGraph in an isolated structure-comparison experiment; CrewAI and LangGraph are absent from
+  production dependencies.
+
 ## 3.4.1 - 2026-08-08
 
 ### Security

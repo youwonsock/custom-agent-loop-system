@@ -50,6 +50,8 @@ test("extension recovery is recurring and wakes immediately after a core exit", 
   assert.match(extension, /startRecoveryMonitor/);
   assert.match(extension, /setInterval\(wakeup,\s*intervalMs\)/);
   assert.match(client, /this\.recoveryWakeup\?\.\(\)/);
+  assert.match(client, /decideRecoveryAction/);
+  assert.match(client, /\["missing", "recoverable"\]\.includes\(latestRuntime\.disposition\)/);
 });
 
 test("access approval and full-access modes flow from the panel through state and CLI", () => {
@@ -67,7 +69,8 @@ test("access approval and full-access modes flow from the panel through state an
   assert.match(panel, /confirmUnsafeFullAccess/);
   assert.match(panel, /Enable Unsafe Full Access/);
   assert.match(panel, /not a filesystem security boundary/);
-  assert.match(store, /updateAccessMode/);
+  assert.doesNotMatch(store, /updateAccessMode/);
+  assert.match(client, /setAccessMode[\s\S]*"set-access"/);
   assert.match(client, /args\.push\("--approve-access"\)/);
   assert.match(client, /args\.push\("--full-access"\)/);
 });
@@ -87,8 +90,7 @@ test("operator status and timeline are projected from aggregate domain events", 
   assert.match(webview, /Cycle budget/);
   assert.match(webview, /Workflow steps/);
   assert.match(webview, /Stage attempts/);
-  assert.match(webview, /Completion recovery/);
-  assert.match(webview, /Phase recovery/);
+  assert.doesNotMatch(webview, /Completion recovery|Phase recovery/);
 });
 
 test("the real Extension Host E2E runner covers all lifecycle boundaries", () => {
@@ -98,7 +100,7 @@ test("the real Extension Host E2E runner covers all lifecycle boundaries", () =>
   assert.match(suite, /launchTrusted\(false/);
   assert.match(suite, /selectPlanChoice/);
   assert.match(suite, /approvePlan/);
-  assert.match(suite, /updateAccessMode/);
+  assert.match(suite, /"updateState" in api\.store, false/);
   assert.match(suite, /stopSession/);
   assert.match(suite, /interruptSession/);
   assert.match(suite, /decideRecoveryAction/);
@@ -106,32 +108,26 @@ test("the real Extension Host E2E runner covers all lifecycle boundaries", () =>
   assert.match(suite, /protectMcpCredentialValue/);
 });
 
-test("completion recovery configuration and activity mode reach the CLI and status UI", () => {
+test("format recovery stays in the v4 core instead of an Extension completion parser", () => {
   const client = source("loopClient.ts");
-  const types = source("types.ts");
-  const webview = media("webview.js");
-  assert.match(client, /--completion-recovery-attempts/);
-  assert.match(types, /maxCompletionRecoveryAttempts/);
-  assert.match(webview, /completion recovery/);
-  assert.match(webview, /completionRecoveryNumber/);
+  const store = source("stateStore.ts");
+  assert.doesNotMatch(client, /PHASE_DONE|VERDICT:|legacy_text/);
+  assert.doesNotMatch(store, /PHASE_DONE|VERDICT:|legacy_text/);
 });
 
-test("token-aware hold statuses and scheduled recovery reach the extension UI", () => {
+test("v4 hold statuses and command-service controls reach the extension UI", () => {
   const client = source("loopClient.ts");
-  const extension = source("extension.ts");
   const types = source("types.ts");
   const webview = media("webview.js");
-  assert.match(client, /--automatic-recovery-cycles/);
-  assert.match(client, /--automatic-recovery-backoff/);
-  assert.match(extension, /state\.status !== "RECOVERING"/);
   assert.match(types, /"WAITING_USER"/);
-  assert.match(types, /"RECOVERING"/);
   assert.match(types, /"STOPPED"/);
   assert.match(types, /"BLOCKED"/);
   assert.match(webview, /statusReason/);
-  assert.match(webview, /automaticRecovery/);
-  assert.match(webview, /Cancel Recovery/);
-  assert.match(client, /Operator cancelled the scheduled automatic recovery/);
+  assert.doesNotMatch(types, /"RECOVERING"|completion_recovery/);
+  assert.doesNotMatch(webview, /automaticRecovery|Completion recovery|Cancel Recovery/);
+  assert.match(client, /invokeCoreCommand\("controlSession", "stop"/);
+  assert.match(client, /invokeCoreCommand[\s\S]*"interrupt"/);
+  assert.doesNotMatch(client, /enqueueControlRequest|markSessionStopped/);
 });
 
 test("locked reference identity is visible in session status", () => {
@@ -144,7 +140,7 @@ test("locked reference identity is visible in session status", () => {
   assert.match(webview, /identityMatch/);
 });
 
-test("settings omit the graph editor while supporting split file-only loop configuration", () => {
+test("settings omit the graph editor while using v4 Agent/Task/Workflow definitions", () => {
   const panel = source("webviewPanel.ts");
   const store = source("stateStore.ts");
   const client = source("loopClient.ts");
@@ -184,10 +180,10 @@ test("settings omit the graph editor while supporting split file-only loop confi
   assert.match(panel, /handleSaveSystemSettings/);
   assert.match(store, /saveSystemSettings/);
   assert.match(store, /fixedPipelineDefinition/);
-  assert.match(store, /combinePipelineDefinitions/);
-  assert.match(store, /agent_roles\.json/);
-  assert.match(store, /agent_loop\.json/);
-  assert.match(store, /normalizePipelineStageTypes/);
+  assert.match(store, /agents\.json/);
+  assert.match(store, /generatedTasks/);
+  assert.match(store, /generatedWorkflow/);
+  assert.doesNotMatch(store, /agent_roles\.json|agent_loop\.json|normalizePipelineStageTypes/);
   assert.match(types, /ProviderAdapter/);
   assert.match(client, /--provider-mapping/);
   assert.doesNotMatch(client, /--pipeline/);

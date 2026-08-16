@@ -44,15 +44,10 @@ for (const filePath of reports) {
   ) {
     throw new Error(`Provider conformance report ${key} did not pass cleanly.`);
   }
-  const expectedFailClosed = report.provider === "codex" && report.mode === "read-only";
-  if (report.expectedFailClosed !== expectedFailClosed) {
+  if (report.expectedFailClosed !== false) {
     throw new Error(`Provider conformance report ${key} has the wrong fail-closed classification.`);
   }
-  if (expectedFailClosed) {
-    if (report.spawned !== false) {
-      throw new Error(`Provider conformance report ${key} spawned despite expected fail-closed.`);
-    }
-  } else if (report.authenticatedExecution !== true || report.spawned !== true) {
+  if (report.authenticatedExecution !== true || report.spawned !== true) {
     throw new Error(`Provider conformance report ${key} lacks an authenticated provider execution.`);
   }
 }

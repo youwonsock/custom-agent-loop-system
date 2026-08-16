@@ -211,7 +211,7 @@ export class PlanReviewViewProvider implements vscode.WebviewViewProvider {
       case "selectPlanChoice": {
         const sessionId = msg.sessionId;
         if (!sessionId) return;
-        if (msg.choiceId === -1) {
+        if (msg.choiceId === "__overview__") {
           try {
             await this.store.clearPlanChoice(sessionId);
             await this.openPlanDocument(sessionId, "overview");
@@ -278,7 +278,11 @@ export class PlanReviewViewProvider implements vscode.WebviewViewProvider {
         const sessionId = msg.sessionId;
         if (!sessionId) return;
         try {
-          await this.store.approvePlan(sessionId);
+          const state = await this.store.approvePlan(sessionId);
+          if (!state.selectedPlanChoiceId) {
+            throw new Error("Select a plan choice before approval.");
+          }
+          await this.client.approvePlan(sessionId, state.selectedPlanChoiceId);
           vscode.window.showInformationMessage(`Plan approved for ${sessionId}. Resuming session...`);
           await this.client.resumeSession(sessionId);
           this.registerMainPanelListeners(sessionId);
@@ -583,7 +587,6 @@ export class PlanReviewViewProvider implements vscode.WebviewViewProvider {
       if (attention) badge = '<span class="badge attention">!</span>';
       else if (s.status === "PAUSED") badge = '<span class="badge paused">II</span>';
       else if (s.status === "WAITING_USER") badge = '<span class="badge attention">?</span>';
-      else if (s.status === "RECOVERING") badge = '<span class="badge running">R</span>';
       else if (s.status === "STOPPED") badge = '<span class="badge paused">■</span>';
       else if (s.status === "BLOCKED") badge = '<span class="badge attention">×</span>';
       else if (s.status === "RUNNING") badge = '<span class="badge running">▶</span>';
@@ -815,7 +818,7 @@ export class PlanReviewViewProvider implements vscode.WebviewViewProvider {
         vscode.postMessage({ command: "resumeSession", sessionId: state.sessionId });
       };
       if (btnBack) btnBack.onclick = function() {
-        vscode.postMessage({ command: "selectPlanChoice", sessionId: state.sessionId, choiceId: -1 });
+        vscode.postMessage({ command: "selectPlanChoice", sessionId: state.sessionId, choiceId: "__overview__" });
       };
     }
 
@@ -832,7 +835,7 @@ export class PlanReviewViewProvider implements vscode.WebviewViewProvider {
       }
       const card = e.target.closest(".choice-card");
       if (card && card.dataset.choiceId) {
-        selectChoice(parseInt(card.dataset.choiceId, 10));
+        selectChoice(card.dataset.choiceId);
       }
     });
 
@@ -840,7 +843,7 @@ export class PlanReviewViewProvider implements vscode.WebviewViewProvider {
       const card = e.target.closest(".choice-card");
       if (card && card.dataset.choiceId && (e.key === "Enter" || e.key === " ")) {
         e.preventDefault();
-        selectChoice(parseInt(card.dataset.choiceId, 10));
+        selectChoice(card.dataset.choiceId);
       }
     });
 

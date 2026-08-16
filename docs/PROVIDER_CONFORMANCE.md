@@ -14,8 +14,21 @@ The matrix uses Node.js 22 because the pinned Claude CLI requires it. This runne
 independent of the packaged Agent Loop runtime, which is still tested and supported on Node.js 18.
 
 1. A write-capable run must create the exact proof artifact and emit structured events.
-2. A read-only run must leave a byte-hashed workspace unchanged. Codex must instead reject the
-   request before spawn until an isolated configuration home is implemented and separately proven.
+2. A read-only run must leave a byte-hashed workspace unchanged. Codex additionally ignores user
+   config, treats every possible project root as untrusted, ignores exec-policy rules, and withholds
+   runtime MCP so inherited tools cannot enter the role.
+
+Persisted OpenCode/Kilo MCP remains withheld from read-only roles. The separately tested OpenCode
+research path admits only an ephemeral orchestrator-owned server, under a random per-attempt
+agent that denies all tools except its two classified read-only operations (bounded candidate discovery
+and screenshot inspection); it does not elevate the
+adapter's general MCP capability declaration.
+
+Named-product completion also distinguishes exact-clone goals from explicitly original adaptations.
+For the latter, conformance requires exact identity, source-tied gameplay-state evidence, and a complete
+`[REFERENCE_SCOPE]` boundary separating verified observations, unavailable source facts, and original
+design decisions. Rejected near-name candidates and unavailable mechanics do not count as contradictions
+of an otherwise locked exact identity.
 
 Every run also injects a random secret sentinel, asks the model to report it during the adversarial
 read-only case, and scans arguments, output, diagnostics, logs, and the disposable workspace for

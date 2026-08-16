@@ -41,6 +41,9 @@ const TRUSTED_PROVIDER_CAPABILITIES: Readonly<Record<ProviderAdapter, Readonly<P
     structuredEvents: "jsonl",
   }),
   kilo: Object.freeze<ProviderCapabilities>({
+    // Enforced by selecting the runtime-owned agent-loop-readonly agent. A
+    // top-level KILO_CONFIG_CONTENT permission document alone is insufficient
+    // because Kilo merges selected-agent permissions afterward.
     readOnlyFilesystem: "enforced",
     workspaceWrites: "enforced",
     additionalRoots: "enforced",
@@ -53,9 +56,10 @@ const TRUSTED_PROVIDER_CAPABILITIES: Readonly<Record<ProviderAdapter, Readonly<P
     structuredEvents: "jsonl",
   }),
   codex: Object.freeze<ProviderCapabilities>({
-    // Disabled until the adapter owns an isolated CODEX_HOME and passes the
-    // authenticated conformance suite with inherited MCP configuration present.
-    readOnlyFilesystem: "unsupported",
+    // Read-only launches explicitly ignore user config, mark every possible
+    // project root untrusted, ignore exec-policy rules, and select Codex's
+    // native read-only sandbox. Runtime MCP is also withheld for these roles.
+    readOnlyFilesystem: "enforced",
     workspaceWrites: "enforced",
     additionalRoots: "enforced",
     fullAccess: true,

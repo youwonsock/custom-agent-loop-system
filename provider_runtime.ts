@@ -40,8 +40,13 @@ export interface McpServerConfig {
   timeoutMs?: number;
   /** Explicit capability metadata used for read-only enforcement. */
   tools?: McpToolConfig[];
-  /** Legacy name-only allowlist. It migrates to tools with an unknown side effect. */
+  /** Provider invocation allowlist derived from `tools`; not accepted as capability metadata alone. */
   allowedTools?: string[];
+  /**
+   * Internal trust marker for an ephemeral server constructed by the
+   * orchestrator. Persistent/user configuration is never allowed to set it.
+   */
+  runtimeOwned?: true;
 }
 
 export interface ToolAccessConfig {
@@ -66,8 +71,12 @@ export interface ProviderInvocationOptions {
   webSearchMode?: "cached" | "live";
   mcpServers: McpServerConfig[];
   claudeMcpConfigPath?: string;
+  /** Runtime-owned prompt attachment used to avoid Windows command-line limits. */
+  promptFilePath?: string;
   /** Values resolved by the VS Code SecretStorage bridge. Never persist this map. */
   secretValues?: Record<string, string>;
+  /** Per-attempt name preventing inherited user agent configuration collisions. */
+  readOnlyAgentName?: string;
 }
 
 export interface ProviderInvocation {
@@ -126,8 +135,36 @@ const SAFE_ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const SECRET_REFERENCE = /^\$\{secret:([^}]+)\}$/;
 const ENV_REFERENCE = /^\$\{env:([A-Za-z_][A-Za-z0-9_]*)\}$/;
 
+export const CODEX_DEFAULT_REASONING_EFFORT = "medium";
+export const OPENCODE_READ_ONLY_AGENT = "agent-loop-readonly";
+
+/**
+ * Codex inherits model_reasoning_effort from the operator's global config when
+ * no per-invocation value is supplied. Pin a conservative per-session default
+ * so launches remain reproducible across machines and model selections.
+ */
+export function resolveProviderVariant(
+  adapter: ProviderAdapter,
+  requested: string | undefined
+): string | undefined {
+  const normalized = requested?.trim() || undefined;
+  return adapter === "codex" ? normalized ?? CODEX_DEFAULT_REASONING_EFFORT : normalized;
+}
+
 function tomlString(value: string): string {
   return JSON.stringify(value);
+}
+
+function codexUntrustedProjectOverrides(targetProjectPath: string): string[] {
+  const overrides: string[] = [];
+  let current = path.resolve(targetProjectPath);
+  while (true) {
+    overrides.push(`projects.${tomlString(current)}.trust_level=${tomlString("untrusted")}`);
+    const parent = path.dirname(current);
+    if (parent === current) break;
+    current = parent;
+  }
+  return overrides;
 }
 
 function jsonObject(value: Record<string, string> | undefined): Record<string, string> {
@@ -287,12 +324,12 @@ export function validateToolAccess(input?: Partial<ToolAccessConfig> | null): To
     if (timeoutMs !== undefined && (!Number.isFinite(timeoutMs) || timeoutMs <= 0)) {
       throw new Error(`MCP server ${id} timeoutMs must be positive.`);
     }
-    const legacyAllowedTools = Array.isArray(raw.allowedTools)
-      ? raw.allowedTools.map(String).filter(Boolean)
-      : [];
-    const toolCandidates = Array.isArray(raw.tools)
-      ? raw.tools
-      : legacyAllowedTools.map((name) => ({ name, sideEffect: "unknown" as const }));
+    if (Array.isArray(raw.allowedTools) && !Array.isArray(raw.tools)) {
+      throw new Error(
+        `MCP server ${id} uses the removed name-only allowedTools contract; declare tools with sideEffect.`
+      );
+    }
+    const toolCandidates = Array.isArray(raw.tools) ? raw.tools : [];
     const toolNames = new Set<string>();
     const tools = toolCandidates.map((rawTool) => {
       const name = String(rawTool.name ?? "").trim();
@@ -333,11 +370,7 @@ export function enabledMcpServers(
   );
 }
 
-/**
- * Select only MCP capabilities that the provider can enforce for this role.
- * Name-only legacy entries are `unknown`, so they are never promoted to a
- * read-only capability merely because they were previously allowlisted.
- */
+/** Select only MCP capabilities that the provider can enforce for this role. */
 export function selectMcpServersForInvocation(
   provider: ProviderConfig,
   servers: readonly McpServerConfig[],
@@ -354,7 +387,25 @@ export function selectMcpServersForInvocation(
     trustedCapabilities.mcpIsolation !== "explicit" ||
     trustedCapabilities.readOnlyMcpToolFiltering !== "enforced"
   ) {
-    return [];
+    // OpenCode cannot prove that inherited user/project MCP configuration is
+    // absent. It may nevertheless receive a narrowly scoped server that this
+    // process constructed itself: the runtime agent denies every unknown tool
+    // and explicitly re-enables only the server's classified read-only tools.
+    // Persisted configuration cannot manufacture this marker because
+    // validateToolAccess deliberately omits it.
+    if (provider.adapter !== "opencode") return [];
+    return servers
+      .filter((server) => server.runtimeOwned === true)
+      .flatMap((server) => {
+        const tools = (server.tools ?? []).filter((tool) => tool.sideEffect === "read_only");
+        if (tools.length === 0) return [];
+        return [{
+          ...server,
+          args: [...(server.args ?? [])],
+          tools: tools.map((tool) => ({ ...tool })),
+          allowedTools: tools.map((tool) => tool.name),
+        }];
+      });
   }
   return servers.flatMap((server) => {
     const tools = (server.tools ?? []).filter((tool) => tool.sideEffect === "read_only");
@@ -418,7 +469,7 @@ export function claudeMcpDocument(servers: McpServerConfig[]): { mcpServers: Rec
   return { mcpServers };
 }
 
-function opencodeMcpDocument(servers: McpServerConfig[], enabledKey: "enabled" | "disabled"): Record<string, unknown> {
+function opencodeMcpDocument(servers: McpServerConfig[]): Record<string, unknown> {
   const mapped: Record<string, unknown> = {};
   for (const server of servers) {
     mapped[server.id] = server.type === "remote"
@@ -426,16 +477,32 @@ function opencodeMcpDocument(servers: McpServerConfig[], enabledKey: "enabled" |
           type: "remote",
           url: server.url,
           headers: server.headers ?? {},
-          [enabledKey]: enabledKey === "enabled" ? true : false,
+          enabled: true,
+          ...(server.timeoutMs ? { timeout: server.timeoutMs } : {}),
         }
       : {
           type: "local",
           command: [server.command, ...(server.args ?? [])],
           environment: server.environment ?? {},
-          [enabledKey]: enabledKey === "enabled" ? true : false,
+          enabled: true,
+          ...(server.timeoutMs ? { timeout: server.timeoutMs } : {}),
         };
   }
   return mapped;
+}
+
+function opencodeToolName(value: string): string {
+  return value.replace(/[^A-Za-z0-9_-]/g, "_");
+}
+
+function opencodeReadOnlyMcpToolNames(opts: ProviderInvocationOptions): string[] {
+  if (!opts.readOnly) return [];
+  return opts.mcpServers.flatMap((server) => {
+    if (server.runtimeOwned !== true) return [];
+    return (server.tools ?? [])
+      .filter((tool) => tool.sideEffect === "read_only")
+      .map((tool) => `${opencodeToolName(server.id)}_${opencodeToolName(tool.name)}`);
+  });
 }
 
 function externalDirectoryPermission(paths: readonly string[]): Record<string, "allow"> {
@@ -459,7 +526,127 @@ function opencodePermissionDocument(opts: ProviderInvocationOptions): Record<str
   });
   const additional = externalDirectoryPermission(opts.additionalAllowedPaths ?? []);
   if (Object.keys(additional).length > 0) permission.external_directory = additional;
+  for (const toolName of opencodeReadOnlyMcpToolNames(opts)) {
+    permission[toolName] = "allow";
+  }
   return permission;
+}
+
+/**
+ * OpenCode-family global permissions are merged before the selected agent's
+ * own permissions. A user/default agent can therefore re-enable bash or edit
+ * after a top-level deny. Select a runtime-owned agent whose final tool map and
+ * permission layer both deny mutation and delegation surfaces.
+ */
+function opencodeReadOnlyAgentPermission(
+  opts: ProviderInvocationOptions
+): Record<string, unknown> {
+  const permission = opencodePermissionDocument(opts);
+  // OpenCode-family CLIs normalize a custom-agent wildcard to the end of its
+  // rule list, after explicit read allows, which disables every tool. Keep the
+  // top-level fail-closed wildcard and make the final agent layer explicit.
+  delete permission["*"];
+  permission.external_directory = {
+    "*": "deny",
+    ...externalDirectoryPermission(opts.additionalAllowedPaths ?? []),
+  };
+  Object.assign(permission, {
+    bash: "deny",
+    edit: "deny",
+    write: "deny",
+    patch: "deny",
+    apply_patch: "deny",
+    task: "deny",
+    todowrite: "deny",
+    skill: "deny",
+    question: "deny",
+    suggest: "deny",
+    recall: "deny",
+    kilo_local_recall: "deny",
+    lsp: "deny",
+  });
+  return permission;
+}
+
+function opencodeReadOnlyAgentDocument(
+  opts: ProviderInvocationOptions
+): Record<string, unknown> {
+  const mcpTools = Object.fromEntries(
+    opencodeReadOnlyMcpToolNames(opts).map((toolName) => [toolName, true])
+  );
+  return {
+    description: "Agent Loop enforced read-only role",
+    mode: "primary",
+    prompt: [
+      "You are a read-only role inside an orchestrated workflow.",
+      "The supplied user prompt contains the authoritative role, goal, and output contract; follow it exactly.",
+      `Inspect only the target project directory (${path.resolve(opts.targetProjectPath)}) and explicitly approved additional paths; never inspect parent or sibling directories.`,
+      "Return the requested structured response in assistant text and include every required final token or verdict.",
+      "Do not replace the requested task with generic workspace-management conventions, CurrentWork templates, or sibling-project patterns.",
+      "Never claim the task is unspecified when the prompt contains an ORIGINAL USER GOAL.",
+      "Use only explicitly enabled read or research tools, and do not ask to create planning files.",
+    ].join(" "),
+    tools: {
+      "*": false,
+      bash: false,
+      background_process: false,
+      edit: false,
+      write: false,
+      patch: false,
+      apply_patch: false,
+      task: false,
+      todowrite: false,
+      skill: false,
+      question: false,
+      suggest: false,
+      recall: false,
+      kilo_local_recall: false,
+      lsp: false,
+      read: true,
+      glob: true,
+      grep: true,
+      list: true,
+      codebase_search: true,
+      semantic_search: true,
+      webfetch: opts.webSearch,
+      websearch: opts.webSearch,
+      ...mcpTools,
+    },
+    permission: opencodeReadOnlyAgentPermission(opts),
+  };
+}
+
+/**
+ * Kilo's `run [message..]` receives positional arguments through a PTY. On
+ * Windows, embedded CR/LF characters in one argument can be interpreted by
+ * the ConPTY command-line layer, leaving Kilo with only the first line. U+2028
+ * preserves the prompt's line boundaries for the model without introducing a
+ * command separator or moving the prompt into the size-limited environment.
+ */
+function kiloPromptArgument(prompt: string): string {
+  return prompt.replace(/\r\n|\r|\n/g, "\u2028");
+}
+
+const KILO_ATTACHED_PROMPT_MESSAGE =
+  "Read the attached Agent Loop prompt file in full. It is the complete authoritative instruction set for this attempt. Follow every contract in it exactly and emit all required completion markers.";
+
+function addOpenCodeReadOnlyAgent(
+  runtime: Record<string, unknown>,
+  opts: ProviderInvocationOptions,
+  agentName: string
+): void {
+  if (!opts.readOnly) return;
+  runtime.agent = {
+    [agentName]: opencodeReadOnlyAgentDocument(opts),
+  };
+}
+
+function readOnlyAgentName(opts: ProviderInvocationOptions): string {
+  const value = opts.readOnlyAgentName?.trim() || OPENCODE_READ_ONLY_AGENT;
+  if (!SAFE_ID.test(value)) {
+    throw new Error(`Unsafe runtime read-only agent name: ${value}`);
+  }
+  return value;
 }
 
 function codexHeaderEnvName(serverId: string, header: string): string {
@@ -531,18 +718,22 @@ export function buildProviderInvocation(
   );
   assertProviderInvocationSupported(provider, opts, selectedMcpServers);
   const mcpServers = resolveMcpServerSecrets(selectedMcpServers, opts.secretValues);
+  const variant = resolveProviderVariant(provider.adapter, opts.variant);
+  const runtimeReadOnlyAgent = readOnlyAgentName(opts);
   let args: string[];
   switch (provider.adapter) {
     case "opencode": {
       args = ["run", "--format", "json", "--model", opts.model, "--dir", opts.targetProjectPath];
       if (opts.fullAccess && !opts.readOnly) args.push("--dangerously-skip-permissions");
-      if (opts.variant) args.push("--variant", opts.variant);
+      if (opts.readOnly) args.push("--pure", "--agent", runtimeReadOnlyAgent);
+      if (variant) args.push("--variant", variant);
       if (opts.resumeSessionId) args.push("--session", opts.resumeSessionId);
       const runtime: Record<string, unknown> = { permission: opencodePermissionDocument(opts) };
+      addOpenCodeReadOnlyAgent(runtime, { ...opts, mcpServers }, runtimeReadOnlyAgent);
       if (opts.webSearch) {
         env.OPENCODE_ENABLE_EXA = "1";
       }
-      if (mcpServers.length > 0) runtime.mcp = { servers: opencodeMcpDocument(mcpServers, "disabled") };
+      if (mcpServers.length > 0) runtime.mcp = opencodeMcpDocument(mcpServers);
       if (Object.keys(runtime).length > 0) env.OPENCODE_CONFIG_CONTENT = JSON.stringify(runtime);
       args.push(opts.prompt);
       break;
@@ -550,18 +741,38 @@ export function buildProviderInvocation(
     case "kilo": {
       args = ["run", "--pure", "--format", "json", "--model", opts.model, "--dir", opts.targetProjectPath];
       if (opts.fullAccess && !opts.readOnly) args.push("--auto");
-      if (opts.variant) args.push("--variant", opts.variant);
+      if (opts.readOnly) args.push("--agent", runtimeReadOnlyAgent);
+      if (variant) args.push("--variant", variant);
       if (opts.resumeSessionId) args.push("--session", opts.resumeSessionId);
       const runtime: Record<string, unknown> = { permission: opencodePermissionDocument(opts) };
-      if (mcpServers.length > 0) runtime.mcp = opencodeMcpDocument(mcpServers, "enabled");
+      addOpenCodeReadOnlyAgent(runtime, { ...opts, mcpServers }, runtimeReadOnlyAgent);
+      if (mcpServers.length > 0) runtime.mcp = opencodeMcpDocument(mcpServers);
       if (Object.keys(runtime).length > 0) env.KILO_CONFIG_CONTENT = JSON.stringify(runtime);
-      args.push(opts.prompt);
+      if (opts.promptFilePath) {
+        // Kilo declares --file as an array option and greedily consumes later
+        // non-option arguments. Put the positional authority message first and
+        // leave the file option last so it receives exactly one path.
+        args.push(KILO_ATTACHED_PROMPT_MESSAGE, "--file", path.resolve(opts.promptFilePath));
+      } else {
+        args.push(kiloPromptArgument(opts.prompt));
+      }
       break;
     }
     case "codex": {
       const globalArgs: string[] = [];
       if (opts.webSearch && opts.webSearchMode === "live") globalArgs.push("--search");
+      if (opts.readOnly) globalArgs.push("--ask-for-approval", "never");
       args = [...globalArgs, "exec", "--json", "--model", opts.model, "--skip-git-repo-check"];
+      if (opts.readOnly) {
+        // Authentication still comes from CODEX_HOME, but no user-configured
+        // MCP, plugins, hooks, or rules may enter a read-only role. Project
+        // config is a separate layer, so mark the target and every possible
+        // ancestor project root untrusted with highest-precedence CLI values.
+        args.push("--ignore-user-config", "--ignore-rules");
+        for (const override of codexUntrustedProjectOverrides(opts.targetProjectPath)) {
+          args.push("-c", override);
+        }
+      }
       args.push(
         "--sandbox",
         opts.readOnly ? "read-only" : opts.fullAccess ? "danger-full-access" : "workspace-write"
@@ -572,7 +783,7 @@ export function buildProviderInvocation(
       if (opts.webSearch) {
         if (opts.webSearchMode !== "live") args.push("-c", `web_search=${tomlString("cached")}`);
       }
-      if (opts.variant) args.push("-c", `model_reasoning_effort=${tomlString(opts.variant)}`);
+      if (variant) args.push("-c", `model_reasoning_effort=${tomlString(variant)}`);
       const codexMcp = codexMcpRuntime(mcpServers);
       args.push(...codexMcp.args);
       Object.assign(env, codexMcp.env);

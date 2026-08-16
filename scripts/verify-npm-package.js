@@ -109,6 +109,12 @@ try {
     "dist/loop_orchestrator.js",
     "dist/process_supervisor.js",
     "dist/protocol_contract.json",
+    "agents.json",
+    "agents.schema.json",
+    "tasks.json",
+    "tasks.schema.json",
+    "workflow.json",
+    "workflow.schema.json",
     "scripts/fix-pty-permissions.js",
   ]) {
     if (!files.includes(required)) fail(`Installed artifact is missing ${required}.`);
@@ -138,7 +144,7 @@ try {
       "const event = {",
       "  type: 'text',",
       "  id: 'npm-supervisor-smoke',",
-      "  part: { id: 'npm-supervisor-smoke', text: 'AGENT_LOOP_SUPERVISOR_OK\\n[PHASE_DONE]' },",
+      "  part: { id: 'npm-supervisor-smoke', text: 'AGENT_LOOP_SUPERVISOR_OK' },",
       "};",
       "process.stdout.write(JSON.stringify(event) + '\\n');",
     ].join("\n"),

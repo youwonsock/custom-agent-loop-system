@@ -21,8 +21,10 @@ test("core, generated extension runtime, and VS Code manifest share canonical de
     assert.deepEqual(properties[`agentLoop.${key}`]?.default, value, `manifest default drift: ${key}`);
   }
   for (const [canonicalName, generatedName] of [
-    ["agent_roles.json", "generated_agent_roles.json"],
-    ["agent_loop.json", "generated_agent_loop.json"],
+    ["agents.json", "generated_agents.json"],
+    ["tasks.json", "generated_tasks.json"],
+    ["workflow.json", "generated_workflow.json"],
+    ["protocol_contract.json", "generated_protocol_contract.json"],
   ]) {
     const canonical = JSON.parse(await fs.readFile(path.join(root, canonicalName), "utf8"));
     const generated = JSON.parse(await fs.readFile(
@@ -38,12 +40,12 @@ test("runtime config deep-merges path/default sections from one core source", as
   try {
     await fs.writeFile(path.join(root, "loop_config.json"), JSON.stringify({
       paths: { sessionFileNames: { plan: "custom-plan.md" } },
-      defaults: { maxIterations: 7 },
+      defaults: { maxCycles: 7 },
     }), "utf8");
     const config = await loadLoopConfig(root);
     assert.equal(config.paths.sessionFileNames.plan, "custom-plan.md");
-    assert.equal(config.paths.sessionFileNames.state, "loop_state.json");
-    assert.equal(config.defaults.maxIterations, 7);
+    assert.equal(config.paths.sessionFileNames.state, "run_projection.json");
+    assert.equal(config.defaults.maxCycles, 7);
     assert.equal(config.defaults.transportTimeoutMs, getDefaultConfig().defaults.transportTimeoutMs);
   } finally {
     await fs.rm(root, { recursive: true, force: true });
@@ -101,7 +103,7 @@ test("runtime config rejects data paths that escape the configured root", async 
   }
 });
 
-test("runtime config enforces timeout and recovery-budget relationships", async () => {
+test("runtime config enforces provider timeout relationships", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "agent-loop-config-timeout-"));
   try {
     await fs.writeFile(path.join(root, "loop_config.json"), JSON.stringify({
@@ -109,18 +111,6 @@ test("runtime config enforces timeout and recovery-budget relationships", async 
     }), "utf8");
     await assert.rejects(loadLoopConfig(root), /transportTimeoutMs must not exceed/);
 
-    await fs.writeFile(path.join(root, "loop_config.json"), JSON.stringify({
-      defaults: {
-        phaseTimeoutMs: 10_000,
-        idleTimeoutMs: 5_000,
-        transportTimeoutMs: 5_000,
-        toolTimeoutMs: 5_000,
-        maxAgentAttempts: 3,
-        retryBackoffMs: [1_000, 2_000],
-        phaseRecoveryBudgetMs: 30_000,
-      },
-    }), "utf8");
-    await assert.rejects(loadLoopConfig(root), /phaseRecoveryBudgetMs must cover/);
   } finally {
     await fs.rm(root, { recursive: true, force: true });
   }

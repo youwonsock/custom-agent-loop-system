@@ -6,8 +6,10 @@ const path = require("node:path");
 const root = path.resolve(__dirname, "..");
 const mappings = [
   ["runtime_defaults.json", "generated_runtime_defaults.json"],
-  ["agent_roles.json", "generated_agent_roles.json"],
-  ["agent_loop.json", "generated_agent_loop.json"],
+  ["agents.json", "generated_agents.json"],
+  ["tasks.json", "generated_tasks.json"],
+  ["workflow.json", "generated_workflow.json"],
+  ["protocol_contract.json", "generated_protocol_contract.json"],
 ];
 const stale = [];
 for (const [sourceName, destinationName] of mappings) {

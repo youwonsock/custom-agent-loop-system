@@ -42,7 +42,7 @@ export interface LoopPathsConfig {
 
 export interface LoopDefaultsConfig {
   cliBinary: string;
-  maxIterations: number;
+  maxCycles: number;
   phaseTimeoutMs: number;
   idleTimeoutMs: number;
   ptyCols: number;
@@ -51,11 +51,7 @@ export interface LoopDefaultsConfig {
   transportTimeoutMs: number;
   toolTimeoutMs: number;
   maxAgentAttempts: number;
-  maxCompletionRecoveryAttempts: number;
-  maxAutomaticRecoveryCycles: number;
-  automaticRecoveryBackoffMs: number[];
   retryBackoffMs: number[];
-  phaseRecoveryBudgetMs: number;
   terminationGraceMs: number;
   killTimeoutMs: number;
   heartbeatIntervalMs: number;
@@ -89,7 +85,7 @@ export function getDefaultConfig(): LoopConfig {
       variantsConfigFileName: "model_variants.json",
       loopHistoryDirName: "loop_history",
       sessionFileNames: {
-        state: "loop_state.json",
+        state: "run_projection.json",
         progressNotes: "progress_notes.txt",
         finalSummary: "final_summary.json",
         plan: "plan.md",
@@ -122,7 +118,7 @@ export function getDefaultConfig(): LoopConfig {
     },
     defaults: {
       cliBinary: "opencode",
-      maxIterations: RUNTIME_DEFAULTS.maxIterations,
+      maxCycles: RUNTIME_DEFAULTS.maxCycles,
       phaseTimeoutMs: RUNTIME_DEFAULTS.phaseTimeoutMs,
       idleTimeoutMs: RUNTIME_DEFAULTS.idleTimeoutMs,
       ptyCols: 200,
@@ -135,11 +131,7 @@ export function getDefaultConfig(): LoopConfig {
       transportTimeoutMs: RUNTIME_DEFAULTS.transportTimeoutMs,
       toolTimeoutMs: RUNTIME_DEFAULTS.toolTimeoutMs,
       maxAgentAttempts: RUNTIME_DEFAULTS.maxAgentAttempts,
-      maxCompletionRecoveryAttempts: RUNTIME_DEFAULTS.maxCompletionRecoveryAttempts,
-      maxAutomaticRecoveryCycles: RUNTIME_DEFAULTS.maxAutomaticRecoveryCycles,
-      automaticRecoveryBackoffMs: [...RUNTIME_DEFAULTS.automaticRecoveryBackoffMs],
       retryBackoffMs: [...RUNTIME_DEFAULTS.retryBackoffMs],
-      phaseRecoveryBudgetMs: RUNTIME_DEFAULTS.phaseRecoveryBudgetMs,
       terminationGraceMs: RUNTIME_DEFAULTS.terminationGraceMs,
       killTimeoutMs: RUNTIME_DEFAULTS.killTimeoutMs,
       heartbeatIntervalMs: RUNTIME_DEFAULTS.heartbeatIntervalMs,
@@ -272,7 +264,7 @@ function validateMergedConfig(config: LoopConfig): LoopConfig {
     throw new Error("defaults.cliBinary must be a non-empty string.");
   }
   for (const key of [
-    "maxIterations",
+    "maxCycles",
     "phaseTimeoutMs",
     "idleTimeoutMs",
     "ptyCols",
@@ -280,22 +272,15 @@ function validateMergedConfig(config: LoopConfig): LoopConfig {
     "transportTimeoutMs",
     "toolTimeoutMs",
     "maxAgentAttempts",
-    "maxCompletionRecoveryAttempts",
-    "maxAutomaticRecoveryCycles",
-    "phaseRecoveryBudgetMs",
     "terminationGraceMs",
     "killTimeoutMs",
     "heartbeatIntervalMs",
     "leaseTtlMs",
     "maxInMemoryOutputBytes",
   ] as const) {
-    const minimum = key === "maxCompletionRecoveryAttempts" || key === "maxAutomaticRecoveryCycles" ? 0 : 1;
-    assertPositiveInteger(defaults[key], `defaults.${key}`, minimum);
+    assertPositiveInteger(defaults[key], `defaults.${key}`, 1);
   }
-  for (const [key, values] of [
-    ["automaticRecoveryBackoffMs", defaults.automaticRecoveryBackoffMs],
-    ["retryBackoffMs", defaults.retryBackoffMs],
-  ] as const) {
+  for (const [key, values] of [["retryBackoffMs", defaults.retryBackoffMs]] as const) {
     if (!Array.isArray(values) || values.some((value) => !Number.isSafeInteger(value) || value < 0)) {
       throw new Error(`defaults.${key} must contain only non-negative integer milliseconds.`);
     }
@@ -314,18 +299,6 @@ function validateMergedConfig(config: LoopConfig): LoopConfig {
   }
   if (defaults.terminationGraceMs > defaults.killTimeoutMs) {
     throw new Error("defaults.terminationGraceMs must not exceed defaults.killTimeoutMs.");
-  }
-  let scheduledRetryMs = 0;
-  for (let index = 0; index < defaults.maxAgentAttempts - 1; index += 1) {
-    scheduledRetryMs += defaults.retryBackoffMs.length > 0
-      ? defaults.retryBackoffMs[Math.min(index, defaults.retryBackoffMs.length - 1)]
-      : 0;
-  }
-  const minimumRecoveryBudget = defaults.phaseTimeoutMs * defaults.maxAgentAttempts + scheduledRetryMs;
-  if (defaults.phaseRecoveryBudgetMs < minimumRecoveryBudget) {
-    throw new Error(
-      `defaults.phaseRecoveryBudgetMs must cover all attempts and backoff (${minimumRecoveryBudget}ms minimum).`
-    );
   }
   if (defaults.maxInMemoryOutputBytes < 1024) {
     throw new Error("defaults.maxInMemoryOutputBytes must be at least 1024 bytes.");

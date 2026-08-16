@@ -1,8 +1,8 @@
 {
   "name": "agent-loop-vscode",
   "displayName": "Agent Loop Orchestrator",
-  "description": "VS Code extension that controls the Custom Agent Loop System CLI to autonomously achieve coding goals via a multi-model multi-session orchestrator.",
-  "version": "3.4.1",
+  "description": "VS Code operator UI for the v4 Agent-Task workflow orchestrator and its read-only run projections.",
+  "version": "4.0.0",
   "publisher": "custom-agent-loop",
   "license": "MIT",
   "repository": {
@@ -181,10 +181,10 @@
           "restricted": true,
           "description": "Explicit path to the compiled loop_orchestrator.js. Empty = use the extension-bundled core."
         },
-        "agentLoop.maxIterations": {
+        "agentLoop.maxCycles": {
           "type": "number",
           "default": 20,
-          "description": "Maximum loop iterations before the session is marked FAILED."
+          "description": "Maximum implementation-to-review cycles before the workflow budget is exhausted."
         },
         "agentLoop.phaseTimeoutMs": {
           "type": "number",
@@ -209,45 +209,12 @@
           "minimum": 1,
           "description": "Initial no-output timeout in milliseconds."
         },
-        "agentLoop.phaseRecoveryBudgetMs": {
-          "type": "number",
-          "default": 2880000,
-          "minimum": 1,
-          "description": "Total automatic recovery budget for one agent role."
-        },
         "agentLoop.maxAgentAttempts": {
           "type": "number",
           "default": 3,
           "minimum": 1,
           "maximum": 10,
           "description": "Maximum automatic attempts per agent role."
-        },
-        "agentLoop.maxCompletionRecoveryAttempts": {
-          "type": "number",
-          "default": 1,
-          "minimum": 0,
-          "maximum": 3,
-          "description": "Extra fresh-session attempt used only when the final normal attempt exits cleanly without satisfying the completion contract."
-        },
-        "agentLoop.maxAutomaticRecoveryCycles": {
-          "type": "number",
-          "default": 3,
-          "minimum": 0,
-          "maximum": 10,
-          "description": "Automatic delayed recovery cycles for transient transport failures that show no meaningful model-token consumption."
-        },
-        "agentLoop.automaticRecoveryBackoffMs": {
-          "type": "array",
-          "items": {
-            "type": "number",
-            "minimum": 1
-          },
-          "default": [
-            60000,
-            300000,
-            900000
-          ],
-          "description": "Delay per automatic transient-recovery cycle in milliseconds. The last value is reused for additional cycles."
         },
         "agentLoop.retryBackoffMs": {
           "type": "array",
@@ -301,7 +268,7 @@
   },
   "scripts": {
     "vscode:prepublish": "npm --prefix .. run build && node ../scripts/bundle-core-for-vsix.js && npm run compile",
-    "precompile": "node ../scripts/sync-runtime-defaults.js",
+    "precompile": "node ../scripts/sync-runtime-defaults.js && node scripts/clean-build.js",
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
     "typecheck": "tsc -p ./ --noEmit",

@@ -431,7 +431,7 @@ async function verifyBundledSupervisor(extensionPath) {
       "const event = {",
       "  type: 'text',",
       "  id: 'vsix-supervisor-smoke',",
-      "  part: { id: 'vsix-supervisor-smoke', text: 'AGENT_LOOP_SUPERVISOR_OK\\n[PHASE_DONE]' },",
+      "  part: { id: 'vsix-supervisor-smoke', text: 'AGENT_LOOP_SUPERVISOR_OK' },",
       "};",
       "process.stdout.write(JSON.stringify(event) + '\\n');",
     ].join("\n"),
@@ -502,6 +502,19 @@ async function main() {
     const bundleManifestPath = path.join(extensionPath, "core", "bundle-manifest.json");
     assertFile(unpackedPackagePath, "extension package.json");
     assertFile(bundleManifestPath, "core bundle manifest");
+    for (const definitionFile of [
+      "agents.json",
+      "agents.schema.json",
+      "tasks.json",
+      "tasks.schema.json",
+      "workflow.json",
+      "workflow.schema.json",
+    ]) {
+      assertFile(
+        path.join(extensionPath, "core", definitionFile),
+        `bundled v4 definition ${definitionFile}`
+      );
+    }
     const packagedSidecars = forbiddenSidecars(extensionPath);
     if (packagedSidecars.length > 0) {
       fail(

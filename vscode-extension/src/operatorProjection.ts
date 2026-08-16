@@ -11,18 +11,13 @@ function nonNegative(value: number): number {
 
 export function remainingExtensionBudgets(
   state: LoopState,
-  nowMs = Date.now()
+  _nowMs = Date.now()
 ): RemainingExecutionBudgets {
-  const maxCycles = nonNegative(state.maxCycles ?? state.maxIterations);
+  const maxCycles = nonNegative(state.maxCycles ?? 0);
   const cyclesStarted = nonNegative(state.cyclesStarted ?? state.loopCount);
   const maxWorkflowSteps = nonNegative(state.maxWorkflowSteps ?? 0);
   const workflowStepsConsumed = nonNegative(state.workflowStepsConsumed ?? 0);
   const activation = state.currentActivation ?? null;
-  const completionRecoveryConsumed = state.activeAttempt?.mode === "completion_recovery"
-    ? nonNegative(state.activeAttempt.completionRecoveryNumber)
-    : 0;
-  const automaticRecoveryConsumed = nonNegative(state.automaticRecovery?.cycle ?? 0);
-  const cycleStartedAt = Date.parse(state.activeAttempt?.cycleStartedAt ?? "");
   return {
     cycles: {
       remaining: Math.max(0, maxCycles - cyclesStarted),
@@ -41,28 +36,6 @@ export function remainingExtensionBudgets(
       consumed: activation?.attemptsReserved ?? null,
       limit: activation?.maxAgentAttempts ?? null,
     },
-    completionRecoveryAttempts: {
-      remaining: Math.max(
-        0,
-        state.resilience.maxCompletionRecoveryAttempts - completionRecoveryConsumed
-      ),
-      consumed: completionRecoveryConsumed,
-      limit: state.resilience.maxCompletionRecoveryAttempts,
-    },
-    automaticRecoveryCycles: {
-      remaining: Math.max(
-        0,
-        state.resilience.maxAutomaticRecoveryCycles - automaticRecoveryConsumed
-      ),
-      consumed: automaticRecoveryConsumed,
-      limit: state.resilience.maxAutomaticRecoveryCycles,
-    },
-    phaseRecoveryMs: {
-      remaining: Number.isFinite(cycleStartedAt)
-        ? Math.max(0, cycleStartedAt + state.resilience.phaseRecoveryBudgetMs - nowMs)
-        : null,
-      limit: state.resilience.phaseRecoveryBudgetMs,
-    },
   };
 }
 
@@ -77,7 +50,6 @@ export function extensionNextPermittedAction(state: LoopState): NextPermittedAct
   if (state.status === "WAITING_USER" && state.awaitingPlanApproval && !state.planApproved) {
     return "approve_plan";
   }
-  if (state.status === "RECOVERING") return "wait_for_recovery";
   if (state.status === "RUNNING") {
     return state.activeAttempt && ["starting", "running", "retry_wait"].includes(state.activeAttempt.status)
       ? "wait_for_attempt"

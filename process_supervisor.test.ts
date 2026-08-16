@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import * as path from "node:path";
+import { isInteractiveAccessPrompt, matchesConfiguredPrompt } from "./process_supervisor";
 
 interface CaseResult {
   pid: number;
@@ -81,6 +82,14 @@ test("raw prompt echo cannot become assistant completion", async () => {
   assert.equal(result.assistantText, "");
 });
 
+test("malformed machine-readable provider events fail closed", async () => {
+  const result = await runFake("malformed-structured-event");
+  assert.equal(result.outcome, "process_exit");
+  assert.equal(result.failureKind, "process_exit");
+  assert.match(result.failureMessage ?? "", /malformed structured event/i);
+  assert.match(result.assistantText, /\[PHASE_DONE\]/);
+});
+
 test("configured secrets are redacted from raw logs and assistant text", async () => {
   const result = await runFake("secret-echo");
   assert.equal(result.outcome, "succeeded");
@@ -95,6 +104,15 @@ test("configured secrets remain redacted when split across PTY chunks", async ()
   assert.equal(result.rawLogIncludesSecret, false);
   assert.equal(result.assistantText.includes("top-secret"), false);
   assert.match(result.assistantText, /\[REDACTED\]/);
+});
+
+test("configured secrets remain redacted when PTY wrapping splits a reconstructed JSON value", async () => {
+  const result = await runFake("wrapped-secret-echo", { cols: 15 });
+  assert.equal(result.outcome, "succeeded");
+  assert.equal(result.rawLogIncludesSecret, false);
+  assert.equal(result.assistantText.includes("top-secret"), false);
+  assert.match(result.assistantText, /\[REDACTED\]/);
+  assert.match(result.assistantText, /\[PHASE_DONE\]/);
 });
 
 test("PTY-wrapped JSON events are reassembled before assistant parsing", async () => {
@@ -133,6 +151,52 @@ test("generic text confirmations are denied without injecting an affirmative res
   assert.match(result.failureMessage ?? "", /automatic approval is disabled/i);
   assert.equal(result.autoInjectedCount, 0);
   assert.equal(result.assistantText.includes("Unsafe confirmation was accepted"), false);
+});
+
+test("configured destructive prompts use identifier boundaries", () => {
+  assert.equal(matchesConfiguredPrompt("Destroy generated files? [y/n]", "Destroy"), true);
+  assert.equal(matchesConfiguredPrompt("Delete target?", "Delete"), true);
+  assert.equal(
+    matchesConfiguredPrompt(
+      "opencode uninstall           uninstall opencode and remove all related files",
+      "uninstall"
+    ),
+    false
+  );
+  assert.equal(
+    matchesConfiguredPrompt("opencode uninstall? Continue? [y/n]", "uninstall"),
+    true
+  );
+  assert.equal(matchesConfiguredPrompt("npm error at _destroy (node:_http_client:898:9)", "Destroy"), false);
+  assert.equal(matchesConfiguredPrompt("Previously destroyed cache entry", "Destroy"), false);
+  assert.equal(matchesConfiguredPrompt("pending.delete(data.id);", "Delete"), false);
+  assert.equal(matchesConfiguredPrompt("pending?.delete (data.id);", "Delete"), false);
+  assert.equal(
+    matchesConfiguredPrompt(
+      "const send=(method,params={})=>new Promise((res,rej)=>{const req=id++; const t=setTimeout(()=>{delete pending[req]; rej(new Error('timeout '+method));},8000);",
+      "Delete"
+    ),
+    false
+  );
+  assert.equal(matchesConfiguredPrompt("delete cache.entries[key];", "Delete"), false);
+  assert.equal(
+    matchesConfiguredPrompt(
+      "connection: { abort: null, destroyed: true, destroy: [Function: destroy] },",
+      "Destroy"
+    ),
+    false
+  );
+});
+
+test("completed automatic access denials are not treated as interactive prompts", () => {
+  assert.equal(isInteractiveAccessPrompt("Permission access is required. Continue? [y/n]"), true);
+  assert.equal(
+    isInteractiveAccessPrompt(
+      "! permission requested: external_directory (C:\\Users\\a\\AppData\\Local\\Temp\\*); auto-rejecting"
+    ),
+    false
+  );
+  assert.equal(isInteractiveAccessPrompt("External directory access was denied"), false);
 });
 
 test("control queue polling errors stop the provider instead of being ignored", async () => {
@@ -248,7 +312,7 @@ test("forced termination handles a process that ignores graceful signals", async
   assert.equal(result.outcome, "transport_timeout");
 });
 
-test("forced termination contains grandchildren in the provider process tree", async () => {
+test("forced termination contains grandchildren before the PTY root can orphan them", async () => {
   const result = await runFake("spawn-child", {
     transport: 400,
     idle: 1_000,

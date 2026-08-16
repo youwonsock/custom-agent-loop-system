@@ -12,8 +12,6 @@ const roots = {
   configRoot: "/config",
   projectRoot: "/project",
   dataRoot: "/data",
-  legacyRoot: null,
-  warnings: [],
 };
 
 test("core handshake exposes the shared protocol, roots, and required capabilities", () => {
@@ -34,4 +32,3 @@ test("core handshake rejects protocol and capability mismatches", () => {
     /missing required capabilities/
   );
 });
-

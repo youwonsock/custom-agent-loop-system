@@ -12,6 +12,16 @@ if (!npmCli) throw new Error("npm_execpath is unavailable; run this script throu
 
 const artifactDirectory = path.join(root, "artifacts", "npm");
 fs.mkdirSync(artifactDirectory, { recursive: true });
+const artifactPrefix = `${packageJson.name.replace(/^@/, "").replaceAll("/", "-")}-`;
+for (const entry of fs.readdirSync(artifactDirectory, { withFileTypes: true })) {
+  if (
+    entry.isFile() &&
+    entry.name.startsWith(artifactPrefix) &&
+    /\.tgz(?:\.(?:sha256|manifest\.json|cdx\.json))?$/.test(entry.name)
+  ) {
+    fs.rmSync(path.join(artifactDirectory, entry.name), { force: true });
+  }
+}
 const result = spawnSync(
   process.execPath,
   [
@@ -44,8 +54,12 @@ for (const required of [
   "dist/loop_orchestrator.js",
   "dist/process_supervisor.js",
   "dist/protocol_contract.json",
-  "agent_roles.json",
-  "agent_loop.json",
+  "agents.json",
+  "agents.schema.json",
+  "tasks.json",
+  "tasks.schema.json",
+  "workflow.json",
+  "workflow.schema.json",
   "loop_config.schema.json",
   "scripts/fix-pty-permissions.js",
 ]) {

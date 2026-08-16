@@ -100,6 +100,20 @@ class StreamingRedactor {
     return this.consume(combined, combined.length);
   }
 
+  /**
+   * PTYs may insert visual line wraps inside a secret. JSON reassembly removes
+   * those wraps before parsing, so apply the same patterns once more to the
+   * complete reconstructed record before it enters persisted event state.
+   */
+  redactComplete(value: string): string {
+    let redacted = value;
+    for (const pattern of this.patterns) {
+      if (!redacted.includes(pattern)) continue;
+      redacted = redacted.split(pattern).join(fixedLengthRedaction(pattern.length));
+    }
+    return redacted;
+  }
+
   private consume(combined: string, safeBoundary: number): string {
     let index = 0;
     let output = "";
@@ -215,6 +229,10 @@ export function stripTerminalControlSequences(value: string): string {
 export function isInteractiveAccessPrompt(value: string): boolean {
   const normalized = stripTerminalControlSequences(value).replace(/\s+/g, " ").trim();
   if (!normalized) return false;
+  if (
+    /\bauto(?:matically)?[- ]?reject(?:ed|ing)?\b/i.test(normalized) ||
+    /\b(?:permission|access|request)\s+(?:was\s+)?(?:denied|rejected)\b/i.test(normalized)
+  ) return false;
   return (
     /(?:allow|grant)\b.{0,120}(?:\[y\/n\]|\(y\/n\)|yes\/no)/i.test(normalized) ||
     /(?:permission|access)\s+(?:is\s+)?(?:required|requested|needed)/i.test(normalized) ||
@@ -229,6 +247,67 @@ export function isInteractiveConfirmationPrompt(value: string): boolean {
     /(?:\[|\()(?:y\s*\/\s*n|yes\s*\/\s*no)(?:\]|\))/i.test(normalized) ||
     /\b(?:continue|proceed|confirm|apply|overwrite|execute|run command|allow)\b.{0,80}(?:\(y\)|\[y\]|type y|enter y)/i.test(normalized)
   );
+}
+
+function isCliHelpCommandRow(value: string): boolean {
+  const normalized = stripTerminalControlSequences(value).trim();
+  if (!normalized) return false;
+  if (/\?|(?:\[|\()(?:y\s*\/\s*n|yes\s*\/\s*no)(?:\]|\))/i.test(normalized)) {
+    return false;
+  }
+  // Typical CLI help uses a command signature, a column-sized whitespace gap,
+  // and a description. Destructive words in that signature describe available
+  // subcommands; they are not an interactive request to execute one.
+  return /^(?:[a-z0-9][a-z0-9_.-]*)(?:\s+(?:[a-z0-9][a-z0-9_.-]*|<[^>\r\n]+>|\[[^\]\r\n]+\])){1,8}\s{2,}\S/i.test(
+    normalized
+  );
+}
+
+export function matchesConfiguredPrompt(line: string, configuredPrompt: string): boolean {
+  const normalizedLine = stripTerminalControlSequences(line).toLowerCase();
+  const needle = configuredPrompt.trim().toLowerCase();
+  if (!needle) return false;
+  if (isCliHelpCommandRow(normalizedLine)) return false;
+  const identifierChar = /[a-z0-9_]/;
+  let cursor = 0;
+  while (cursor <= normalizedLine.length - needle.length) {
+    const index = normalizedLine.indexOf(needle, cursor);
+    if (index < 0) return false;
+    const before = index > 0 ? normalizedLine[index - 1] : "";
+    const afterIndex = index + needle.length;
+    const after = afterIndex < normalizedLine.length ? normalizedLine[afterIndex] : "";
+    const startsWithIdentifier = identifierChar.test(needle[0]);
+    const endsWithIdentifier = identifierChar.test(needle[needle.length - 1]);
+    const leftBoundary = !startsWithIdentifier || !identifierChar.test(before);
+    const rightBoundary = !endsWithIdentifier || !identifierChar.test(after);
+    // Provider diagnostics can echo source lines. A destructive keyword used
+    // as a member call (for example `pending.delete(data.id)`) is code, not an
+    // interactive authorization prompt. Keep ordinary prose such as "Delete
+    // target?" matched, including configured multi-word phrases.
+    const memberCall =
+      startsWithIdentifier &&
+      before === "." &&
+      /^\s*\(/.test(normalizedLine.slice(afterIndex));
+    const propertyLabel = /^\s*:/.test(normalizedLine.slice(afterIndex));
+    const functionReference = /\[\s*function\s*:\s*$/.test(
+      normalizedLine.slice(Math.max(0, index - 32), index)
+    );
+    const javascriptUnaryDelete =
+      needle === "delete" &&
+      /^\s+[a-z_$][a-z0-9_$]*\s*(?:\[|\?\.|\.)/i.test(
+        normalizedLine.slice(afterIndex)
+      );
+    if (
+      leftBoundary &&
+      rightBoundary &&
+      !memberCall &&
+      !propertyLabel &&
+      !functionReference &&
+      !javascriptUnaryDelete
+    ) return true;
+    cursor = index + 1;
+  }
+  return false;
 }
 
 function appendRing(current: string, chunk: string, maxBytes: number): string {
@@ -673,6 +752,7 @@ export class ProcessSupervisor {
     let actualExitCode = -1;
     let controlRequest: ClaimedControlRequest | null = null;
     let jsonReassemblyBuffer = "";
+    let malformedStructuredEvent: string | null = null;
     let transportTimer: NodeJS.Timeout | null = null;
     let activityTimer: NodeJS.Timeout | null = null;
     let phaseTimer: NodeJS.Timeout | null = null;
@@ -742,11 +822,20 @@ export class ProcessSupervisor {
       if (finalSafeData) handleSafeData(finalSafeData);
       const remainder = lineBuffer.flush();
       if (remainder) processLine(remainder);
+      const effectiveOutcome = outcome === "succeeded" && malformedStructuredEvent
+        ? "process_exit"
+        : outcome;
+      const effectiveFailureKind = outcome === "succeeded" && malformedStructuredEvent
+        ? "process_exit"
+        : failureKind;
+      const effectiveFailureMessage = outcome === "succeeded" && malformedStructuredEvent
+        ? malformedStructuredEvent
+        : failureMessage;
       const finalResult: SupervisorResult = {
         pid,
-        outcome,
-        failureKind,
-        failureMessage,
+        outcome: effectiveOutcome,
+        failureKind: effectiveFailureKind,
+        failureMessage: effectiveFailureMessage,
         exitCode: actualExitCode,
         output: outputTail,
         assistantText: assistantParts.join("\n"),
@@ -755,10 +844,10 @@ export class ProcessSupervisor {
         startedAt,
         endedAt: new Date().toISOString(),
         timedOut:
-          outcome === "transport_timeout" ||
-          outcome === "idle_timeout" ||
-          outcome === "tool_timeout" ||
-          outcome === "phase_timeout",
+          effectiveOutcome === "transport_timeout" ||
+          effectiveOutcome === "idle_timeout" ||
+          effectiveOutcome === "tool_timeout" ||
+          effectiveOutcome === "phase_timeout",
         cancelled,
         rawLogPath: options.rawLogPath,
         controlRequest,
@@ -778,17 +867,34 @@ export class ProcessSupervisor {
       if (terminating || resolved) return;
       terminating = true;
       clearRuntimeTimers();
-      try {
-        child.kill();
-      } catch {
-        // Already exited.
-      }
-      await Promise.race([exitPromise, delay(options.terminationGraceMs)]);
-      let liveness = checkProcessLiveness(pid);
-      if (liveness === "alive" || liveness === "unknown") {
+      let liveness: ProcessLiveness;
+      if (process.platform === "win32") {
+        // taskkill /T must observe the PTY root while it is still alive. Calling
+        // node-pty child.kill() first can make that root exit immediately and
+        // re-parent command runners, browsers, and consoles before taskkill can
+        // enumerate them. Those orphans retain the target as their current
+        // directory and can survive STOP/tool-timeout cleanup.
         liveness = await terminateProcessTreeBounded(pid, options.killTimeoutMs);
+        try {
+          child.kill();
+        } catch {
+          // taskkill may already have closed the PTY root.
+        }
         await Promise.race([exitPromise, delay(options.killTimeoutMs)]);
         liveness = checkProcessLiveness(pid);
+      } else {
+        try {
+          child.kill();
+        } catch {
+          // Already exited.
+        }
+        await Promise.race([exitPromise, delay(options.terminationGraceMs)]);
+        liveness = checkProcessLiveness(pid);
+        if (liveness === "alive" || liveness === "unknown") {
+          liveness = await terminateProcessTreeBounded(pid, options.killTimeoutMs);
+          await Promise.race([exitPromise, delay(options.killTimeoutMs)]);
+          liveness = checkProcessLiveness(pid);
+        }
       }
       if (liveness !== "dead") {
         finish(
@@ -940,14 +1046,20 @@ export class ProcessSupervisor {
         }
         jsonReassemblyBuffer = "";
         try {
-          processEvent(JSON.parse(candidate) as AnyObj);
+          processEvent(JSON.parse(redactor.redactComplete(candidate)) as AnyObj);
           return;
         } catch {
-          // Invalid JSON is retained in the raw log but cannot satisfy progress/completion.
+          // A machine-readable provider event that becomes malformed must fail
+          // closed. In particular, Windows terminal reflow can duplicate bytes
+          // inside long JSONL records; silently dropping those records can erase
+          // web/tool evidence and misclassify a completed attempt.
+          if (!malformedStructuredEvent && /^\{\s*"type"\s*:/.test(candidate)) {
+            malformedStructuredEvent =
+              "Provider emitted a malformed structured event; terminal/transport output may have corrupted JSONL evidence.";
+          }
         }
       }
 
-      const lower = trimmed.toLowerCase();
       if (isInteractiveAccessPrompt(trimmed)) {
         void terminate(
           "process_exit",
@@ -958,10 +1070,10 @@ export class ProcessSupervisor {
         return;
       }
       const destructive = options.destructivePrompts.some((value) =>
-        lower.includes(value.toLowerCase())
+        matchesConfiguredPrompt(trimmed, value)
       );
       const interaction = options.interactionWhitelist.find((value) =>
-        lower.includes(value.toLowerCase())
+        matchesConfiguredPrompt(trimmed, value)
       );
       if (destructive || interaction || isInteractiveConfirmationPrompt(trimmed)) {
         // Text emitted by a provider is not an authorization channel. Safe

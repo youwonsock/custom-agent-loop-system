@@ -14,14 +14,6 @@ function fieldDigest(fieldName: string): string {
   return createHash("sha256").update(fieldName).digest("hex").slice(0, 24);
 }
 
-export function legacyMcpSecretStorageKey(
-  serverId: string,
-  scope: McpSecretScope,
-  fieldName: string
-): string {
-  return `agentLoop.mcp.${serverId}.${scope}.${fieldDigest(fieldName)}`;
-}
-
 export function namespacedMcpSecretStorageKey(
   namespace: string,
   serverId: string,
@@ -34,13 +26,12 @@ export function namespacedMcpSecretStorageKey(
 export async function protectMcpCredentialValue(
   value: string,
   currentKey: string,
-  legacyKey: string,
   storage?: SecretStorageAdapter
 ): Promise<string> {
   if (ENV_REFERENCE.test(value)) return value;
   const secretReference = value.match(SECRET_REFERENCE)?.[1];
   if (secretReference) {
-    if (secretReference !== currentKey && secretReference !== legacyKey) {
+    if (secretReference !== currentKey) {
       if (secretReference.startsWith("agentLoop.mcp.")) {
         throw new Error(
           "MCP credential reference belongs to a different Agent Loop data root. Re-enter the credential."
@@ -51,12 +42,7 @@ export async function protectMcpCredentialValue(
     if (!storage) {
       return value;
     }
-    let storedValue = await storage.get(currentKey);
-    if (storedValue === undefined) {
-      storedValue = await storage.get(legacyKey);
-      if (storedValue !== undefined) await storage.store(currentKey, storedValue);
-    }
-    if (storedValue === undefined && secretReference === legacyKey) return value;
+    await storage.get(currentKey);
     return `\${secret:${currentKey}}`;
   }
   if (!storage) {

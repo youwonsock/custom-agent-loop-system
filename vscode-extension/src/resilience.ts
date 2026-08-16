@@ -10,8 +10,7 @@ export type LeaseDisposition =
 export type RecoveryAction =
   | "ignore"
   | "follow"
-  | "recover"
-  | "pause_legacy";
+  | "recover";
 
 export interface SessionLease {
   ownerId: string;
@@ -87,44 +86,26 @@ export function evaluateOwnership(
 
 export function shouldAutoRecover(
   stateStatus: LoopStatus,
-  disposition: LeaseDisposition,
-  recoveryResumeAt?: string | null,
-  nowMs = Date.now()
+  disposition: LeaseDisposition
 ): boolean {
-  if (stateStatus === "RECOVERING") {
-    const resumeAt = recoveryResumeAt ? Date.parse(recoveryResumeAt) : Number.NaN;
-    return Number.isFinite(resumeAt) && resumeAt <= nowMs;
-  }
   return stateStatus === "RUNNING" && disposition === "recoverable";
 }
 
 export function decideRecoveryAction(
   stateStatus: LoopStatus,
-  stateVersion: number | null | undefined,
+  _stateVersion: number | null | undefined,
   disposition: LeaseDisposition,
-  locallyRunning: boolean,
-  recoveryResumeAt?: string | null,
-  nowMs = Date.now()
+  locallyRunning: boolean
 ): RecoveryAction {
   if (locallyRunning) return "ignore";
-  if (stateStatus === "RECOVERING") {
-    return shouldAutoRecover(
-      stateStatus,
-      disposition,
-      recoveryResumeAt,
-      nowMs
-    ) ? "recover" : "ignore";
-  }
   if (stateStatus !== "RUNNING") return "ignore";
   if (disposition === "recoverable") return "recover";
-  if (disposition === "missing") {
-    return (stateVersion ?? 1) < 2 ? "pause_legacy" : "recover";
-  }
+  if (disposition === "missing") return "recover";
   return "follow";
 }
 
 export function shouldGracefullyStop(stateStatus: LoopStatus): boolean {
-  return stateStatus === "RUNNING" || stateStatus === "RECOVERING";
+  return stateStatus === "RUNNING";
 }
 
 export function assessSessionDeletionSafety(
@@ -132,7 +113,7 @@ export function assessSessionDeletionSafety(
   disposition: LeaseDisposition,
   childLiveness: readonly ProcessLiveness[]
 ): { safe: boolean; reason: string | null } {
-  if (stateStatus === "RUNNING" || stateStatus === "RECOVERING") {
+  if (stateStatus === "RUNNING") {
     return { safe: false, reason: `Session is ${stateStatus}.` };
   }
   if (["active", "expired_owner_alive", "unverifiable"].includes(disposition)) {
@@ -144,9 +125,6 @@ export function assessSessionDeletionSafety(
   }
   return { safe: true, reason: null };
 }
-
-/** @deprecated Use shouldGracefullyStop. */
-export const shouldGracefullyPause = shouldGracefullyStop;
 
 export function elapsedSince(isoTimestamp: string | null | undefined, nowMs = Date.now()): number | null {
   if (!isoTimestamp) return null;

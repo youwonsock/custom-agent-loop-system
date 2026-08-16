@@ -10,17 +10,30 @@ const distDestination = path.join(destination, "dist");
 fs.rmSync(destination, { recursive: true, force: true });
 fs.mkdirSync(distDestination, { recursive: true });
 
-for (const name of fs.readdirSync(path.join(root, "dist"))) {
-  if (!name.endsWith(".js") && !name.endsWith(".json")) continue;
-  if (name.endsWith(".test.js")) continue;
-  fs.copyFileSync(path.join(root, "dist", name), path.join(distDestination, name));
-}
+const copyCompiledTree = (sourceDirectory, targetDirectory) => {
+  for (const entry of fs.readdirSync(sourceDirectory, { withFileTypes: true })) {
+    const source = path.join(sourceDirectory, entry.name);
+    const target = path.join(targetDirectory, entry.name);
+    if (entry.isDirectory()) {
+      fs.mkdirSync(target, { recursive: true });
+      copyCompiledTree(source, target);
+      continue;
+    }
+    if (!entry.name.endsWith(".js") && !entry.name.endsWith(".json")) continue;
+    if (entry.name.endsWith(".test.js")) continue;
+    fs.copyFileSync(source, target);
+  }
+};
+copyCompiledTree(path.join(root, "dist"), distDestination);
 
 for (const name of [
-  "agent_loop.json",
-  "agent_loop.schema.json",
-  "agent_roles.json",
-  "agent_roles.schema.json",
+  "agents.json",
+  "agents.schema.json",
+  "tasks.json",
+  "tasks.schema.json",
+  "workflow.json",
+  "workflow.schema.json",
+  "loop_config.json",
   "loop_config.schema.json",
   "runtime_defaults.json",
 ]) {

@@ -578,7 +578,7 @@ export class LoopWebviewPanel {
   private async handleSetAccessMode(msg: { sessionId: string; accessMode: AccessMode }): Promise<void> {
     try {
       if (msg.accessMode === "full_access" && !(await this.confirmUnsafeFullAccess())) return;
-      await this.store.updateAccessMode(msg.sessionId, msg.accessMode);
+      await this.client.setAccessMode(msg.sessionId, msg.accessMode);
       vscode.window.showInformationMessage(
         msg.accessMode === "full_access"
           ? "Agent Loop: Full access enabled for this session."

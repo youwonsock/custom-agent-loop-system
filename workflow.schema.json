@@ -1,0 +1,130 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://custom-agent-loop.local/v4/workflow.schema.json",
+  "title": "Sequential deterministic workflow definition",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion", "name", "startNodeId", "nodes", "transitions", "terminals",
+    "cyclePolicy", "applicationPolicy", "budgets"
+  ],
+  "properties": {
+    "$schema": { "type": "string" },
+    "schemaVersion": { "const": 1 },
+    "name": { "type": "string", "minLength": 1 },
+    "startNodeId": { "$ref": "#/$defs/id" },
+    "nodes": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/node" } },
+    "transitions": {
+      "type": "array", "minItems": 1,
+      "items": {
+        "type": "object", "additionalProperties": false, "required": ["from", "on", "to"],
+        "properties": {
+          "from": { "$ref": "#/$defs/id" },
+          "on": { "$ref": "#/$defs/id" },
+          "to": { "$ref": "#/$defs/id" }
+        }
+      }
+    },
+    "terminals": {
+      "type": "array", "minItems": 1,
+      "items": {
+        "type": "object", "additionalProperties": false, "required": ["id", "status"],
+        "properties": {
+          "id": { "$ref": "#/$defs/id" },
+          "status": { "enum": ["succeeded", "paused", "blocked", "stopped"] }
+        }
+      }
+    },
+    "cyclePolicy": {
+      "type": "object", "additionalProperties": false,
+      "required": ["startNodeId", "completionNodeId"],
+      "properties": {
+        "startNodeId": { "$ref": "#/$defs/id" },
+        "completionNodeId": { "$ref": "#/$defs/id" }
+      }
+    },
+    "applicationPolicy": {
+      "type": "object", "additionalProperties": false,
+      "required": ["interruptNodeId", "blockedTerminalId"],
+      "properties": {
+        "interruptNodeId": { "$ref": "#/$defs/id" },
+        "blockedTerminalId": { "$ref": "#/$defs/id" }
+      }
+    },
+    "budgets": {
+      "type": "object", "additionalProperties": false,
+      "required": ["maxWorkflowSteps", "maxCycles", "maxArtifactInputBytes", "maxEvents", "maxNodeExecutions"],
+      "properties": {
+        "maxWorkflowSteps": { "type": "integer", "minimum": 1 },
+        "maxCycles": { "type": "integer", "minimum": 1 },
+        "maxArtifactInputBytes": { "type": "integer", "minimum": 1 },
+        "maxEvents": { "type": "integer", "minimum": 1 },
+        "maxNodeExecutions": { "type": "integer", "minimum": 1 }
+      }
+    }
+  },
+  "$defs": {
+    "id": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,127}$" },
+    "inputBinding": {
+      "type": "object", "additionalProperties": false, "required": ["name", "source"],
+      "properties": {
+        "name": { "$ref": "#/$defs/id" },
+        "required": { "type": "boolean" },
+        "source": {
+          "oneOf": [
+            {
+              "type": "object", "additionalProperties": false, "required": ["kind", "key"],
+              "properties": {
+                "kind": { "const": "run_context" },
+                "key": { "enum": ["goal", "requirements", "approved_plan", "selected_plan_choice_id", "target_project_path", "additional_allowed_paths"] }
+              }
+            },
+            {
+              "type": "object", "additionalProperties": false, "required": ["kind", "nodeId"],
+              "properties": { "kind": { "const": "node_output" }, "nodeId": { "$ref": "#/$defs/id" } }
+            },
+            {
+              "type": "object", "additionalProperties": false, "required": ["kind"],
+              "properties": { "kind": { "enum": ["failure", "recovery"] } }
+            },
+            {
+              "type": "object", "additionalProperties": false, "required": ["kind", "nodeId"],
+              "properties": { "kind": { "const": "human_response" }, "nodeId": { "$ref": "#/$defs/id" } }
+            }
+          ]
+        }
+      }
+    },
+    "node": {
+      "oneOf": [
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["id", "kind", "taskId", "agentId", "inputs"],
+          "properties": {
+            "id": { "$ref": "#/$defs/id" }, "kind": { "const": "task" },
+            "taskId": { "$ref": "#/$defs/id" }, "agentId": { "$ref": "#/$defs/id" },
+            "inputs": { "type": "array", "items": { "$ref": "#/$defs/inputBinding" } }
+          }
+        },
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["id", "kind", "gate", "inputs"],
+          "properties": {
+            "id": { "$ref": "#/$defs/id" }, "kind": { "const": "human_gate" },
+            "gate": {
+              "type": "object", "additionalProperties": false,
+              "required": ["type", "prompt", "allowedSignals"],
+              "properties": {
+                "type": { "enum": ["plan_approval", "access_approval", "custom"] },
+                "prompt": { "type": "string", "minLength": 1 },
+                "allowedSignals": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "$ref": "#/$defs/id" } },
+                "requiredForSuccess": { "type": "boolean" }
+              }
+            },
+            "inputs": { "type": "array", "items": { "$ref": "#/$defs/inputBinding" } }
+          }
+        }
+      ]
+    }
+  }
+}

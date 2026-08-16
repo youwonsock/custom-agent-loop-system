@@ -3,7 +3,9 @@ export type WorkspaceProcessLaunch =
   | "newSession"
   | "resumeSession"
   | "recoverSession"
-  | "revisePlan";
+  | "revisePlan"
+  | "approvePlan"
+  | "controlSession";
 
 const PROCESS_ACTION_LABELS: Record<WorkspaceProcessLaunch, string> = {
   discoverModels: "discover models",
@@ -11,6 +13,8 @@ const PROCESS_ACTION_LABELS: Record<WorkspaceProcessLaunch, string> = {
   resumeSession: "resume a session",
   recoverSession: "recover a session",
   revisePlan: "revise a plan",
+  approvePlan: "approve a plan",
+  controlSession: "control a session",
 };
 
 export function activationSideEffectsAllowed(isTrusted: boolean): boolean {

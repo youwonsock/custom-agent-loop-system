@@ -1,7 +1,7 @@
 {
   "name": "custom-agent-loop-system",
-  "version": "3.4.1",
-  "description": "Dynamic multi-model multi-session orchestrator that controls an interactive coding CLI (opencode) as child processes to autonomously achieve goals.",
+  "version": "4.0.0",
+  "description": "Deterministic Agent-Task workflow orchestrator with typed graph transitions, checkpoints, and multi-provider coding runtimes.",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/youwonsock/Custom_AgentLoopSystem.git"
@@ -16,22 +16,23 @@
     "agent-loop": "dist/loop_orchestrator.js"
   },
   "files": [
-    "dist/*.js",
-    "!dist/*.test.js",
-    "dist/*.json",
-    "agent_loop.json",
-    "agent_loop.schema.json",
-    "agent_roles.json",
-    "agent_roles.schema.json",
+    "dist/**/*.js",
+    "!dist/**/*.test.js",
+    "dist/**/*.json",
+    "agents.json",
+    "agents.schema.json",
+    "tasks.json",
+    "tasks.schema.json",
+    "workflow.json",
+    "workflow.schema.json",
     "loop_config.json",
     "loop_config.schema.json",
     "protocol_contract.json",
     "runtime_defaults.json",
-    "shared_contracts.schema.json",
     "scripts/fix-pty-permissions.js"
   ],
   "scripts": {
-    "prebuild": "node scripts/sync-runtime-defaults.js",
+    "prebuild": "node scripts/sync-runtime-defaults.js && node scripts/clean-build.js",
     "build": "tsc",
     "typecheck": "tsc --noEmit",
     "test": "npm run build && node scripts/run-node-tests.js",

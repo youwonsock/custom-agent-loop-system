@@ -37,8 +37,19 @@ switch (mode) {
       process.exit(0);
     }, 30);
     break;
+  case "wrapped-secret-echo":
+    assistant("credential=top-secret\n[PHASE_DONE]", "wrapped-secret");
+    process.exit(0);
+    break;
   case "incomplete":
     assistant("Work stopped before the completion contract.");
+    process.exit(0);
+    break;
+  case "malformed-structured-event":
+    process.stdout.write(
+      '{"type":"tool_use","part":{"tool":"websearch","state":{"status":"completed"}},"broken"::true}\n'
+    );
+    assistant("Malformed provider output must not pass.\n[PHASE_DONE]", "malformed-complete");
     process.exit(0);
     break;
   case "exit-fail":

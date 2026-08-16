@@ -78,7 +78,7 @@ jobs:
             --mode write \
             --report "$REPORT_PATH"
       - id: readonly
-        name: Authenticated read-only or expected fail-closed conformance
+        name: Authenticated read-only conformance
         continue-on-error: true
         shell: bash
         env:

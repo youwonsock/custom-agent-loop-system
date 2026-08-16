@@ -37,46 +37,6 @@ export type FailureKind =
   | "orphaned_process"
   | "unknown";
 
-export interface AttemptFailure {
-  kind: FailureKind;
-  message: string;
-  retryable: boolean;
-  occurredAt: string;
-  attemptId: string | null;
-  role: string | null;
-  phase: string | null;
-  exitCode: number | null;
-  cliSessionId: string | null;
-}
-
-export interface AgentAttemptState {
-  attemptId: string;
-  activationId?: string;
-  role: string;
-  phase: string;
-  status: AttemptStatus;
-  ownerPid: number;
-  childPid: number | null;
-  cliSessionId: string | null;
-  attemptNumber: number;
-  maxAttempts: number;
-  reconnectUsed: boolean;
-  cycleStartedAt: string;
-  startedAt: string;
-  lastOutputAt: string | null;
-  lastProgressAt: string | null;
-  deadlineAt: string;
-  nextRetryAt: string | null;
-  endedAt: string | null;
-  exitCode: number | null;
-  failureKind: FailureKind | null;
-  failureMessage: string | null;
-  outputLogPath: string | null;
-  activity: "initial_transport" | "model_generation" | "tool_execution";
-  mode: "standard" | "completion_recovery";
-  completionRecoveryNumber: number;
-}
-
 export interface SessionLease {
   ownerId: string;
   ownerPid: number;

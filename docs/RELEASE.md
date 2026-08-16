@@ -33,7 +33,7 @@ the `github-actions` ecosystem.
 
 Before tagging, run `Authenticated provider conformance` for the exact candidate commit through the
 protected `provider-conformance` environment. All four pinned provider CLIs must pass write and
-read-only (or the documented Codex fail-closed) checks on Windows, Linux, and macOS. This produces
+read-only checks on Windows, Linux, and macOS. This produces
 24 reports. Promotion verifies the workflow commit and every report; it cannot substitute ordinary
 CI evidence or omit a cell.
 
@@ -70,7 +70,7 @@ npm run package
 cd ..
 npm run verify:vsix
 npm run checksum:artifacts
-$vsix = Get-ChildItem vscode-extension -Filter 'agent-loop-vscode-*-3.4.1.vsix' |
+$vsix = Get-ChildItem vscode-extension -Filter 'agent-loop-vscode-*-4.0.0.vsix' |
   Sort-Object LastWriteTime -Descending |
   Select-Object -First 1
 npm run verify:release-bundle -- $vsix.FullName
@@ -78,6 +78,10 @@ npm run verify:release-bundle -- $vsix.FullName
 
 Local checks can validate the current OS artifact but cannot replace the protected multi-OS and
 authenticated-provider gates.
+
+For live candidate validation, install the VSIX built from the same candidate commit as the core. If
+the installed extension is older, use a separate `--data-root` for workspace-launched sessions. Do not
+let two release builds share recovery ownership of one mutable session root.
 
 ## Full-access disclosure
 

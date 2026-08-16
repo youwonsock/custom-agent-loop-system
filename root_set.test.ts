@@ -24,8 +24,6 @@ test("RootSet uses explicit roots and never discovers data from the working dire
     configRoot: "/etc/agent-loop",
     projectRoot: "/work/project",
     dataRoot: "/var/lib/agent-loop",
-    legacyRoot: null,
-    warnings: [],
   });
 });
 
@@ -47,9 +45,9 @@ test("RootSet derives OS application roots when explicit data paths are absent",
   assert.equal(roots.projectRoot, "/work/project");
 });
 
-test("legacy root remains compatible but emits a deprecation warning", () => {
-  const roots = resolveRootSet(
-    { root: "/legacy" },
+test("removed legacy root fails instead of enabling compatibility mode", () => {
+  assert.throws(() => resolveRootSet(
+    { root: "/removed" },
     {
       platform: "linux",
       env: {},
@@ -57,12 +55,7 @@ test("legacy root remains compatible but emits a deprecation warning", () => {
       currentWorkingDirectory: "/work/project",
       scriptPath: "/opt/agent-loop/dist/loop_orchestrator.js",
     }
-  );
-
-  assert.equal(roots.codeRoot, "/legacy");
-  assert.equal(roots.configRoot, "/legacy");
-  assert.equal(roots.dataRoot, "/legacy");
-  assert.match(roots.warnings[0], /deprecated/);
+  ), /removed in v4/);
 });
 
 test("path policy rejects device paths, UNC, ADS, and reserved Windows names", () => {
@@ -78,4 +71,3 @@ test("path policy rejects device paths, UNC, ADS, and reserved Windows names", (
   }
   assert.doesNotThrow(() => validateLocalRootPath("C:\\AgentLoop\\data", "win32"));
 });
-

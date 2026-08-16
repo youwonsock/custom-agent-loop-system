@@ -9,7 +9,6 @@ function state(overrides: Partial<LoopState> = {}): LoopState {
     status: "RUNNING",
     statusReason: null,
     phase: "TEST",
-    maxIterations: 4,
     maxCycles: 4,
     cyclesStarted: 1,
     loopCount: 1,
@@ -17,7 +16,6 @@ function state(overrides: Partial<LoopState> = {}): LoopState {
     workflowStepsConsumed: 5,
     currentActivation: null,
     activeAttempt: null,
-    automaticRecovery: null,
     pendingAccessRequest: null,
     awaitingPlanApproval: false,
     planApproved: true,
@@ -46,11 +44,7 @@ function state(overrides: Partial<LoopState> = {}): LoopState {
       transportTimeoutMs: 1,
       toolTimeoutMs: 1,
       maxAgentAttempts: 3,
-      maxCompletionRecoveryAttempts: 1,
-      maxAutomaticRecoveryCycles: 2,
-      automaticRecoveryBackoffMs: [1],
       retryBackoffMs: [1],
-      phaseRecoveryBudgetMs: 10_000,
       terminationGraceMs: 1,
       killTimeoutMs: 1,
       heartbeatIntervalMs: 1,
@@ -84,7 +78,7 @@ test("extension operator projection is derived only from aggregate state and eve
   assert.deepEqual(snapshot.budgets.workflowSteps, { remaining: 15, consumed: 5, limit: 20 });
 });
 
-test("extension projection exposes access, plan, recovery, mutation, and terminal actions", () => {
+test("extension projection exposes access, plan, mutation, and terminal actions", () => {
   const access = state({
     status: "WAITING_USER",
     statusReason: "approval required",
@@ -103,7 +97,6 @@ test("extension projection exposes access, plan, recovery, mutation, and termina
     awaitingPlanApproval: true,
     planApproved: false,
   })).nextPermittedAction, "approve_plan");
-  assert.equal(deriveExtensionOperatorSnapshot(state({ status: "RECOVERING" })).nextPermittedAction, "wait_for_recovery");
   assert.equal(deriveExtensionOperatorSnapshot(state({
     status: "PAUSED",
     currentActivation: {

@@ -10,8 +10,6 @@ export interface RootSet {
   configRoot: string;
   projectRoot: string;
   dataRoot: string;
-  legacyRoot: string | null;
-  warnings: string[];
 }
 
 export interface RootResolutionEnvironment {
@@ -132,26 +130,22 @@ export function resolveRootSet(
   }
 ): RootSet {
   const dialect = hostPathDialect(environment.platform);
-  const legacyRoot = options.root && options.root !== "true" ? options.root : null;
-  const warnings: string[] = [];
-  if (legacyRoot) {
-    warnings.push(
-      "--root is deprecated; use --data-root and --config-root. Legacy mode maps code, config, and data roots to the same path."
-    );
+  if (options.root !== undefined) {
+    throw new Error("--root was removed in v4; use --data-root and --config-root.");
   }
 
   const codeRootInput =
     options["code-root"] && options["code-root"] !== "true"
       ? options["code-root"]
-      : legacyRoot ?? defaultCodeRoot(environment.scriptPath, dialect);
+      : defaultCodeRoot(environment.scriptPath, dialect);
   const configRootInput =
     options["config-root"] && options["config-root"] !== "true"
       ? options["config-root"]
-      : legacyRoot ?? defaultConfigRoot(environment);
+      : defaultConfigRoot(environment);
   const dataRootInput =
     options["data-root"] && options["data-root"] !== "true"
       ? options["data-root"]
-      : legacyRoot ?? defaultDataRoot(environment);
+      : defaultDataRoot(environment);
   const projectRootInput =
     options["project-root"] && options["project-root"] !== "true"
       ? options["project-root"]
@@ -171,8 +165,6 @@ export function resolveRootSet(
     configRoot,
     projectRoot,
     dataRoot,
-    legacyRoot: legacyRoot ? resolveForDialect(legacyRoot, dialect) : null,
-    warnings,
   };
 }
 

@@ -1,246 +1,107 @@
 import { Annotation, END, START, StateGraph } from "@langchain/langgraph";
-import type { AgentRuntime } from "../../agent_runtime";
-import type { LoopState, StageActivationReservation } from "../../loop_state";
-import { executorForStage, stageById } from "../../pipeline";
-import type { SessionRepository } from "../../session_repository";
-import { StageExecutorRegistry } from "../../stage_executor_registry";
-import {
-  LoopStatus,
-  TransitionDecision,
-  WorkflowEngine,
-} from "../../workflow_contracts";
-import { CurrentWorkflowEngine } from "../../workflow_engine";
+import type { CompiledWorkflowBundle } from "../../src/domain/workflow";
 
-export const LANGGRAPH_SPIKE_VERSION = 1;
+export const LANGGRAPH_STRUCTURE_SPIKE_VERSION = 2;
 
-export type LangGraphSpikeInvariantCode =
-  | "SESSION_CHANGED"
-  | "REVISION_CHANGED"
-  | "FENCING_CHANGED"
-  | "STAGE_CHANGED"
-  | "ACTIVATION_CHANGED"
-  | "ACTIVATION_NOT_EXECUTABLE"
-  | "UNKNOWN_MUTATION_OUTCOME"
-  | "WORKFLOW_NOT_RUNNING";
-
-export class LangGraphSpikeInvariantError extends Error {
-  constructor(
-    readonly code: LangGraphSpikeInvariantCode,
-    message: string
-  ) {
-    super(message);
-    this.name = "LangGraphSpikeInvariantError";
-  }
+export interface GraphTransitionRequest {
+  nodeId: string;
+  signal: string;
 }
 
-export interface LangGraphAdapterDependencies {
-  stageExecutors: StageExecutorRegistry;
-  agentRuntime: Pick<AgentRuntime, "launch">;
-  sessionRepository: Pick<SessionRepository, "load">;
+export interface GraphTransitionResult extends GraphTransitionRequest {
+  targetId: string;
+  terminalStatus: string | null;
 }
 
-export interface ReservedStageInvocation {
-  sessionId: string;
-  stageId: string;
-  activationId: string;
-  expectedAggregateRevision: number;
-  expectedFencingEpoch: number;
-}
-
-export interface ReservedStageInvocationResult {
-  stageId: string;
-  activationId: string;
-  checkedAggregateRevision: number;
-  checkedFencingEpoch: number;
-  executed: boolean;
-}
-
-export interface LangGraphAdapterInspection {
+export interface LangGraphStructureInspection {
   productionEligible: false;
-  persistenceAuthority: "session_repository";
+  definitionHash: string;
+  persistenceAuthority: "v4_run_repository";
   langGraphCheckpointer: "disabled";
+  providerExecution: "disabled";
+  stateMutation: "disabled";
   automaticNodeRetries: false;
-  providerLaunchBoundary: "agent_runtime_via_existing_stage_executor";
-  transitionAuthority: "current_workflow_engine";
+  nodeCount: number;
+  transitionCount: number;
 }
 
 interface EvaluationGraphState {
-  request: ReservedStageInvocation;
-  checkedAggregateRevision: number;
-  checkedFencingEpoch: number;
-  executed: boolean;
+  request: GraphTransitionRequest;
+  result: GraphTransitionResult | null;
 }
 
 const EvaluationState = Annotation.Root({
-  request: Annotation<ReservedStageInvocation>(),
-  checkedAggregateRevision: Annotation<number>(),
-  checkedFencingEpoch: Annotation<number>(),
-  executed: Annotation<boolean>({
+  request: Annotation<GraphTransitionRequest>(),
+  result: Annotation<GraphTransitionResult | null>({
     reducer: (_left, right) => right,
-    default: () => false,
+    default: () => null,
   }),
 });
 
-function assertExecutableActivation(
-  activation: StageActivationReservation | null,
-  request: ReservedStageInvocation
-): asserts activation is StageActivationReservation {
-  if (activation?.status === "unknown_mutation") {
-    throw new LangGraphSpikeInvariantError(
-      "UNKNOWN_MUTATION_OUTCOME",
-      `Activation ${activation.activationId} has an unknown mutation outcome and requires operator reconciliation.`
-    );
-  }
-  if (!activation || activation.activationId !== request.activationId) {
-    throw new LangGraphSpikeInvariantError(
-      "ACTIVATION_CHANGED",
-      `Expected activation ${request.activationId}, but the authoritative activation changed.`
-    );
-  }
-  if (activation.stageId !== request.stageId) {
-    throw new LangGraphSpikeInvariantError(
-      "STAGE_CHANGED",
-      `Activation ${activation.activationId} belongs to stage ${activation.stageId}, not ${request.stageId}.`
-    );
-  }
-  if (activation.status !== "reserved" && activation.status !== "running") {
-    throw new LangGraphSpikeInvariantError(
-      "ACTIVATION_NOT_EXECUTABLE",
-      `Activation ${activation.activationId} is ${activation.status}; only reserved or running activations may execute.`
-    );
-  }
-}
-
-function assertAuthoritativeState(
-  state: LoopState,
-  request: ReservedStageInvocation,
-  checked?: Pick<EvaluationGraphState, "checkedAggregateRevision" | "checkedFencingEpoch">
-): void {
-  if (state.sessionId !== request.sessionId) {
-    throw new LangGraphSpikeInvariantError(
-      "SESSION_CHANGED",
-      `Expected session ${request.sessionId}, but repository loaded ${state.sessionId}.`
-    );
-  }
-  // Preserve the most safety-specific recovery diagnosis even though recovery
-  // also pauses the workflow aggregate.
-  assertExecutableActivation(state.currentActivation, request);
-  if (state.status !== LoopStatus.RUNNING) {
-    throw new LangGraphSpikeInvariantError(
-      "WORKFLOW_NOT_RUNNING",
-      `Session ${state.sessionId} is ${state.status}, not RUNNING.`
-    );
-  }
-  if (state.phase !== request.stageId) {
-    throw new LangGraphSpikeInvariantError(
-      "STAGE_CHANGED",
-      `Expected stage ${request.stageId}, but authoritative stage is ${state.phase}.`
-    );
-  }
-  if (state.aggregateRevision !== request.expectedAggregateRevision) {
-    throw new LangGraphSpikeInvariantError(
-      "REVISION_CHANGED",
-      `Expected aggregate revision ${request.expectedAggregateRevision}, but loaded ${state.aggregateRevision}.`
-    );
-  }
-  if (state.fencingEpoch !== request.expectedFencingEpoch) {
-    throw new LangGraphSpikeInvariantError(
-      "FENCING_CHANGED",
-      `Expected fencing epoch ${request.expectedFencingEpoch}, but loaded ${state.fencingEpoch}.`
-    );
-  }
-  if (
-    checked &&
-    (checked.checkedAggregateRevision !== state.aggregateRevision ||
-      checked.checkedFencingEpoch !== state.fencingEpoch)
-  ) {
-    throw new LangGraphSpikeInvariantError(
-      checked.checkedAggregateRevision !== state.aggregateRevision
-        ? "REVISION_CHANGED"
-        : "FENCING_CHANGED",
-      "The authoritative aggregate changed between LangGraph super-steps."
-    );
-  }
-}
+const TERMINAL_STATUS: Record<string, string> = {
+  succeeded: "SUCCESS",
+  paused: "PAUSED",
+  blocked: "BLOCKED",
+  stopped: "STOPPED",
+};
 
 /**
- * Development-only evaluation adapter. It deliberately compiles without a
- * LangGraph checkpointer: the existing repository remains the sole authority.
- * Existing stage executors continue to own provider execution, transitions,
- * budgets, and commits, so this graph is a wrapper rather than a replacement.
+ * Development-only structural comparison. It routes one already-validated
+ * signal through LangGraph but owns no provider, checkpoint, retry, effect, or
+ * aggregate mutation. Production continues to use WorkflowRunner.
  */
-export class LangGraphWorkflowEngineAdapter implements WorkflowEngine<LoopState> {
-  private readonly transitionEngine = new CurrentWorkflowEngine<LoopState>();
+export class LangGraphStructureAdapter {
   private readonly invokeGraph: (
     input: Pick<EvaluationGraphState, "request">
   ) => Promise<EvaluationGraphState>;
 
-  constructor(dependencies: LangGraphAdapterDependencies) {
-    if (typeof dependencies.agentRuntime.launch !== "function") {
-      throw new TypeError("The existing AgentRuntime launch boundary is required.");
-    }
-
+  constructor(private readonly bundle: Readonly<CompiledWorkflowBundle>) {
     const graph = new StateGraph(EvaluationState)
       .addNode(
-        "authoritative_preflight",
-        async (graphState: typeof EvaluationState.State) => {
-          const authoritative = await dependencies.sessionRepository.load();
-          assertAuthoritativeState(authoritative, graphState.request);
+        "route_compiled_signal",
+        (state: typeof EvaluationState.State) => {
+          const targetId = bundle.transitions[state.request.nodeId]?.[state.request.signal];
+          if (!targetId) {
+            throw new Error(
+              `No compiled transition for ${state.request.nodeId}.${state.request.signal}.`
+            );
+          }
+          const terminal = bundle.terminals.find((candidate) => candidate.id === targetId);
           return {
-            checkedAggregateRevision: authoritative.aggregateRevision,
-            checkedFencingEpoch: authoritative.fencingEpoch,
+            result: {
+              ...state.request,
+              targetId,
+              terminalStatus: terminal ? TERMINAL_STATUS[terminal.status] ?? null : null,
+            },
           };
         },
         { retryPolicy: { maxAttempts: 1 } }
       )
-      .addNode(
-        "execute_existing_stage",
-        async (graphState: typeof EvaluationState.State) => {
-          const authoritative = await dependencies.sessionRepository.load();
-          assertAuthoritativeState(authoritative, graphState.request, graphState);
-          const stage = stageById(authoritative.pipeline, graphState.request.stageId);
-          await dependencies.stageExecutors.execute(
-            executorForStage(authoritative.pipeline, stage),
-            stage
-          );
-          return { executed: true };
-        },
-        { retryPolicy: { maxAttempts: 1 } }
-      )
-      .addEdge(START, "authoritative_preflight")
-      .addEdge("authoritative_preflight", "execute_existing_stage")
-      .addEdge("execute_existing_stage", END)
-      // Intentionally no checkpointer: duplicate state authority is a hard stop.
+      .addEdge(START, "route_compiled_signal")
+      .addEdge("route_compiled_signal", END)
+      // Deliberately no checkpointer: this experiment cannot become state authority.
       .compile();
-
     this.invokeGraph = (input) => graph.invoke(input);
   }
 
-  applyTarget(state: LoopState, target: string): TransitionDecision {
-    return this.transitionEngine.applyTarget(state, target);
+  async route(request: GraphTransitionRequest): Promise<GraphTransitionResult> {
+    const state = await this.invokeGraph({ request });
+    if (!state.result) throw new Error("LangGraph structural route produced no result.");
+    return state.result;
   }
 
-  async executeReservedStage(
-    request: ReservedStageInvocation
-  ): Promise<ReservedStageInvocationResult> {
-    const result = await this.invokeGraph({ request });
-    return {
-      stageId: request.stageId,
-      activationId: request.activationId,
-      checkedAggregateRevision: result.checkedAggregateRevision,
-      checkedFencingEpoch: result.checkedFencingEpoch,
-      executed: result.executed,
-    };
-  }
-
-  inspect(): LangGraphAdapterInspection {
+  inspect(): LangGraphStructureInspection {
     return {
       productionEligible: false,
-      persistenceAuthority: "session_repository",
+      definitionHash: this.bundle.definitionHash,
+      persistenceAuthority: "v4_run_repository",
       langGraphCheckpointer: "disabled",
+      providerExecution: "disabled",
+      stateMutation: "disabled",
       automaticNodeRetries: false,
-      providerLaunchBoundary: "agent_runtime_via_existing_stage_executor",
-      transitionAuthority: "current_workflow_engine",
+      nodeCount: Object.keys(this.bundle.nodes).length,
+      transitionCount: Object.values(this.bundle.transitions)
+        .reduce((count, transitions) => count + Object.keys(transitions).length, 0),
     };
   }
 }

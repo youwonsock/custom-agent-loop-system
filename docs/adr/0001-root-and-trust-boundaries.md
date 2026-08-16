@@ -1,5 +1,8 @@
 # ADR 0001: Root and trust boundaries
 
+> v4 note: the deprecated `--root` compatibility input and all pre-v4 data migration paths have now
+> been removed. `--data-root` and `--config-root` are the only supported root inputs.
+
 - Status: Proposed
 - Date: 2026-08-08
 
@@ -23,4 +26,3 @@ Before the RootSet migration ships, a new run must fail before provider spawn wh
 ## Migration
 
 Migration is explicit and idempotent: copy to staging under the destination data root, validate schema and checksums, atomically rename within that root, then write a migration manifest. A live leased session is followed but never migrated or taken over.
-

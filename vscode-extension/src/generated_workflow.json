@@ -1,0 +1,373 @@
+{
+  "$schema": "./workflow.schema.json",
+  "schemaVersion": 1,
+  "name": "deterministic-agent-task-workflow",
+  "startNodeId": "PLANNING",
+  "nodes": [
+    {
+      "id": "PLANNING",
+      "kind": "task",
+      "taskId": "produce_plan",
+      "agentId": "planner",
+      "inputs": [
+        {
+          "name": "goal",
+          "source": {
+            "kind": "run_context",
+            "key": "goal"
+          },
+          "required": true
+        },
+        {
+          "name": "requirements",
+          "source": {
+            "kind": "run_context",
+            "key": "requirements"
+          },
+          "required": true
+        },
+        {
+          "name": "target_project_path",
+          "source": {
+            "kind": "run_context",
+            "key": "target_project_path"
+          },
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "PLAN_APPROVAL",
+      "kind": "human_gate",
+      "gate": {
+        "type": "plan_approval",
+        "prompt": "Select and approve one plan choice, request a new planning cycle, or cancel the run.",
+        "allowedSignals": [
+          "approved",
+          "revision_requested",
+          "cancelled"
+        ],
+        "requiredForSuccess": true
+      },
+      "inputs": [
+        {
+          "name": "planning_output",
+          "source": {
+            "kind": "node_output",
+            "nodeId": "PLANNING"
+          },
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "IMPLEMENTATION",
+      "kind": "task",
+      "taskId": "implement_changes",
+      "agentId": "implementer",
+      "inputs": [
+        {
+          "name": "goal",
+          "source": {
+            "kind": "run_context",
+            "key": "goal"
+          },
+          "required": true
+        },
+        {
+          "name": "requirements",
+          "source": {
+            "kind": "run_context",
+            "key": "requirements"
+          },
+          "required": true
+        },
+        {
+          "name": "approved_plan",
+          "source": {
+            "kind": "run_context",
+            "key": "approved_plan"
+          },
+          "required": true
+        },
+        {
+          "name": "plan_approval",
+          "source": {
+            "kind": "human_response",
+            "nodeId": "PLAN_APPROVAL"
+          },
+          "required": true
+        },
+        {
+          "name": "target_project_path",
+          "source": {
+            "kind": "run_context",
+            "key": "target_project_path"
+          },
+          "required": true
+        },
+        {
+          "name": "additional_allowed_paths",
+          "source": {
+            "kind": "run_context",
+            "key": "additional_allowed_paths"
+          },
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "TEST",
+      "kind": "task",
+      "taskId": "run_tests",
+      "agentId": "tester",
+      "inputs": [
+        {
+          "name": "goal",
+          "source": {
+            "kind": "run_context",
+            "key": "goal"
+          },
+          "required": true
+        },
+        {
+          "name": "requirements",
+          "source": {
+            "kind": "run_context",
+            "key": "requirements"
+          },
+          "required": true
+        },
+        {
+          "name": "implementation_output",
+          "source": {
+            "kind": "node_output",
+            "nodeId": "IMPLEMENTATION"
+          },
+          "required": true
+        },
+        {
+          "name": "target_project_path",
+          "source": {
+            "kind": "run_context",
+            "key": "target_project_path"
+          },
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "QA_REVIEW",
+      "kind": "task",
+      "taskId": "audit_quality",
+      "agentId": "qa_lead",
+      "inputs": [
+        {
+          "name": "goal",
+          "source": {
+            "kind": "run_context",
+            "key": "goal"
+          },
+          "required": true
+        },
+        {
+          "name": "requirements",
+          "source": {
+            "kind": "run_context",
+            "key": "requirements"
+          },
+          "required": true
+        },
+        {
+          "name": "implementation_output",
+          "source": {
+            "kind": "node_output",
+            "nodeId": "IMPLEMENTATION"
+          },
+          "required": true
+        },
+        {
+          "name": "test_output",
+          "source": {
+            "kind": "node_output",
+            "nodeId": "TEST"
+          },
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "MASTER_APPROVAL",
+      "kind": "task",
+      "taskId": "approve_completion",
+      "agentId": "master",
+      "inputs": [
+        {
+          "name": "goal",
+          "source": {
+            "kind": "run_context",
+            "key": "goal"
+          },
+          "required": true
+        },
+        {
+          "name": "requirements",
+          "source": {
+            "kind": "run_context",
+            "key": "requirements"
+          },
+          "required": true
+        },
+        {
+          "name": "implementation_output",
+          "source": {
+            "kind": "node_output",
+            "nodeId": "IMPLEMENTATION"
+          },
+          "required": true
+        },
+        {
+          "name": "test_output",
+          "source": {
+            "kind": "node_output",
+            "nodeId": "TEST"
+          },
+          "required": true
+        },
+        {
+          "name": "review_output",
+          "source": {
+            "kind": "node_output",
+            "nodeId": "QA_REVIEW"
+          },
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "INTERRUPT",
+      "kind": "task",
+      "taskId": "analyze_interrupt",
+      "agentId": "interrupter",
+      "inputs": [
+        {
+          "name": "goal",
+          "source": {
+            "kind": "run_context",
+            "key": "goal"
+          },
+          "required": true
+        },
+        {
+          "name": "failure",
+          "source": {
+            "kind": "failure"
+          },
+          "required": true
+        },
+        {
+          "name": "recovery",
+          "source": {
+            "kind": "recovery"
+          },
+          "required": true
+        }
+      ]
+    }
+  ],
+  "transitions": [
+    {
+      "from": "PLANNING",
+      "on": "success",
+      "to": "PLAN_APPROVAL"
+    },
+    {
+      "from": "PLAN_APPROVAL",
+      "on": "approved",
+      "to": "IMPLEMENTATION"
+    },
+    {
+      "from": "PLAN_APPROVAL",
+      "on": "revision_requested",
+      "to": "PLANNING"
+    },
+    {
+      "from": "PLAN_APPROVAL",
+      "on": "cancelled",
+      "to": "PAUSED"
+    },
+    {
+      "from": "IMPLEMENTATION",
+      "on": "success",
+      "to": "TEST"
+    },
+    {
+      "from": "TEST",
+      "on": "pass",
+      "to": "QA_REVIEW"
+    },
+    {
+      "from": "TEST",
+      "on": "fail",
+      "to": "QA_REVIEW"
+    },
+    {
+      "from": "QA_REVIEW",
+      "on": "approved",
+      "to": "MASTER_APPROVAL"
+    },
+    {
+      "from": "QA_REVIEW",
+      "on": "rejected",
+      "to": "IMPLEMENTATION"
+    },
+    {
+      "from": "MASTER_APPROVAL",
+      "on": "approved",
+      "to": "SUCCESS"
+    },
+    {
+      "from": "MASTER_APPROVAL",
+      "on": "rejected",
+      "to": "IMPLEMENTATION"
+    },
+    {
+      "from": "INTERRUPT",
+      "on": "success",
+      "to": "PAUSED"
+    }
+  ],
+  "terminals": [
+    {
+      "id": "SUCCESS",
+      "status": "succeeded"
+    },
+    {
+      "id": "PAUSED",
+      "status": "paused"
+    },
+    {
+      "id": "BLOCKED",
+      "status": "blocked"
+    },
+    {
+      "id": "STOPPED",
+      "status": "stopped"
+    }
+  ],
+  "cyclePolicy": {
+    "startNodeId": "IMPLEMENTATION",
+    "completionNodeId": "QA_REVIEW"
+  },
+  "applicationPolicy": {
+    "interruptNodeId": "INTERRUPT",
+    "blockedTerminalId": "BLOCKED"
+  },
+  "budgets": {
+    "maxWorkflowSteps": 100,
+    "maxCycles": 20,
+    "maxArtifactInputBytes": 1048576,
+    "maxEvents": 512,
+    "maxNodeExecutions": 100
+  }
+}

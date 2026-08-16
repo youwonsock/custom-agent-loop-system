@@ -20,6 +20,6 @@
     "declaration": false,
     "sourceMap": true
   },
-  "include": ["*.ts", "types/**/*.d.ts"],
+  "include": ["*.ts", "src/**/*.ts", "types/**/*.d.ts"],
   "exclude": ["node_modules", "dist"]
 }

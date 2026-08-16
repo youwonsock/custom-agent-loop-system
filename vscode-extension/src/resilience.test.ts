@@ -12,7 +12,6 @@ import {
 
 test("session deletion requires terminal state, safe ownership, and dead children", () => {
   assert.equal(assessSessionDeletionSafety("RUNNING", "active", []).safe, false);
-  assert.equal(assessSessionDeletionSafety("RECOVERING", "missing", []).safe, false);
   assert.equal(assessSessionDeletionSafety("STOPPED", "unverifiable", []).safe, false);
   assert.equal(assessSessionDeletionSafety("PAUSED", "recoverable", ["alive"]).safe, false);
   assert.equal(assessSessionDeletionSafety("PAUSED", "recoverable", ["unknown"]).safe, false);
@@ -34,30 +33,11 @@ test("lease decisions distinguish active, recoverable, and unverifiable owners",
   assert.equal(evaluateLease(lease, Date.parse("2026-01-01T00:00:21.000Z"), "unknown"), "unverifiable");
 });
 
-test("abnormal RUNNING and due RECOVERING states are automatically recovered", () => {
+test("an ownerless RUNNING v4 session is recoverable", () => {
   assert.equal(shouldAutoRecover("RUNNING", "recoverable"), true);
   assert.equal(shouldAutoRecover("PAUSED", "recoverable"), false);
   assert.equal(shouldAutoRecover("RUNNING", "active"), false);
-  assert.equal(
-    shouldAutoRecover(
-      "RECOVERING",
-      "missing",
-      "2026-01-01T00:01:00.000Z",
-      Date.parse("2026-01-01T00:01:01.000Z")
-    ),
-    true
-  );
-  assert.equal(
-    shouldAutoRecover(
-      "RECOVERING",
-      "missing",
-      "2026-01-01T00:01:00.000Z",
-      Date.parse("2026-01-01T00:00:59.000Z")
-    ),
-    false
-  );
   assert.equal(shouldGracefullyStop("RUNNING"), true);
-  assert.equal(shouldGracefullyStop("RECOVERING"), true);
   assert.equal(shouldGracefullyStop("SUCCESS"), false);
 });
 
@@ -94,31 +74,9 @@ test("a dead owner without a first lease becomes recoverable after the TTL", () 
   );
 });
 
-test("recovery action distinguishes local, legacy, and v2 ownerless sessions", () => {
-  assert.equal(decideRecoveryAction("RUNNING", 2, "recoverable", true), "ignore");
-  assert.equal(decideRecoveryAction("RUNNING", 1, "missing", false), "pause_legacy");
-  assert.equal(decideRecoveryAction("RUNNING", 2, "missing", false), "recover");
-  assert.equal(decideRecoveryAction("RUNNING", 2, "unverifiable", false), "follow");
-  assert.equal(
-    decideRecoveryAction(
-      "RECOVERING",
-      2,
-      "missing",
-      false,
-      "2026-01-01T00:01:00.000Z",
-      Date.parse("2026-01-01T00:01:00.000Z")
-    ),
-    "recover"
-  );
-  assert.equal(
-    decideRecoveryAction(
-      "RECOVERING",
-      2,
-      "missing",
-      false,
-      "2026-01-01T00:01:00.000Z",
-      Date.parse("2026-01-01T00:00:59.000Z")
-    ),
-    "ignore"
-  );
+test("recovery action treats every v4 ownerless session consistently", () => {
+  assert.equal(decideRecoveryAction("RUNNING", 4, "recoverable", true), "ignore");
+  assert.equal(decideRecoveryAction("RUNNING", 4, "missing", false), "recover");
+  assert.equal(decideRecoveryAction("RUNNING", 4, "unverifiable", false), "follow");
+  assert.equal(decideRecoveryAction("PAUSED", 4, "missing", false), "ignore");
 });

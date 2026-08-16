@@ -5,7 +5,7 @@ import * as path from "node:path";
 import * as vscode from "vscode";
 import { AccessMode, ExtensionConfig, ModelMapping, ProviderMapping, VariantMapping, readExtensionConfig } from "./types";
 import { StateStore, getGlobalContext } from "./stateStore";
-import { processLiveness, shouldGracefullyStop } from "./resilience";
+import { decideRecoveryAction, processLiveness, shouldGracefullyStop } from "./resilience";
 import {
   launchTrusted,
   requireWorkspaceTrust,
@@ -95,9 +95,10 @@ export class LoopClient {
           "loop_orchestrator.ts",
           "process_supervisor.ts",
           "resilience.ts",
-          "pipeline.ts",
           "provider_runtime.ts",
-          "agent_attempt_runner.ts",
+          path.join("src", "application", "workflow-runner.ts"),
+          path.join("src", "application", "agent-task-runner.ts"),
+          path.join("src", "interfaces", "cli", "main.ts"),
         ];
         for (const sourceName of sourceNames) {
           const sourceStat = await fs.stat(path.join(rootCandidate, sourceName)).catch(() => null);
@@ -282,16 +283,12 @@ export class LoopClient {
       "--data-root", root,
       "--config-root", root,
       "--session", sessionId,
-      "--max-iterations", String(cfg.maxIterations),
+      "--max-cycles", String(cfg.maxCycles),
       "--phase-timeout", String(cfg.phaseTimeoutMs),
       "--idle-timeout", String(cfg.idleTimeoutMs),
       "--tool-timeout", String(cfg.toolTimeoutMs),
       "--transport-timeout", String(cfg.transportTimeoutMs),
-      "--phase-recovery-budget", String(cfg.phaseRecoveryBudgetMs),
       "--max-agent-attempts", String(cfg.maxAgentAttempts),
-      "--completion-recovery-attempts", String(cfg.maxCompletionRecoveryAttempts),
-      "--automatic-recovery-cycles", String(cfg.maxAutomaticRecoveryCycles),
-      "--automatic-recovery-backoff", cfg.automaticRecoveryBackoffMs.join(","),
       "--retry-backoff", cfg.retryBackoffMs.join(","),
       "--termination-grace", String(cfg.terminationGraceMs),
       "--kill-timeout", String(cfg.killTimeoutMs),
@@ -366,16 +363,12 @@ export class LoopClient {
       if (!recovery) {
         const cfg = this.liveConfig();
         args.push(
-        "--max-iterations", String(cfg.maxIterations),
+        "--max-cycles", String(cfg.maxCycles),
         "--phase-timeout", String(cfg.phaseTimeoutMs),
         "--idle-timeout", String(cfg.idleTimeoutMs),
         "--tool-timeout", String(cfg.toolTimeoutMs),
         "--transport-timeout", String(cfg.transportTimeoutMs),
-        "--phase-recovery-budget", String(cfg.phaseRecoveryBudgetMs),
         "--max-agent-attempts", String(cfg.maxAgentAttempts),
-        "--completion-recovery-attempts", String(cfg.maxCompletionRecoveryAttempts),
-        "--automatic-recovery-cycles", String(cfg.maxAutomaticRecoveryCycles),
-        "--automatic-recovery-backoff", cfg.automaticRecoveryBackoffMs.join(","),
         "--retry-backoff", cfg.retryBackoffMs.join(","),
         "--termination-grace", String(cfg.terminationGraceMs),
         "--kill-timeout", String(cfg.killTimeoutMs),
@@ -389,6 +382,29 @@ export class LoopClient {
 
       const env = await this.coreProcessEnvironment();
       if (recovery && this.recoveryCancellations.has(sessionId)) return sessionId;
+      if (recovery) {
+        // Recovery decisions are advisory snapshots. Revalidate immediately
+        // before spawning so a completed external STOP (or a new owner) cannot
+        // be resurrected by a stale monitor pass.
+        const [latestState, latestRuntime] = await Promise.all([
+          this.store.readState(sessionId),
+          this.store.inspectLease(sessionId),
+        ]);
+        const action = latestState
+          ? decideRecoveryAction(
+              latestState.status,
+              latestState.stateVersion,
+              latestRuntime.disposition,
+              this.isRunning(sessionId)
+            )
+          : "ignore";
+        if (
+          action !== "recover" ||
+          !["missing", "recoverable"].includes(latestRuntime.disposition)
+        ) {
+          return sessionId;
+        }
+      }
       await this.spawnSession(
         args,
         root,
@@ -406,13 +422,12 @@ export class LoopClient {
   }
 
   async interruptSession(sessionId: string, message: string): Promise<void> {
-    await this.store.enqueueControlRequest(sessionId, "INTERRUPT", message);
-    const state = await this.store.readState(sessionId);
-    const runtime = await this.store.inspectLease(sessionId);
-    if (state?.status === "RUNNING" && runtime.disposition !== "recoverable") {
-      return;
-    }
-    await this.resumeSession(sessionId, runtime.disposition === "recoverable");
+    await this.invokeCoreCommand(
+      "controlSession",
+      "interrupt",
+      sessionId,
+      ["--message", message]
+    );
   }
 
   private spawnSession(
@@ -491,47 +506,12 @@ export class LoopClient {
 
   async stopSession(sessionId: string): Promise<boolean> {
     this.recoveryCancellations.add(sessionId);
-    const request = await this.store.enqueueControlRequest(sessionId, "STOP");
-    const initialState = await this.store.readState(sessionId);
-    const initialRuntime = await this.store.inspectLease(sessionId);
-    if (
-      initialState?.status === "RECOVERING" &&
-      !this.isRunning(sessionId) &&
-      initialRuntime.disposition === "missing"
-    ) {
-      await this.store.markSessionStopped(
-        sessionId,
-        "Operator cancelled the scheduled automatic recovery."
-      );
-      await this.store.completeQueuedControlRequest(
-        sessionId,
-        request,
-        "completed",
-        "Scheduled automatic recovery cancelled before a core process was spawned."
-      );
-      return true;
-    }
-    const acknowledged = await this.store.waitForControlCompletion(sessionId, request.requestId, 8_000);
-    if (acknowledged) return true;
-
-    const child = this.activeProcesses.get(sessionId);
-    const runtime = await this.store.inspectLease(sessionId);
-    const ownerPid = child?.pid ?? runtime.lease?.ownerPid ?? null;
-    if (ownerPid && processLiveness(ownerPid) !== "dead") {
-      await this.forceTerminateProcessTree(ownerPid, this.liveConfig().killTimeoutMs);
-    }
-    if (!ownerPid || processLiveness(ownerPid) === "dead") {
-      await this.store.markSessionStopped(
-        sessionId,
-        "The core process did not acknowledge STOP within 8 seconds and was terminated."
-      );
-      await this.store.completeQueuedControlRequest(
-        sessionId,
-        request,
-        "completed",
-        "Session stopped by the extension after the core did not acknowledge STOP."
-      );
-      return true;
+    await this.invokeCoreCommand("controlSession", "stop", sessionId);
+    const deadline = Date.now() + 12_000;
+    while (Date.now() < deadline) {
+      const state = await this.store.readState(sessionId);
+      if (!state || ["STOPPED", "BLOCKED", "SUCCESS"].includes(state.status)) return true;
+      await new Promise((resolve) => setTimeout(resolve, 100));
     }
     return false;
   }
@@ -551,7 +531,6 @@ export class LoopClient {
     if (
       this.isRunning(sessionId) ||
       state?.status === "RUNNING" ||
-      state?.status === "RECOVERING" ||
       ownerMayBeRunning
     ) {
       await this.stopSession(sessionId);
@@ -567,7 +546,7 @@ export class LoopClient {
         : null;
       const childLiveness = processLiveness(activeChildPid);
       const ownershipSafe = runtime.disposition === "missing" || runtime.disposition === "recoverable";
-      if (ownershipSafe && childLiveness === "dead" && state?.status !== "RUNNING" && state?.status !== "RECOVERING") {
+      if (ownershipSafe && childLiveness === "dead" && state?.status !== "RUNNING") {
         return { safe: true, reason: null };
       }
       await new Promise((resolve) => setTimeout(resolve, 100));
@@ -594,43 +573,6 @@ export class LoopClient {
   /** @deprecated Use gracefullyStopAll. */
   async gracefullyPauseAll(): Promise<void> {
     await this.gracefullyStopAll();
-  }
-
-  private async forceTerminateProcessTree(pid: number, timeoutMs: number): Promise<boolean> {
-    const deadline = Date.now() + Math.max(1, timeoutMs);
-    const waitUntilDead = async (waitDeadline: number): Promise<boolean> => {
-      while (Date.now() < waitDeadline) {
-        if (processLiveness(pid) === "dead") return true;
-        await new Promise((resolve) => setTimeout(resolve, Math.min(100, Math.max(1, waitDeadline - Date.now()))));
-      }
-      return processLiveness(pid) === "dead";
-    };
-    if (process.platform === "win32") {
-      await new Promise<void>((resolve) => {
-        const child = execFile(
-          "taskkill",
-          ["/T", "/F", "/PID", String(pid)],
-          { timeout: timeoutMs, windowsHide: true },
-          () => resolve()
-        );
-        child.on("error", () => resolve());
-      });
-      return waitUntilDead(deadline);
-    }
-    const signalTree = (signal: NodeJS.Signals): void => {
-      try {
-        process.kill(-pid, signal);
-        return;
-      } catch {
-        // Processes launched by an older extension may not lead a process group.
-      }
-      try { process.kill(pid, signal); } catch { /* already exited */ }
-    };
-    signalTree("SIGTERM");
-    const gracefulDeadline = Math.min(deadline, Date.now() + Math.min(1_000, Math.max(1, timeoutMs / 2)));
-    if (await waitUntilDead(gracefulDeadline)) return true;
-    signalTree("SIGKILL");
-    return waitUntilDead(deadline);
   }
 
   isRunning(sessionId: string): boolean {
@@ -755,6 +697,66 @@ export class LoopClient {
     } finally {
       this.activePlanRevisions.delete(sessionId);
     }
+  }
+
+  async approvePlan(sessionId: string, choiceId: string): Promise<void> {
+    await this.invokeCoreCommand(
+      "approvePlan",
+      "approve-plan",
+      sessionId,
+      ["--choice-id", choiceId]
+    );
+  }
+
+  async setAccessMode(sessionId: string, accessMode: "ask" | "full_access"): Promise<void> {
+    await this.invokeCoreCommand(
+      "controlSession",
+      "set-access",
+      sessionId,
+      ["--mode", accessMode]
+    );
+  }
+
+  private async invokeCoreCommand(
+    launchKind: WorkspaceProcessLaunch,
+    command: string,
+    sessionId: string,
+    extraArgs: string[] = []
+  ): Promise<string> {
+    this.assertWorkspaceTrusted(`${command} a session`);
+    const root = await this.store.getRootDir();
+    const script = await this.resolveOrchestratorScript();
+    await this.assertCoreCompatible(script, root);
+    const env = await this.coreProcessEnvironment();
+    return new Promise<string>((resolve, reject) => {
+      const child = launchTrusted(vscode.workspace.isTrusted, launchKind, () =>
+        execFile(
+          this.config.nodeBinary,
+          [
+            script,
+            command,
+            "--session",
+            sessionId,
+            "--data-root",
+            root,
+            "--config-root",
+            root,
+            ...extraArgs,
+          ],
+          { cwd: root, env },
+          (error, stdout, stderr) => {
+            this.auxiliaryProcesses.delete(child);
+            if (error) {
+              reject(new Error(stderr.trim() || error.message));
+              return;
+            }
+            resolve(stdout.trim());
+          }
+        )
+      );
+      this.auxiliaryProcesses.add(child);
+      child.once("error", () => this.auxiliaryProcesses.delete(child));
+    });
   }
 
   onLog(sessionId: string, listener: (entry: LogEntry) => void): void {

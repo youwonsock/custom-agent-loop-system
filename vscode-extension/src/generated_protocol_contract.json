@@ -1,18 +1,15 @@
 {
-  "protocolVersion": 1,
-  "stateSchemaVersion": 2,
+  "protocolVersion": 2,
+  "stateSchemaVersion": 1,
   "capabilities": [
-    "authoritative-aggregate-v1",
-    "compiled-pipeline-v1",
-    "domain-events-v1",
-    "durable-budgets-v1",
-    "operator-snapshot-v1",
-    "root-set-v1",
-    "control-queue-v1",
-    "plan-approval-v1",
-    "provider-capabilities-v1",
-    "session-state-v2",
-    "structured-stage-outcome-v1"
+    "compiled-workflow-bundle-v1",
+    "agent-task-runner-v1",
+    "structured-task-result-v1",
+    "activation-checkpoint-v1",
+    "human-gate-v1",
+    "read-only-projection-v1",
+    "cas-fencing-v1",
+    "mutation-no-replay-v1"
   ],
   "pathFields": [
     "codeRoot",

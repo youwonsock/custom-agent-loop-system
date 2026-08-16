@@ -2,7 +2,6 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   assertSecureRemoteMcpTransport,
-  legacyMcpSecretStorageKey,
   namespacedMcpSecretStorageKey,
   protectMcpCredentialValue,
   SecretStorageAdapter,
@@ -20,19 +19,16 @@ class MemorySecrets implements SecretStorageAdapter {
   }
 }
 
-test("legacy MCP secrets dual-read and copy into the root namespace", async () => {
+test("removed MCP secret namespaces fail instead of being migrated", async () => {
   const storage = new MemorySecrets();
-  const legacyKey = legacyMcpSecretStorageKey("server", "headers", "Authorization");
+  const removedKey = "agentLoop.mcp.server.headers.removed";
   const currentKey = namespacedMcpSecretStorageKey("root-a", "server", "headers", "Authorization");
-  storage.values.set(legacyKey, "Bearer legacy-token");
-  const reference = await protectMcpCredentialValue(
-    `\${secret:${legacyKey}}`,
-    currentKey,
-    legacyKey,
-    storage
+  storage.values.set(removedKey, "Bearer removed-token");
+  await assert.rejects(
+    protectMcpCredentialValue(`\${secret:${removedKey}}`, currentKey, storage),
+    /different Agent Loop data root/
   );
-  assert.equal(reference, `\${secret:${currentKey}}`);
-  assert.equal(storage.values.get(currentKey), "Bearer legacy-token");
+  assert.equal(storage.values.get(currentKey), undefined);
 });
 
 test("secret keys are isolated across data-root namespaces", () => {
@@ -50,7 +46,6 @@ test("a namespaced reference copied from another data root is rejected", async (
     protectMcpCredentialValue(
       `\${secret:${foreignKey}}`,
       currentKey,
-      legacyMcpSecretStorageKey("server", "environment", "TOKEN"),
       storage
     ),
     /different Agent Loop data root/

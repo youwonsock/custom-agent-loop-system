@@ -168,7 +168,7 @@ export async function activate(
       await ensureSafeInitialized();
       const registry = await store!.readRegistry();
       const runningMetaIds = registry.sessionMetas
-        .filter((m) => m.status === "RUNNING" || m.status === "RECOVERING")
+        .filter((m) => m.status === "RUNNING")
         .map((m) => m.sessionId);
       const candidateIds = [...new Set([...client!.getActiveSessionIds(), ...runningMetaIds])];
       if (candidateIds.length === 0) {
@@ -353,20 +353,17 @@ async function recoverAbnormalSessions(
   for (const meta of registry.sessionMetas) {
     try {
       const state = await stateStore.readState(meta.sessionId);
-      if (!state || (state.status !== "RUNNING" && state.status !== "RECOVERING")) continue;
+      if (!state || state.status !== "RUNNING") continue;
       const runtime = await stateStore.inspectLease(meta.sessionId);
       const action = decideRecoveryAction(
         state.status,
         state.stateVersion,
         runtime.disposition,
-        loopClient.isRunning(meta.sessionId),
-        state.automaticRecovery?.resumeAt ?? null
+        loopClient.isRunning(meta.sessionId)
       );
       if (action === "recover") {
         loopClient.stopFollowingExternalSession(meta.sessionId);
         await loopClient.resumeSession(meta.sessionId, true);
-      } else if (action === "pause_legacy") {
-        await stateStore.pauseLegacyRunningSession(meta.sessionId);
       } else if (action === "follow") {
         loopClient.followExternalSession(meta.sessionId);
       }
@@ -491,8 +488,6 @@ class SessionNode extends vscode.TreeItem {
     this.iconPath = new vscode.ThemeIcon(
       status === "RUNNING"
         ? "sync~spin"
-        : status === "RECOVERING"
-        ? "refresh"
         : status === "SUCCESS"
         ? "check-all"
         : status === "FAILED"

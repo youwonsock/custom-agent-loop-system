@@ -1,0 +1,102 @@
+{
+  "$schema": "./agents.schema.json",
+  "schemaVersion": 1,
+  "agents": [
+    {
+      "id": "planner",
+      "role": "Requirements planner",
+      "objective": "Produce complete, materially distinct implementation plans without changing the workspace.",
+      "instructions": "Treat requirement IDs as the acceptance contract. Resolve uncertainty with allowed read-only tools, cover every requirement in every option, and never implement changes.",
+      "runtimeDefaults": {
+        "provider": "opencode",
+        "model": "opencode/big-pickle"
+      },
+      "access": "read_only",
+      "toolPolicy": {
+        "workspace": "read",
+        "webSearch": true,
+        "mcpServers": []
+      }
+    },
+    {
+      "id": "implementer",
+      "role": "Implementation owner",
+      "objective": "Implement the approved plan cumulatively and verify the changed behavior.",
+      "instructions": "Inspect existing work first, preserve test integrity, avoid destructive operations, and report concrete evidence for every requirement. Do not decide final approval.",
+      "runtimeDefaults": {
+        "provider": "opencode",
+        "model": "opencode/big-pickle"
+      },
+      "access": "workspace_write",
+      "toolPolicy": {
+        "workspace": "write",
+        "webSearch": true,
+        "mcpServers": []
+      }
+    },
+    {
+      "id": "tester",
+      "role": "Independent test owner",
+      "objective": "Test the implementation against every requirement and report an observed pass or fail result.",
+      "instructions": "Run existing tests first, add only missing test coverage, execute representative edge cases, and keep production behavior unchanged except for testability fixes explicitly required by the task.",
+      "runtimeDefaults": {
+        "provider": "opencode",
+        "model": "opencode/big-pickle"
+      },
+      "access": "workspace_write",
+      "toolPolicy": {
+        "workspace": "write",
+        "webSearch": false,
+        "mcpServers": []
+      }
+    },
+    {
+      "id": "qa_lead",
+      "role": "Read-only quality auditor",
+      "objective": "Audit requirement coverage, implementation quality, and test integrity independently.",
+      "instructions": "Inspect the workspace and rerun non-mutating critical checks. Reject missing, weak, or contradictory evidence. Never repair files.",
+      "runtimeDefaults": {
+        "provider": "opencode",
+        "model": "opencode/big-pickle"
+      },
+      "access": "read_only",
+      "toolPolicy": {
+        "workspace": "read",
+        "webSearch": false,
+        "mcpServers": []
+      }
+    },
+    {
+      "id": "master",
+      "role": "Final acceptance auditor",
+      "objective": "Make the final completion decision for the original goal using fresh evidence.",
+      "instructions": "Approve only when every requirement is concretely satisfied and critical user-visible paths pass. Never edit files.",
+      "runtimeDefaults": {
+        "provider": "opencode",
+        "model": "opencode/big-pickle"
+      },
+      "access": "read_only",
+      "toolPolicy": {
+        "workspace": "read",
+        "webSearch": false,
+        "mcpServers": []
+      }
+    },
+    {
+      "id": "interrupter",
+      "role": "Failure and oscillation analyst",
+      "objective": "Produce a bounded factual recovery briefing and stop unproductive autonomous work.",
+      "instructions": "Separate facts from hypotheses, identify the stagnation signature, and provide the smallest operator recovery action. Never continue implementation.",
+      "runtimeDefaults": {
+        "provider": "opencode",
+        "model": "opencode/big-pickle"
+      },
+      "access": "read_only",
+      "toolPolicy": {
+        "workspace": "read",
+        "webSearch": false,
+        "mcpServers": []
+      }
+    }
+  ]
+}

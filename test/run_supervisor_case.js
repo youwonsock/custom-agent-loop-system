@@ -104,7 +104,9 @@ void (async () => {
       rawLogPath,
       interactionWhitelist: mode === "confirmation-prompt" ? ["Continue? [y/n]"] : [],
       destructivePrompts: [],
-      sensitiveValues: mode === "secret-echo" || mode === "split-secret-echo" ? ["top-secret"] : [],
+      sensitiveValues: ["secret-echo", "split-secret-echo", "wrapped-secret-echo"].includes(mode)
+        ? ["top-secret"]
+        : [],
       pollControl: mode === "control-poll-error"
         ? async () => { throw new Error("simulated EIO"); }
         : undefined,
