@@ -1,6 +1,7 @@
 import type { AgentDefinition, ResolvedAgentDefinition } from "./agent";
 import type { JsonValue } from "./json";
 import type { TaskDefinition } from "./task";
+import type { VerificationCommandSpec } from "./verification";
 
 export type NamedRunContextKey =
   | "goal"
@@ -10,12 +11,23 @@ export type NamedRunContextKey =
   | "target_project_path"
   | "additional_allowed_paths";
 
+export type VerificationRunContextKey =
+  | "verification_contract"
+  | "verification_result"
+  | "verification_feedback"
+  | "verification_criteria_changes"
+  | "previous_cycle_feedback"
+  | "open_findings";
+
+export type ExtendedRunContextKey = NamedRunContextKey | VerificationRunContextKey;
+
 export type NodeInputSource =
-  | { kind: "run_context"; key: NamedRunContextKey }
+  | { kind: "run_context"; key: ExtendedRunContextKey }
   | { kind: "node_output"; nodeId: string }
   | { kind: "failure" }
   | { kind: "recovery" }
-  | { kind: "human_response"; nodeId: string };
+  | { kind: "human_response"; nodeId: string }
+  | { kind: "feedback"; scope: "planning" | "previous_cycle" };
 
 export interface NodeInputBinding {
   name: string;
@@ -42,6 +54,12 @@ export type WorkflowNode =
       id: string;
       kind: "human_gate";
       gate: HumanGateDefinition;
+      inputs: NodeInputBinding[];
+    }
+  | {
+      id: string;
+      kind: "verification";
+      commands: VerificationCommandSpec[];
       inputs: NodeInputBinding[];
     };
 
@@ -77,7 +95,7 @@ export interface TaskDefinitionsDocument {
 }
 
 export interface WorkflowDefinitionDocument {
-  schemaVersion: 1;
+  schemaVersion: 2;
   name: string;
   startNodeId: string;
   nodes: WorkflowNode[];
@@ -85,23 +103,44 @@ export interface WorkflowDefinitionDocument {
   terminals: TerminalDefinition[];
   cyclePolicy: {
     startNodeId: string;
-    completionNodeId: string;
+    completionNodeIds: string[];
   };
   applicationPolicy: {
     interruptNodeId: string;
     blockedTerminalId: string;
+    implementationNodeId: string;
+    testNodeId: string;
+    verificationNodeId: string;
+    qaNodeId: string;
+    completionApprovalNodeId: string;
   };
   budgets: WorkflowBudget;
 }
 
-export interface CompiledWorkflowNode {
+interface CompiledWorkflowNodeBase {
   id: string;
-  kind: WorkflowNode["kind"];
-  taskId?: string;
-  agentId?: string;
-  gate?: HumanGateDefinition;
   inputs: NodeInputBinding[];
 }
+
+/** Compiled nodes are intentionally discriminated so verification can never
+ * accidentally flow through a task/agent execution path. */
+export type CompiledWorkflowNode =
+  | (CompiledWorkflowNodeBase & {
+      kind: "task";
+      taskId: string;
+      agentId: string;
+      sideEffect: "none" | "workspace_mutation";
+    })
+  | (CompiledWorkflowNodeBase & {
+      kind: "human_gate";
+      gate: HumanGateDefinition;
+      sideEffect: "none";
+    })
+  | (CompiledWorkflowNodeBase & {
+      kind: "verification";
+      commands: VerificationCommandSpec[];
+      sideEffect: "workspace_mutation";
+    });
 
 export interface WorkflowCompilationAnalysis {
   reachableNodeIds: string[];
@@ -111,7 +150,7 @@ export interface WorkflowCompilationAnalysis {
 }
 
 export interface CompiledWorkflowBundle {
-  schemaVersion: 1;
+  schemaVersion: 2;
   definitionHash: string;
   agents: Record<string, ResolvedAgentDefinition>;
   tasks: Record<string, TaskDefinition>;
@@ -121,11 +160,16 @@ export interface CompiledWorkflowBundle {
   terminals: TerminalDefinition[];
   cyclePolicy: {
     startNodeId: string;
-    completionNodeId: string;
+    completionNodeIds: string[];
   };
   applicationPolicy: {
     interruptNodeId: string;
     blockedTerminalId: string;
+    implementationNodeId: string;
+    testNodeId: string;
+    verificationNodeId: string;
+    qaNodeId: string;
+    completionApprovalNodeId: string;
   };
   budgets: WorkflowBudget;
   analysis: WorkflowCompilationAnalysis;

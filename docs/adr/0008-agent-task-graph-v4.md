@@ -4,6 +4,8 @@
 - Date: 2026-08-16
 - Product version: 4.0.0
 - Supersedes: the implementation structure described by ADR 0005 and the spike shape in ADR 0006
+- Note: the VS Code GUI delivery described in this ADR is superseded by ADR 0009; core protocol and
+  state contracts remain in force.
 
 ## Context
 

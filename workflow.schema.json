@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://custom-agent-loop.local/v4/workflow.schema.json",
+  "$id": "https://custom-agent-loop.local/v7/workflow.schema.json",
   "title": "Sequential deterministic workflow definition",
   "type": "object",
   "additionalProperties": false,
@@ -10,7 +10,7 @@
   ],
   "properties": {
     "$schema": { "type": "string" },
-    "schemaVersion": { "const": 1 },
+    "schemaVersion": { "const": 2 },
     "name": { "type": "string", "minLength": 1 },
     "startNodeId": { "$ref": "#/$defs/id" },
     "nodes": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/node" } },
@@ -37,18 +37,23 @@
     },
     "cyclePolicy": {
       "type": "object", "additionalProperties": false,
-      "required": ["startNodeId", "completionNodeId"],
+      "required": ["startNodeId", "completionNodeIds"],
       "properties": {
         "startNodeId": { "$ref": "#/$defs/id" },
-        "completionNodeId": { "$ref": "#/$defs/id" }
+        "completionNodeIds": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "$ref": "#/$defs/id" } }
       }
     },
     "applicationPolicy": {
       "type": "object", "additionalProperties": false,
-      "required": ["interruptNodeId", "blockedTerminalId"],
+      "required": ["interruptNodeId", "blockedTerminalId", "implementationNodeId", "testNodeId", "verificationNodeId", "qaNodeId", "completionApprovalNodeId"],
       "properties": {
         "interruptNodeId": { "$ref": "#/$defs/id" },
-        "blockedTerminalId": { "$ref": "#/$defs/id" }
+        "blockedTerminalId": { "$ref": "#/$defs/id" },
+        "implementationNodeId": { "$ref": "#/$defs/id" },
+        "testNodeId": { "$ref": "#/$defs/id" },
+        "verificationNodeId": { "$ref": "#/$defs/id" },
+        "qaNodeId": { "$ref": "#/$defs/id" },
+        "completionApprovalNodeId": { "$ref": "#/$defs/id" }
       }
     },
     "budgets": {
@@ -76,7 +81,7 @@
               "type": "object", "additionalProperties": false, "required": ["kind", "key"],
               "properties": {
                 "kind": { "const": "run_context" },
-                "key": { "enum": ["goal", "requirements", "approved_plan", "selected_plan_choice_id", "target_project_path", "additional_allowed_paths"] }
+                "key": { "enum": ["goal", "requirements", "approved_plan", "selected_plan_choice_id", "target_project_path", "additional_allowed_paths", "verification_contract", "verification_result", "verification_feedback", "verification_criteria_changes", "previous_cycle_feedback", "open_findings"] }
               }
             },
             {
@@ -90,6 +95,10 @@
             {
               "type": "object", "additionalProperties": false, "required": ["kind", "nodeId"],
               "properties": { "kind": { "const": "human_response" }, "nodeId": { "$ref": "#/$defs/id" } }
+            },
+            {
+              "type": "object", "additionalProperties": false, "required": ["kind", "scope"],
+              "properties": { "kind": { "const": "feedback" }, "scope": { "enum": ["planning", "previous_cycle"] } }
             }
           ]
         }
@@ -123,8 +132,30 @@
             },
             "inputs": { "type": "array", "items": { "$ref": "#/$defs/inputBinding" } }
           }
+        },
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["id", "kind", "commands", "inputs"],
+          "properties": {
+            "id": { "$ref": "#/$defs/id" }, "kind": { "const": "verification" },
+            "commands": { "type": "array", "minItems": 1, "maxItems": 10, "items": { "$ref": "#/$defs/verificationCommand" } },
+            "inputs": { "type": "array", "items": { "$ref": "#/$defs/inputBinding" } }
+          }
         }
       ]
+    },
+    "verificationCommand": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "label", "executable", "args", "cwd", "timeoutMs", "requirementIds"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "label": { "type": "string", "minLength": 1, "maxLength": 500 },
+        "executable": { "type": "string", "minLength": 1, "maxLength": 4096 },
+        "args": { "type": "array", "items": { "type": "string", "maxLength": 8192 }, "maxItems": 128 },
+        "cwd": { "type": "string", "minLength": 1, "maxLength": 4096 },
+        "timeoutMs": { "type": "integer", "minimum": 1, "maximum": 86400000 },
+        "requirementIds": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "$ref": "#/$defs/id" }, "maxItems": 200 }
+      }
     }
   }
 }

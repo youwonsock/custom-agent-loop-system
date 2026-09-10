@@ -17,7 +17,7 @@ Replace the overloaded legacy `root` concept with a resolved `RootSet`:
 
 The data and control roots stay together on one local filesystem so that atomic rename and recovery semantics remain available. Data-root discovery from the current working directory, workspace files, or the presence of a registry is not allowed.
 
-Precedence is explicit CLI/extension input, followed by the OS application-data default. The legacy `--root` option remains a deprecated compatibility input until migration is complete.
+Precedence is explicit CLI/extension input, followed by the OS application-data default. The legacy `--root` option is removed; profiles must use `--data-root` and `--config-root`.
 
 ## Immediate compatibility rule
 

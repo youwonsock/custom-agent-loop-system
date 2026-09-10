@@ -19,7 +19,7 @@ export function createCoreCapabilityHandshake(roots: RootSet): CoreCapabilityHan
     kind: "agent-loop-capabilities",
     protocolVersion: CORE_PROTOCOL_VERSION,
     stateSchemaVersion: CORE_STATE_SCHEMA_VERSION,
-    implementationVersion: process.env.npm_package_version ?? "4.0.0",
+    implementationVersion: process.env.npm_package_version ?? "7.0.0",
     capabilities: [...CORE_CAPABILITIES],
     roots: {
       codeRoot: roots.codeRoot,
@@ -46,8 +46,16 @@ export function validateCoreCapabilityHandshake(
       `Core protocol mismatch: expected ${CORE_PROTOCOL_VERSION}, received ${String(handshake.protocolVersion)}.`
     );
   }
+  if (handshake.stateSchemaVersion !== CORE_STATE_SCHEMA_VERSION) {
+    throw new Error(
+      `Core state schema mismatch: expected ${CORE_STATE_SCHEMA_VERSION}, received ${String(handshake.stateSchemaVersion)}.`
+    );
+  }
   if (!Array.isArray(handshake.capabilities)) {
     throw new Error("Core capability handshake is missing capabilities.");
+  }
+  if (typeof handshake.implementationVersion !== "string" || !/^\d+\.\d+\.\d+(?:[-+].*)?$/u.test(handshake.implementationVersion)) {
+    throw new Error("Core capability handshake implementation version is invalid.");
   }
   const missing = requiredCapabilities.filter(
     (capability) => !handshake.capabilities!.includes(capability)

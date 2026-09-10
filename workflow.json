@@ -1,7 +1,7 @@
 {
   "$schema": "./workflow.schema.json",
-  "schemaVersion": 1,
-  "name": "deterministic-agent-task-workflow",
+  "schemaVersion": 2,
+  "name": "deterministic-agent-task-workflow-with-core-verification",
   "startNodeId": "PLANNING",
   "nodes": [
     {
@@ -12,7 +12,8 @@
       "inputs": [
         { "name": "goal", "source": { "kind": "run_context", "key": "goal" }, "required": true },
         { "name": "requirements", "source": { "kind": "run_context", "key": "requirements" }, "required": true },
-        { "name": "target_project_path", "source": { "kind": "run_context", "key": "target_project_path" }, "required": true }
+        { "name": "target_project_path", "source": { "kind": "run_context", "key": "target_project_path" }, "required": true },
+        { "name": "planning_feedback", "source": { "kind": "feedback", "scope": "planning" }, "required": false }
       ]
     },
     {
@@ -20,12 +21,13 @@
       "kind": "human_gate",
       "gate": {
         "type": "plan_approval",
-        "prompt": "Select and approve one plan choice, request a new planning cycle, or cancel the run.",
+        "prompt": "Select and approve one plan choice and its verification contract, request a new planning cycle, or cancel the run.",
         "allowedSignals": ["approved", "revision_requested", "cancelled"],
         "requiredForSuccess": true
       },
       "inputs": [
-        { "name": "planning_output", "source": { "kind": "node_output", "nodeId": "PLANNING" }, "required": true }
+        { "name": "planning_output", "source": { "kind": "node_output", "nodeId": "PLANNING" }, "required": true },
+        { "name": "planning_feedback", "source": { "kind": "feedback", "scope": "planning" }, "required": false }
       ]
     },
     {
@@ -39,7 +41,9 @@
         { "name": "approved_plan", "source": { "kind": "run_context", "key": "approved_plan" }, "required": true },
         { "name": "plan_approval", "source": { "kind": "human_response", "nodeId": "PLAN_APPROVAL" }, "required": true },
         { "name": "target_project_path", "source": { "kind": "run_context", "key": "target_project_path" }, "required": true },
-        { "name": "additional_allowed_paths", "source": { "kind": "run_context", "key": "additional_allowed_paths" }, "required": true }
+        { "name": "additional_allowed_paths", "source": { "kind": "run_context", "key": "additional_allowed_paths" }, "required": true },
+        { "name": "previous_cycle_feedback", "source": { "kind": "feedback", "scope": "previous_cycle" }, "required": false },
+        { "name": "open_findings", "source": { "kind": "run_context", "key": "open_findings" }, "required": false }
       ]
     },
     {
@@ -51,7 +55,41 @@
         { "name": "goal", "source": { "kind": "run_context", "key": "goal" }, "required": true },
         { "name": "requirements", "source": { "kind": "run_context", "key": "requirements" }, "required": true },
         { "name": "implementation_output", "source": { "kind": "node_output", "nodeId": "IMPLEMENTATION" }, "required": true },
-        { "name": "target_project_path", "source": { "kind": "run_context", "key": "target_project_path" }, "required": true }
+        { "name": "target_project_path", "source": { "kind": "run_context", "key": "target_project_path" }, "required": true },
+        { "name": "verification_contract", "source": { "kind": "run_context", "key": "verification_contract" }, "required": true },
+        { "name": "verification_feedback", "source": { "kind": "run_context", "key": "verification_feedback" }, "required": false },
+        { "name": "verification_criteria_changes", "source": { "kind": "run_context", "key": "verification_criteria_changes" }, "required": false },
+        { "name": "previous_cycle_feedback", "source": { "kind": "feedback", "scope": "previous_cycle" }, "required": false },
+        { "name": "open_findings", "source": { "kind": "run_context", "key": "open_findings" }, "required": false }
+      ]
+    },
+    {
+      "id": "VERIFY",
+      "kind": "verification",
+      "commands": [
+        {
+          "id": "typecheck",
+          "label": "TypeScript typecheck",
+          "executable": "npm",
+          "args": ["run", "typecheck"],
+          "cwd": ".",
+          "timeoutMs": 900000,
+          "requirementIds": ["REQ-001"]
+        },
+        {
+          "id": "tests",
+          "label": "Project test suite",
+          "executable": "npm",
+          "args": ["test"],
+          "cwd": ".",
+          "timeoutMs": 900000,
+          "requirementIds": ["REQ-001"]
+        }
+      ],
+      "inputs": [
+        { "name": "verification_contract", "source": { "kind": "run_context", "key": "verification_contract" }, "required": true },
+        { "name": "verification_result", "source": { "kind": "run_context", "key": "verification_result" }, "required": false },
+        { "name": "open_findings", "source": { "kind": "run_context", "key": "open_findings" }, "required": false }
       ]
     },
     {
@@ -63,7 +101,11 @@
         { "name": "goal", "source": { "kind": "run_context", "key": "goal" }, "required": true },
         { "name": "requirements", "source": { "kind": "run_context", "key": "requirements" }, "required": true },
         { "name": "implementation_output", "source": { "kind": "node_output", "nodeId": "IMPLEMENTATION" }, "required": true },
-        { "name": "test_output", "source": { "kind": "node_output", "nodeId": "TEST" }, "required": true }
+        { "name": "test_output", "source": { "kind": "node_output", "nodeId": "TEST" }, "required": true },
+        { "name": "verification_contract", "source": { "kind": "run_context", "key": "verification_contract" }, "required": true },
+        { "name": "verification_result", "source": { "kind": "run_context", "key": "verification_result" }, "required": true },
+        { "name": "verification_feedback", "source": { "kind": "run_context", "key": "verification_feedback" }, "required": false },
+        { "name": "open_findings", "source": { "kind": "run_context", "key": "open_findings" }, "required": false }
       ]
     },
     {
@@ -76,7 +118,10 @@
         { "name": "requirements", "source": { "kind": "run_context", "key": "requirements" }, "required": true },
         { "name": "implementation_output", "source": { "kind": "node_output", "nodeId": "IMPLEMENTATION" }, "required": true },
         { "name": "test_output", "source": { "kind": "node_output", "nodeId": "TEST" }, "required": true },
-        { "name": "review_output", "source": { "kind": "node_output", "nodeId": "QA_REVIEW" }, "required": true }
+        { "name": "review_output", "source": { "kind": "node_output", "nodeId": "QA_REVIEW" }, "required": true },
+        { "name": "verification_contract", "source": { "kind": "run_context", "key": "verification_contract" }, "required": true },
+        { "name": "verification_result", "source": { "kind": "run_context", "key": "verification_result" }, "required": true },
+        { "name": "open_findings", "source": { "kind": "run_context", "key": "open_findings" }, "required": false }
       ]
     },
     {
@@ -87,7 +132,9 @@
       "inputs": [
         { "name": "goal", "source": { "kind": "run_context", "key": "goal" }, "required": true },
         { "name": "failure", "source": { "kind": "failure" }, "required": true },
-        { "name": "recovery", "source": { "kind": "recovery" }, "required": true }
+        { "name": "recovery", "source": { "kind": "recovery" }, "required": true },
+        { "name": "verification_feedback", "source": { "kind": "run_context", "key": "verification_feedback" }, "required": false },
+        { "name": "open_findings", "source": { "kind": "run_context", "key": "open_findings" }, "required": false }
       ]
     }
   ],
@@ -97,12 +144,16 @@
     { "from": "PLAN_APPROVAL", "on": "revision_requested", "to": "PLANNING" },
     { "from": "PLAN_APPROVAL", "on": "cancelled", "to": "PAUSED" },
     { "from": "IMPLEMENTATION", "on": "success", "to": "TEST" },
-    { "from": "TEST", "on": "pass", "to": "QA_REVIEW" },
-    { "from": "TEST", "on": "fail", "to": "QA_REVIEW" },
+    { "from": "TEST", "on": "prepared", "to": "VERIFY" },
+    { "from": "VERIFY", "on": "pass", "to": "QA_REVIEW" },
+    { "from": "VERIFY", "on": "fail", "to": "IMPLEMENTATION" },
+    { "from": "VERIFY", "on": "convergence_stalled", "to": "INTERRUPT" },
     { "from": "QA_REVIEW", "on": "approved", "to": "MASTER_APPROVAL" },
     { "from": "QA_REVIEW", "on": "rejected", "to": "IMPLEMENTATION" },
+    { "from": "QA_REVIEW", "on": "convergence_stalled", "to": "INTERRUPT" },
     { "from": "MASTER_APPROVAL", "on": "approved", "to": "SUCCESS" },
     { "from": "MASTER_APPROVAL", "on": "rejected", "to": "IMPLEMENTATION" },
+    { "from": "MASTER_APPROVAL", "on": "convergence_stalled", "to": "INTERRUPT" },
     { "from": "INTERRUPT", "on": "success", "to": "PAUSED" }
   ],
   "terminals": [
@@ -111,13 +162,24 @@
     { "id": "BLOCKED", "status": "blocked" },
     { "id": "STOPPED", "status": "stopped" }
   ],
-  "cyclePolicy": { "startNodeId": "IMPLEMENTATION", "completionNodeId": "QA_REVIEW" },
-  "applicationPolicy": { "interruptNodeId": "INTERRUPT", "blockedTerminalId": "BLOCKED" },
+  "cyclePolicy": {
+    "startNodeId": "IMPLEMENTATION",
+    "completionNodeIds": ["VERIFY", "QA_REVIEW", "MASTER_APPROVAL"]
+  },
+  "applicationPolicy": {
+    "interruptNodeId": "INTERRUPT",
+    "blockedTerminalId": "BLOCKED",
+    "implementationNodeId": "IMPLEMENTATION",
+    "testNodeId": "TEST",
+    "verificationNodeId": "VERIFY",
+    "qaNodeId": "QA_REVIEW",
+    "completionApprovalNodeId": "MASTER_APPROVAL"
+  },
   "budgets": {
     "maxWorkflowSteps": 100,
     "maxCycles": 20,
     "maxArtifactInputBytes": 1048576,
-    "maxEvents": 512,
-    "maxNodeExecutions": 100
+    "maxEvents": 1024,
+    "maxNodeExecutions": 200
   }
 }

@@ -55,7 +55,7 @@ test("removed legacy root fails instead of enabling compatibility mode", () => {
       currentWorkingDirectory: "/work/project",
       scriptPath: "/opt/agent-loop/dist/loop_orchestrator.js",
     }
-  ), /removed in v4/);
+  ), /removed in v7/);
 });
 
 test("path policy rejects device paths, UNC, ADS, and reserved Windows names", () => {

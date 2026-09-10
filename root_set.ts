@@ -78,7 +78,7 @@ function defaultConfigRoot(environment: RootResolutionEnvironment): string {
     const base =
       environment.env.APPDATA ??
       path.win32.join(environment.homeDir, "AppData", "Roaming");
-    return path.win32.join(base, "CustomAgentLoopSystem");
+    return path.win32.join(base, "AgentLoopOrchestrator");
   }
   if (environment.platform === "darwin") {
     return path.posix.join(
@@ -99,7 +99,7 @@ function defaultDataRoot(environment: RootResolutionEnvironment): string {
       environment.env.LOCALAPPDATA ??
       environment.env.APPDATA ??
       path.win32.join(environment.homeDir, "AppData", "Local");
-    return path.win32.join(base, "CustomAgentLoopSystem");
+    return path.win32.join(base, "AgentLoopOrchestrator");
   }
   if (environment.platform === "darwin") {
     return path.posix.join(
@@ -131,7 +131,7 @@ export function resolveRootSet(
 ): RootSet {
   const dialect = hostPathDialect(environment.platform);
   if (options.root !== undefined) {
-    throw new Error("--root was removed in v4; use --data-root and --config-root.");
+    throw new Error("--root was removed in v7; use --data-root and --config-root.");
   }
 
   const codeRootInput =

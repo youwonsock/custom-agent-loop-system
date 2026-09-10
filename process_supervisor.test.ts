@@ -289,20 +289,21 @@ test("meaningful progress renews the phase window up to the absolute recovery de
 
 test("an active tool uses the longer tool timeout and reports tool_timeout when stalled", async () => {
   const completed = await runFake("delayed-tool", {
-    // Process startup can exceed 100ms while the full test suite runs in parallel.
-    // Keep this test focused on the idle-vs-tool timeout distinction.
+    // Process startup and PTY delivery can exceed a few hundred milliseconds
+    // while the full test suite runs in parallel. Keep the windows comfortably
+    // above that jitter while retaining a clear idle-vs-tool distinction.
     transport: 750,
-    idle: 120,
-    tool: 500,
-    phase: 1_000,
+    idle: 500,
+    tool: 1_500,
+    phase: 3_000,
   });
   assert.equal(completed.outcome, "succeeded");
 
   const stalled = await runFake("tool-hang", {
     transport: 750,
-    idle: 500,
-    tool: 120,
-    phase: 1_000,
+    idle: 1_000,
+    tool: 300,
+    phase: 3_000,
   });
   assert.equal(stalled.outcome, "tool_timeout");
 });

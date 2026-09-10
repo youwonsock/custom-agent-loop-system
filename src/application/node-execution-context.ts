@@ -4,7 +4,7 @@ import type { CompiledWorkflowNode } from "../domain/workflow";
 
 export interface InputProvenance {
   inputName: string;
-  sourceKind: "run_context" | "node_output" | "failure" | "recovery" | "human_response";
+  sourceKind: "run_context" | "node_output" | "failure" | "recovery" | "human_response" | "feedback";
   sourceId: string;
   activationId: string | null;
   artifactId: string | null;

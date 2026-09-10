@@ -1,9 +1,11 @@
 import type { RequirementEvidence } from "./task-result";
+import type { VerificationContractDraft } from "./verification";
 
 export interface PlanChoiceRecord {
   id: string;
   title: string;
   planArtifactId: string;
+  verification?: VerificationContractDraft;
 }
 
 export type DomainEffect =
@@ -17,4 +19,20 @@ export type DomainEffect =
       signature: string;
       improved: boolean;
     }
-  | { type: "record_interrupt_briefing"; artifactId: string; summary: string };
+  | { type: "record_interrupt_briefing"; artifactId: string; summary: string }
+  | { type: "record_verification_criteria_changes"; changes: string[]; artifactId: string }
+  | {
+      type: "record_review_approval";
+      stage: "qa" | "master";
+      proofId: string;
+      contractRevision: number;
+      requirementIds: string[];
+      resolvedFindingIds: string[];
+      rationale: string;
+    }
+  | {
+      type: "record_findings";
+      source: "test" | "qa" | "master" | "verification";
+      findings: string[];
+      artifactIds: string[];
+    };

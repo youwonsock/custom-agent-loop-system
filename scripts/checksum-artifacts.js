@@ -6,12 +6,11 @@ const path = require("node:path");
 
 const root = path.resolve(__dirname, "..");
 const supplied = process.argv.slice(2).map((entry) => path.resolve(entry));
-const extensionRoot = path.join(root, "vscode-extension");
-const extensionVersion = require(path.join(extensionRoot, "package.json")).version;
-const nativeTarget = `${process.platform}-${process.arch}`;
+const desktopRoot = path.join(root, "desktop-app");
+const desktopVersion = require(path.join(desktopRoot, "package.json")).version;
 const artifacts = supplied.length > 0
   ? supplied
-  : [path.join(extensionRoot, `agent-loop-vscode-${nativeTarget}-${extensionVersion}.vsix`)]
+  : [path.join(root, "artifacts", "desktop", `AgentLoopOrchestrator-${desktopVersion}-win32-x64-Setup.exe`)]
       .filter((artifact) => fs.existsSync(artifact));
 
 if (artifacts.length === 0) throw new Error("No artifacts were provided or discovered.");

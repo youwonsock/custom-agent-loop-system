@@ -13,6 +13,7 @@ import type {
   TerminalDefinition,
   WorkflowNode,
 } from "../domain/workflow";
+import { validateVerificationContractDraft } from "../domain/verification";
 import type { DefinitionRegistries } from "./registries";
 
 const SAFE_ID = /^[A-Za-z][A-Za-z0-9_-]{0,127}$/u;
@@ -25,6 +26,44 @@ export interface WorkflowCompilerOptions {
 
 function assertSafeId(value: string, label: string): void {
   if (!SAFE_ID.test(value)) throw new Error(`${label} has an unsafe id: ${value}.`);
+}
+
+function assertVerificationCommands(
+  nodeId: string,
+  commands: ReadonlyArray<import("../domain/verification").VerificationCommandSpec>
+): void {
+  if (commands.length < 1 || commands.length > 10) {
+    throw new Error(`Verification node ${nodeId} must declare between 1 and 10 commands.`);
+  }
+  const ids = new Set<string>();
+  for (const command of commands) {
+    assertSafeId(command.id, `Verification command ${nodeId}.${command.id}`);
+    if (ids.has(command.id)) throw new Error(`Duplicate verification command id ${command.id}.`);
+    ids.add(command.id);
+    if (!command.label.trim() || !command.executable.trim()) {
+      throw new Error(`Verification command ${nodeId}.${command.id} needs a label and executable.`);
+    }
+    if (
+      !Number.isSafeInteger(command.timeoutMs) ||
+      command.timeoutMs < 1 ||
+      command.timeoutMs > 24 * 60 * 60 * 1000
+    ) {
+      throw new Error(`Verification command ${nodeId}.${command.id} has an invalid timeout.`);
+    }
+    if (
+      pathLikeAbsolute(command.cwd) ||
+      command.cwd.split(/[\\/]+/u).some((part) => part === "..")
+    ) {
+      throw new Error(`Verification command ${nodeId}.${command.id} cwd must be project-relative.`);
+    }
+    for (const requirementId of command.requirementIds) {
+      if (!requirementId.trim()) throw new Error(`Verification command ${nodeId}.${command.id} has an empty requirement id.`);
+    }
+  }
+}
+
+function pathLikeAbsolute(value: string): boolean {
+  return /^[A-Za-z]:[\\/]/u.test(value) || value.startsWith("/") || value.startsWith("\\\\");
 }
 
 function uniqueRecord<T extends { id: string }>(values: readonly T[], label: string): Record<string, T> {
@@ -72,6 +111,12 @@ function nodeTargets(
 ): string[] {
   return [...new Set(Object.values(transitions[nodeId] ?? {}))];
 }
+
+// Core may redirect a completed review to the interrupt node when the
+// convergence evaluator observes two consecutive non-improving cycles.  This
+// signal is emitted by WorkflowRunner after the provider result has already
+// passed the task schema/guardrails; it is never accepted as a provider signal.
+const CORE_TRANSITION_SIGNALS = new Set(["convergence_stalled"]);
 
 function reachableNodes(
   startNodeId: string,
@@ -223,6 +268,86 @@ function assertNoRequiredGateBypass(
   }
 }
 
+function assertSuccessRequiresVerification(
+  startNodeId: string,
+  nodes: Readonly<Record<string, CompiledWorkflowNode>>,
+  transitions: Readonly<Record<string, Readonly<Record<string, string>>>>,
+  terminals: Readonly<Record<string, TerminalDefinition>>,
+  policy: Readonly<{
+    implementationNodeId?: string;
+    testNodeId?: string;
+    verificationNodeId?: string;
+    qaNodeId?: string;
+    completionApprovalNodeId?: string;
+  }>
+): void {
+  const configured = [
+    policy.implementationNodeId,
+    policy.testNodeId,
+    policy.verificationNodeId,
+    policy.qaNodeId,
+    policy.completionApprovalNodeId,
+  ].filter((value): value is string => Boolean(value));
+  const hasVerificationNode = Object.values(nodes).some((node) => node.kind === "verification");
+  if (configured.length === 0 && !hasVerificationNode) return;
+  if (configured.length !== 5) {
+    throw new Error(
+      "Verification success policy must specify implementation, test, verification, QA, and completion approval nodes."
+    );
+  }
+  const implementation = nodes[policy.implementationNodeId!];
+  const test = nodes[policy.testNodeId!];
+  const verification = nodes[policy.verificationNodeId!];
+  const qa = nodes[policy.qaNodeId!];
+  const completion = nodes[policy.completionApprovalNodeId!];
+  if (!implementation || implementation.kind !== "task" || implementation.sideEffect !== "workspace_mutation") {
+    throw new Error("applicationPolicy.implementationNodeId must reference a workspace-mutation task node.");
+  }
+  if (!test || test.kind !== "task" || test.sideEffect !== "workspace_mutation") {
+    throw new Error("applicationPolicy.testNodeId must reference a workspace-mutation task node.");
+  }
+  if (!verification || verification.kind !== "verification") {
+    throw new Error("applicationPolicy.verificationNodeId must reference a verification node.");
+  }
+  if (!qa || qa.kind !== "task") throw new Error("applicationPolicy.qaNodeId must reference a task node.");
+  if (!completion || completion.kind !== "task") {
+    throw new Error("applicationPolicy.completionApprovalNodeId must reference a task node.");
+  }
+  if (!canReach(implementation.id, test.id, nodes, transitions) ||
+      !canReach(test.id, verification.id, nodes, transitions)) {
+    throw new Error("Verification success policy must order implementation, test, and verification on a reachable path.");
+  }
+  type State = { nodeId: string; verification: boolean; qa: boolean; master: boolean };
+  const pending: State[] = [{ nodeId: startNodeId, verification: false, qa: false, master: false }];
+  const seen = new Set<string>();
+  while (pending.length > 0) {
+    const state = pending.pop()!;
+    const stateKey = `${state.nodeId}:${state.verification ? 1 : 0}${state.qa ? 1 : 0}${state.master ? 1 : 0}`;
+    if (seen.has(stateKey)) continue;
+    seen.add(stateKey);
+    for (const [signal, target] of Object.entries(transitions[state.nodeId] ?? {})) {
+      let next = { ...state };
+      if (state.nodeId === policy.verificationNodeId && signal === "pass") next.verification = true;
+      if (state.nodeId === policy.qaNodeId && signal === "approved") next.qa = true;
+      if (state.nodeId === policy.completionApprovalNodeId && signal === "approved") next.master = true;
+      const targetNode = nodes[target];
+      if (targetNode?.sideEffect === "workspace_mutation" && targetNode.kind !== "verification") {
+        next = { nodeId: target, verification: false, qa: false, master: false };
+      } else {
+        next.nodeId = target;
+      }
+      const terminal = terminals[target];
+      if (terminal?.status === "succeeded") {
+        if (!(next.verification && next.qa && next.master)) {
+          throw new Error(`Workflow can reach successful terminal ${target} without core verification and approvals.`);
+        }
+        continue;
+      }
+      if (targetNode) pending.push(next);
+    }
+  }
+}
+
 function definitionHash(value: JsonValue): string {
   return createHash("sha256").update(canonicalJson(value)).digest("hex");
 }
@@ -235,9 +360,9 @@ export function compileWorkflow(
   if (
     source.agents.schemaVersion !== 1 ||
     source.tasks.schemaVersion !== 1 ||
-    source.workflow.schemaVersion !== 1
+    source.workflow.schemaVersion !== 2
   ) {
-    throw new Error("Agent, task, and workflow definition schemaVersion must all be 1.");
+    throw new Error("Agent and task definitions must use schemaVersion 1; workflow definitions must use schemaVersion 2.");
   }
   const rawAgents = uniqueRecord(source.agents.agents, "agent");
   const agents: Record<string, ResolvedAgentDefinition> = {};
@@ -297,9 +422,10 @@ export function compileWorkflow(
         kind: "task",
         taskId: node.taskId,
         agentId: node.agentId,
+        sideEffect: task.sideEffect,
         inputs: node.inputs,
       };
-    } else {
+    } else if (node.kind === "human_gate") {
       if (node.gate.allowedSignals.length === 0) {
         throw new Error(`Human gate ${node.id} must declare allowed signals.`);
       }
@@ -310,6 +436,31 @@ export function compileWorkflow(
         id: node.id,
         kind: "human_gate",
         gate: node.gate,
+        sideEffect: "none",
+        inputs: node.inputs,
+      };
+    } else {
+      assertVerificationCommands(node.id, node.commands);
+      validateVerificationContractDraft({
+        commands: node.commands,
+        totalTimeoutMs: Math.min(
+          24 * 60 * 60 * 1000,
+          node.commands.reduce((total, command) => total + command.timeoutMs, 0)
+        ),
+        protectedPaths: [],
+        testRoots: [],
+        allowedNewTestRoots: [],
+        generatedOutputPaths: [],
+      });
+      nodes[node.id] = {
+        id: node.id,
+        kind: "verification",
+        commands: node.commands.map((command) => ({
+          ...command,
+          args: [...command.args],
+          requirementIds: [...command.requirementIds],
+        })),
+        sideEffect: "workspace_mutation",
         inputs: node.inputs,
       };
     }
@@ -326,9 +477,12 @@ export function compileWorkflow(
       throw new Error(`Transition ${rule.from}.${rule.on} references unknown target ${rule.to}.`);
     }
     const allowedSignals = from.kind === "task"
-      ? tasks[from.taskId!].allowedSignals
-      : from.gate!.allowedSignals;
-    if (!allowedSignals.includes(rule.on)) {
+      ? tasks[from.taskId].allowedSignals
+      : from.kind === "human_gate"
+        ? from.gate.allowedSignals
+        : ["pass", "fail", "interrupt"];
+    if (!allowedSignals.includes(rule.on) &&
+        !((from.kind === "task" || from.kind === "verification") && CORE_TRANSITION_SIGNALS.has(rule.on))) {
       throw new Error(`Transition ${rule.from}.${rule.on} uses an undeclared signal.`);
     }
     transitions[rule.from] ??= {};
@@ -339,8 +493,10 @@ export function compileWorkflow(
   }
   for (const node of Object.values(nodes)) {
     const allowedSignals = node.kind === "task"
-      ? tasks[node.taskId!].allowedSignals
-      : node.gate!.allowedSignals;
+      ? tasks[node.taskId].allowedSignals
+      : node.kind === "human_gate"
+        ? node.gate.allowedSignals
+        : ["pass", "fail"];
     const missing = allowedSignals.filter((signal) => !transitions[node.id]?.[signal]);
     if (missing.length > 0) {
       throw new Error(`Node ${node.id} has no transition for signal(s): ${missing.join(", ")}.`);
@@ -398,13 +554,18 @@ export function compileWorkflow(
       }
     }
   }
-  const { startNodeId: cycleStart, completionNodeId: cycleCompletion } =
-    source.workflow.cyclePolicy;
-  if (!nodes[cycleStart] || !nodes[cycleCompletion]) {
+  const cycleStart = source.workflow.cyclePolicy.startNodeId;
+  const cycleCompletions = [...source.workflow.cyclePolicy.completionNodeIds];
+  if (cycleCompletions.length === 0 || new Set(cycleCompletions).size !== cycleCompletions.length) {
+    throw new Error("Cycle policy must declare at least one completion node.");
+  }
+  if (!nodes[cycleStart] || cycleCompletions.some((nodeId) => !nodes[nodeId])) {
     throw new Error("Cycle policy references an unknown node.");
   }
-  if (!canReach(cycleStart, cycleCompletion, nodes, transitions)) {
-    throw new Error(`Cycle completion node ${cycleCompletion} is unreachable from ${cycleStart}.`);
+  for (const cycleCompletion of cycleCompletions) {
+    if (!canReach(cycleStart, cycleCompletion, nodes, transitions)) {
+      throw new Error(`Cycle completion node ${cycleCompletion} is unreachable from ${cycleStart}.`);
+    }
   }
   const budgets = source.workflow.budgets;
   for (const [name, value] of Object.entries(budgets)) {
@@ -423,6 +584,50 @@ export function compileWorkflow(
     terminalRecord,
     requiredGateIds
   );
+  for (const nodeId of cycleCompletions) {
+    if (!nodes[nodeId]) throw new Error(`Cycle policy references an unknown completion node ${nodeId}.`);
+  }
+  if (nodes[source.workflow.applicationPolicy.verificationNodeId]?.kind !== "verification") {
+    throw new Error("applicationPolicy.verificationNodeId must reference a verification node.");
+  }
+  for (const [key, nodeId] of [
+    ["implementationNodeId", source.workflow.applicationPolicy.implementationNodeId],
+    ["testNodeId", source.workflow.applicationPolicy.testNodeId],
+  ] as const) {
+    if (nodeId && (nodes[nodeId]?.kind !== "task" || nodes[nodeId]?.sideEffect !== "workspace_mutation")) {
+      throw new Error(`applicationPolicy.${key} must reference a workspace-mutation task node.`);
+    }
+  }
+  for (const [key, nodeId] of Object.entries(source.workflow.applicationPolicy)) {
+    if (key.endsWith("NodeId") && typeof nodeId === "string" &&
+        key !== "blockedTerminalId" && !nodes[nodeId] && nodeId !== source.workflow.applicationPolicy.blockedTerminalId) {
+      throw new Error(`Application policy ${key} references an unknown node ${nodeId}.`);
+    }
+  }
+  assertSuccessRequiresVerification(
+    source.workflow.startNodeId,
+    nodes,
+    transitions,
+    terminalRecord,
+    source.workflow.applicationPolicy
+  );
+  // The convergence evaluator may emit this core-owned signal only at the
+  // verification/review checkpoints.  Requiring an explicit route to the
+  // configured interrupt node prevents a stagnant run from reaching a node
+  // with no legal transition and makes the stop policy auditable in the
+  // compiled definition.
+  const convergenceNodes = [
+    source.workflow.applicationPolicy.verificationNodeId,
+    source.workflow.applicationPolicy.qaNodeId,
+    source.workflow.applicationPolicy.completionApprovalNodeId,
+  ].filter((value): value is string => Boolean(value));
+  for (const nodeId of convergenceNodes) {
+    if (transitions[nodeId]?.convergence_stalled !== interruptNodeId) {
+      throw new Error(
+        `Convergence stall route ${nodeId}.convergence_stalled must target ${interruptNodeId}.`
+      );
+    }
+  }
   const components = cyclicComponents(nodes, transitions, reachable);
   const hashInput = {
     agents,
@@ -436,7 +641,7 @@ export function compileWorkflow(
     budgets,
   } as unknown as JsonValue;
   const compiled: CompiledWorkflowBundle = {
-    schemaVersion: 1,
+    schemaVersion: source.workflow.schemaVersion,
     definitionHash: definitionHash(hashInput),
     agents,
     tasks,
@@ -444,8 +649,11 @@ export function compileWorkflow(
     transitions,
     startNodeId: source.workflow.startNodeId,
     terminals: source.workflow.terminals,
-    cyclePolicy: source.workflow.cyclePolicy,
-    applicationPolicy: source.workflow.applicationPolicy,
+    cyclePolicy: {
+      startNodeId: source.workflow.cyclePolicy.startNodeId,
+      completionNodeIds: [...cycleCompletions],
+    },
+    applicationPolicy: { ...source.workflow.applicationPolicy },
     budgets,
     analysis: {
       reachableNodeIds: [...reachable].sort(),

@@ -1,15 +1,23 @@
 {
-  "protocolVersion": 2,
-  "stateSchemaVersion": 1,
+  "protocolVersion": 3,
+  "stateSchemaVersion": 2,
   "capabilities": [
-    "compiled-workflow-bundle-v1",
+    "compiled-workflow-bundle-v2",
+    "verification-runner-v1",
+    "verification-proof-v1",
+    "verification-reapproval-v1",
+    "workspace-integrity-v1",
+    "project-lease-v1",
+    "tools-none-v1",
     "agent-task-runner-v1",
     "structured-task-result-v1",
     "activation-checkpoint-v1",
     "human-gate-v1",
-    "read-only-projection-v1",
+    "read-only-projection-v2",
+    "provider-discovery-v2",
     "cas-fencing-v1",
-    "mutation-no-replay-v1"
+    "mutation-no-replay-v1",
+    "strict-current-contracts-v1"
   ],
   "pathFields": [
     "codeRoot",

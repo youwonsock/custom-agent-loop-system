@@ -62,6 +62,14 @@ jobs:
       - run: npm ci
       - name: Install pinned provider CLI
         run: npm install --global ${{ matrix.provider.package }}
+      - id: provider-binary
+        name: Resolve the installed provider binary
+        shell: pwsh
+        run: |
+          $command = Get-Command "${{ matrix.provider.id }}" -ErrorAction Stop
+          $binary = if ($command.Path) { $command.Path } else { $command.Source }
+          if ([string]::IsNullOrWhiteSpace($binary)) { throw "Could not resolve provider binary path." }
+          "path=$binary" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
       - run: npm run build
       - id: write
         name: Authenticated write and structured-event conformance
@@ -76,6 +84,7 @@ jobs:
             --provider "$PROVIDER_ID" \
             --model "$PROVIDER_MODEL" \
             --mode write \
+            --binary "${{ steps.provider-binary.outputs.path }}" \
             --report "$REPORT_PATH"
       - id: readonly
         name: Authenticated read-only conformance
@@ -90,6 +99,22 @@ jobs:
             --provider "$PROVIDER_ID" \
             --model "$PROVIDER_MODEL" \
             --mode read-only \
+            --binary "${{ steps.provider-binary.outputs.path }}" \
+            --report "$REPORT_PATH"
+      - id: tools-none
+        name: Authenticated tool-free conformance
+        continue-on-error: true
+        shell: bash
+        env:
+          PROVIDER_ID: ${{ matrix.provider.id }}
+          PROVIDER_MODEL: ${{ matrix.provider.model }}
+          REPORT_PATH: artifacts/conformance/${{ matrix.provider.id }}-${{ runner.os }}-tools-none.json
+        run: |
+          node dist/provider_conformance.js \
+            --provider "$PROVIDER_ID" \
+            --model "$PROVIDER_MODEL" \
+            --mode tools-none \
+            --binary "${{ steps.provider-binary.outputs.path }}" \
             --report "$REPORT_PATH"
       - if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -98,6 +123,6 @@ jobs:
           path: artifacts/conformance/*.json
           if-no-files-found: error
           retention-days: 30
-      - if: always() && (steps.write.outcome != 'success' || steps.readonly.outcome != 'success')
+      - if: always() && (steps.write.outcome != 'success' || steps.readonly.outcome != 'success' || steps.tools-none.outcome != 'success')
         name: Enforce conformance gate
         run: exit 1

@@ -1,7 +1,8 @@
-# Custom Agent Loop System
+# Agent Loop Orchestrator
 
 CrewAI의 Agent/Task 분리와 LangGraph의 State/Node/Edge/Reducer/Checkpoint 개념을 참고해,
-외부 프레임워크 없이 구현한 TypeScript 작업 오케스트레이터입니다. 모든 모델 작업은 하나의
+외부 프레임워크 없이 구현한 TypeScript 작업 오케스트레이터입니다. v7부터 GUI는 독립 Windows
+Electron 운영 콘솔이며 CLI도 계속 제공합니다. 모든 모델 작업은 하나의
 `AgentTaskRunner`를 통과하고, 코어가 검증한 구조화 결과만 워크플로를 전진시킵니다.
 
 ## 작업 흐름
@@ -11,6 +12,7 @@ PLANNING
   → PLAN_APPROVAL
   → IMPLEMENTATION
   → TEST
+  → VERIFY
   → QA_REVIEW
   → MASTER_APPROVAL
   → SUCCESS
@@ -43,8 +45,21 @@ PLANNING
 
 ## 설치와 실행
 
-요구사항은 Node.js 18 이상과 PATH에서 실행 가능하고 인증된 provider CLI(OpenCode, Kilo,
+CLI 요구사항은 Node.js 18 이상과 PATH에서 실행 가능하고 인증된 provider CLI(OpenCode, Kilo,
 Codex, Claude) 중 하나 이상입니다.
+
+독립 데스크톱 앱은 Windows 10/11 x64용 unsigned `Setup.exe`로 배포합니다. 앱 자체는 Node.js를
+요구하지 않으며 Electron 44의 내장 Node와 utility process를 사용합니다. provider CLI는 사용자가
+별도로 설치·인증해야 합니다.
+
+```powershell
+npm run bundle:desktop-core
+npm --prefix desktop-app ci
+npm --prefix desktop-app start
+```
+
+앱은 `%APPDATA%\AgentLoopOrchestrator`에 설정을, `%LOCALAPPDATA%\AgentLoopOrchestrator`에
+세션·projection·lease·로그를 저장합니다. 이전 세션·VS Code 확장 데이터는 변환하지 않으며, `upgrade --reset-sessions`로 등록 세션만 초기화합니다. 설정·인증정보·프로젝트 작업 트리는 보존합니다.
 
 ```powershell
 npm install
@@ -63,14 +78,18 @@ node dist/loop_orchestrator.js status --session <run-id> --json
 node dist/loop_orchestrator.js approve-plan --session <run-id> --choice-id <choice-id>
 node dist/loop_orchestrator.js revise-plan --session <run-id> --message "수정 요청"
 node dist/loop_orchestrator.js cancel-plan --session <run-id>
+node dist/loop_orchestrator.js approve-verification --session <run-id> --request-id <request-id> --candidate-hash <sha256>
+node dist/loop_orchestrator.js reject-verification --session <run-id> --request-id <request-id> --candidate-hash <sha256> --message "변경 사유"
 node dist/loop_orchestrator.js resume --session <run-id>
 node dist/loop_orchestrator.js resume --session <run-id> --approve-access
 node dist/loop_orchestrator.js resume --session <run-id> --full-access
 node dist/loop_orchestrator.js set-access --session <run-id> --mode ask
 node dist/loop_orchestrator.js interrupt --session <run-id> --message "중단 사유"
 node dist/loop_orchestrator.js stop --session <run-id>
-node dist/loop_orchestrator.js models
+node dist/loop_orchestrator.js models --json
 node dist/loop_orchestrator.js capabilities
+node dist/loop_orchestrator.js upgrade --reset-sessions --dry-run
+node dist/loop_orchestrator.js upgrade --reset-sessions
 ```
 
 `--full-access`는 현재 OS 사용자 권한으로 provider를 실행하는 명시적 비격리 모드입니다.
@@ -86,7 +105,7 @@ node dist/loop_orchestrator.js capabilities
 - `loop_config.json` / `loop_config.schema.json`
 
 정의는 run 생성 시 compile·검증한 뒤 `CompiledWorkflowBundle` 전체가 aggregate에 snapshot됩니다.
-원본 파일을 변경해도 진행 중인 run은 바뀌지 않습니다. 이전 3.x 정의와 세션 데이터는 읽거나
+원본 파일을 변경해도 진행 중인 run은 바뀌지 않습니다. 이전 버전 정의와 세션 데이터는 읽거나
 migration하지 않습니다.
 
 Compiler는 참조 무결성, signal 전이, 입력 선행 가능성, 접근 권한 확대, unreachable node,
@@ -102,7 +121,8 @@ terminal 없는 cycle, workflow-step을 소비하지 않는 cycle, 승인 gate �
 - provider 실행 후 mutation 결과가 불명확하면 activation을 `unknown_mutation`으로 표시하고 자동
   replay를 거부합니다.
 - access approval은 현재 activation에 연결되며 승인 후 같은 activation에서 새 attempt로 재개됩니다.
-- VS Code 확장은 versioned read-only projection만 읽고 aggregate를 직접 쓰지 않습니다.
+- 데스크톱 운영 콘솔은 versioned read-only projection을 표시하고 aggregate 변경은 검증된 core
+  명령으로만 수행합니다.
 
 상태는 `RUNNING`, `WAITING_USER`, `PAUSED`, `BLOCKED`, `STOPPED`, `SUCCESS`, `FAILED`를
 사용합니다. workflow-step, cycle, node execution, artifact input, event 수는 compiled budget으로
@@ -118,7 +138,7 @@ src/
   tasks/           schema, guardrail, effect mapper
   runtime/         provider 실행 adapter
   infrastructure/ repository, artifact, control queue
-  interfaces/      CLI와 VS Code projection
+  interfaces/      CLI와 중립 operator projection
   composition/     concrete 조립
 ```
 
@@ -126,16 +146,16 @@ src/
 구조 테스트가 금지된 import, 직접 aggregate writer, 구형 executor/텍스트 parser의 재도입을
 차단합니다.
 
-## VS Code 확장
+## Desktop packaging
 
 ```powershell
-npm --prefix vscode-extension install
-npm --prefix vscode-extension run package
-code --install-extension vscode-extension\agent-loop-vscode-win32-x64-4.0.0.vsix --force
+npm run package:desktop
+npm run verify:desktop
 ```
 
-플랫폼별 VSIX에는 v4 코어와 해당 플랫폼의 `node-pty`가 포함됩니다. Extension Host는 코어
-command protocol을 통해 승인·중단·재개를 요청하고 `run_projection.json`만 표시합니다.
+Forge는 Electron 44, Squirrel.Windows, Fuses, Auto Unpack Natives를 사용해
+`win32-x64 Setup.exe`를 생성합니다. v1은 수동 업데이트이며 자동 updater나 코드 서명은 포함하지
+않습니다.
 
 ## 개발 검증
 
@@ -146,12 +166,10 @@ npm run generated:check
 npm run pack:check
 npm run evaluate:langgraph
 
-npm --prefix vscode-extension run typecheck
-npm --prefix vscode-extension test
-npm --prefix vscode-extension run test:host
-npm --prefix vscode-extension run package
+npm --prefix desktop-app run build
+npm run verify:release-bundle -- artifacts
 ```
 
 LangGraph는 `experiments/langgraph`의 구조 비교 전용 private package에만 존재합니다. production
-package와 VSIX에는 CrewAI/LangGraph dependency가 포함되지 않습니다. 결정 근거는
+package와 desktop installer에는 CrewAI/LangGraph dependency가 포함되지 않습니다. 결정 근거는
 [ADR 0008](./docs/adr/0008-agent-task-graph-v4.md)에 기록되어 있습니다.

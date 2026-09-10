@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { evaluateProviderConformance } from "./provider_conformance";
+import { evaluateProviderConformance, runAuthenticatedProviderConformance } from "./provider_conformance";
 
 const baseEvidence = {
   invocationArgs: ["run", "safe prompt"],
@@ -34,6 +34,13 @@ test("provider conformance rejects mutation and every secret-sentinel surface", 
   ]);
 });
 
+test("read-only conformance requires an authenticated structured response", () => {
+  assert.deepEqual(evaluateProviderConformance({
+    ...baseEvidence,
+    structuredEventCount: 0,
+  }), ["read-only provider did not emit an authenticated structured response"]);
+});
+
 test("write conformance requires both a proof artifact and structured events", () => {
   assert.deepEqual(evaluateProviderConformance({
     ...baseEvidence,
@@ -44,4 +51,31 @@ test("write conformance requires both a proof artifact and structured events", (
     "write-capable provider did not create the proof artifact",
     "provider emitted no structured events",
   ]);
+});
+
+test("tool-free and read-only conformance distinguish blocked capability decisions", async () => {
+  for (const provider of ["opencode", "kilo", "codex", "claude"] as const) {
+    const report = await runAuthenticatedProviderConformance({ provider, model: "coverage", binary: "missing-agent-loop-provider", mode: "tools-none" });
+    assert.equal(report.spawned, false);
+    assert.equal(report.expectedFailClosed, true);
+    assert.match(report.outcome, /^blocked_/u);
+  }
+  const missing = await runAuthenticatedProviderConformance({ provider: "codex", model: "coverage", binary: "missing-agent-loop-provider", mode: "write" });
+  assert.equal(missing.spawned, false);
+  assert.equal(missing.expectedFailClosed, true);
+  assert.match(missing.outcome, /^blocked_/u);
+});
+
+test("conformance reports tool-free authentication failures separately from read-only failures", () => {
+  assert.deepEqual(evaluateProviderConformance({
+    ...baseEvidence,
+    toolsNone: true,
+    structuredEventCount: 0,
+  }), ["tool-free provider did not emit an authenticated structured response"]);
+  assert.deepEqual(evaluateProviderConformance({
+    ...baseEvidence,
+    readOnly: false,
+    structuredEventCount: 1,
+    writeProofPresent: false,
+  }), ["write-capable provider did not create the proof artifact"]);
 });

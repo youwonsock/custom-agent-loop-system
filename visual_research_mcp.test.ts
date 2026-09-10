@@ -1,5 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
 import * as path from "node:path";
 import {
   REFERENCE_DISCOVERY_TOOL_NAME,
@@ -46,6 +49,11 @@ test("visual research SSRF policy accepts public addresses and rejects local or 
   assert.throws(() => validateRemoteImageUrlSyntax("https://127.0.0.1/a.png"), /Private or reserved/);
   assert.throws(() => validateRemoteImageUrlSyntax("https://example.com:8443/a.png"), /port 443/);
   assert.throws(() => validateRemoteImageUrlSyntax("https://user:pass@example.com/a.png"), /credentials/);
+  assert.throws(() => validateRemoteImageUrlSyntax(""), /characters/);
+  assert.throws(() => validateRemoteImageUrlSyntax("not-a-url"), /valid absolute URL/);
+  assert.throws(() => validateRemoteImageUrlSyntax("https://example.local/a.png"), /Local or internal/);
+  assert.equal(isPublicIpAddress("::ffff:c000:0201"), false);
+  assert.equal(isPublicIpAddress("not-an-ip"), false);
 });
 
 test("visual research accepts only supported image magic bytes", () => {
@@ -68,9 +76,18 @@ test("visual research extracts assistant text only from structured provider even
     "IMAGE 1\nVISIBLE_FACTS: purple table\nUNCERTAINTIES: motion is not visible"
   );
   assert.equal(
-    extractVisualAssistantText(JSON.stringify({ type: "result", result: "fallback result" })),
-    "fallback result"
+    extractVisualAssistantText(JSON.stringify({ type: "result", result: "terminal result" })),
+    "terminal result"
   );
+  assert.equal(extractVisualAssistantText(JSON.stringify({ type: "text", text: "fallback text" })), "fallback text");
+  assert.equal(extractVisualAssistantText(JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: "completed" } })), "completed");
+  assert.equal(extractVisualAssistantText(JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "assistant content" }] } })), "assistant content");
+  assert.throws(() => extractVisualAssistantText("not-json"), /malformed JSON/u);
+  assert.throws(() => extractVisualAssistantText(JSON.stringify({ type: "text", part: {} })), /no text payload/u);
+  assert.throws(() => extractVisualAssistantText(JSON.stringify({ type: "item.completed", item: {} })), /item.completed/u);
+  assert.throws(() => extractVisualAssistantText(JSON.stringify({ type: "assistant", message: {} })), /assistant frame/u);
+  assert.throws(() => extractVisualAssistantText(JSON.stringify({ type: "result", result: 3 })), /result frame/u);
+  assert.throws(() => extractVisualAssistantText([JSON.stringify({ type: "text", text: "a" }), JSON.stringify({ type: "result", result: "b" })].join("\n")), /contradictory/u);
 });
 
 test("reference discovery builds bounded exact-title queries and parses direct Yahoo destinations", () => {
@@ -108,6 +125,13 @@ test("reference discovery builds bounded exact-title queries and parses direct Y
       query: '"Smash Fast" APK',
     },
   ]);
+  const noisy = '<li><div class="algo"><a href="not-a-url"><h3>bad</h3></a></div></li>' +
+    '<li><div class="other"><a href="https://example.com"><h3>ignored</h3></a></div></li>' +
+    '<li><div class="algo"><a href="https://r.search.yahoo.com/x/RU=https%ZZ/RK=x"><h3>bad redirect</h3></a></div></li>' +
+    '<li><div class="algo"><a href="https://example.com/#hash"><h3>Good &amp; Title</h3><p>snippet</p></a></div></li>' +
+    '<li><div class="algo"><a href="https://example.com/"><h3>Duplicate</h3></a></div></li>';
+  assert.equal(parseYahooReferenceSearchResults(noisy, "q").length, 1);
+  assert.throws(() => buildReferenceDiscoveryQueries("x".repeat(201)), /title must contain/);
 });
 
 test("visual research server configuration is ephemeral, read-only, and auditable", () => {
@@ -129,4 +153,67 @@ test("visual research server configuration is ephemeral, read-only, and auditabl
   ]);
   assert.ok(server.args?.includes(DEFAULT_VISUAL_RESEARCH_MODEL));
   assert.equal(server.environment, undefined);
+});
+
+test("visual research MCP server handles JSON-RPC lifecycle and rejects unsafe tool calls", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "agent-loop-visual-rpc-"));
+  try {
+    const child = spawn(process.execPath, [
+      path.join(process.cwd(), "dist", "visual_research_mcp.js"),
+      "--binary", process.execPath,
+      "--temp-root", root,
+      "--model-timeout", "1000",
+    ], { stdio: ["pipe", "pipe", "pipe"], windowsHide: true });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (chunk) => { stdout += chunk; });
+    child.stderr.on("data", (chunk) => { stderr += chunk; });
+    for (const request of [
+      { jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2024-11-05" } },
+      { jsonrpc: "2.0", id: 2, method: "ping" },
+      { jsonrpc: "2.0", id: 3, method: "tools/list" },
+      { jsonrpc: "2.0", id: 4, method: "resources/list" },
+      { jsonrpc: "2.0", id: 5, method: "prompts/list" },
+      { jsonrpc: "2.0", id: 6, method: "tools/call", params: { name: VISUAL_RESEARCH_TOOL_NAME, arguments: { image_urls: ["https://127.0.0.1/image.png"] } } },
+      { jsonrpc: "2.0", id: 7, method: "tools/call", params: { name: REFERENCE_DISCOVERY_TOOL_NAME, arguments: { title: "" } } },
+      { jsonrpc: "2.0", id: 8, method: "unknown" },
+      { jsonrpc: "2.0", id: 9 },
+      { jsonrpc: "2.0", id: 10, method: "resources/templates/list" },
+      { jsonrpc: "2.0", id: 11, method: "tools/call", params: { name: "unknown_tool", arguments: {} } },
+      { jsonrpc: "2.0", id: 12, method: "tools/call", params: { name: VISUAL_RESEARCH_TOOL_NAME, arguments: {} } },
+      { jsonrpc: "2.0", id: 13, method: "tools/call", params: { name: VISUAL_RESEARCH_TOOL_NAME, arguments: { image_urls: [] } } },
+      { jsonrpc: "2.0", id: 14, method: "tools/call", params: { name: VISUAL_RESEARCH_TOOL_NAME, arguments: { image_urls: ["https://example.com/a.png", "https://example.com/a.png"] } } },
+      { jsonrpc: "2.0", id: 15, method: "tools/call", params: { name: REFERENCE_DISCOVERY_TOOL_NAME, arguments: {} } },
+      { jsonrpc: "2.0", id: 16, method: "initialize", params: {} },
+      { jsonrpc: "2.0", method: "notifications/initialized" },
+    ]) child.stdin.write(`${JSON.stringify(request)}\n`);
+    child.stdin.write("{not-json}\n");
+    child.stdin.end();
+    const exitCode = await new Promise<number>((resolve, reject) => {
+      child.once("error", reject);
+      child.once("close", (code) => resolve(code ?? -1));
+    });
+    assert.equal(exitCode, 0, stderr);
+    const responses = stdout.trim().split(/\r?\n/).map((line) => JSON.parse(line) as Record<string, unknown>);
+    assert.equal(responses.length, 17);
+    const byId = (id: number) => responses.find((response) => response.id === id)!;
+    assert.equal((byId(1).result as Record<string, unknown>).protocolVersion, "2024-11-05");
+    assert.equal((byId(2).result as Record<string, unknown>).toString(), "[object Object]");
+    assert.equal((byId(6).result as Record<string, unknown>).isError, true);
+    assert.equal((byId(7).result as Record<string, unknown>).isError, true);
+    assert.equal((byId(8).error as Record<string, unknown>).code, -32601);
+    assert.equal((byId(9).error as Record<string, unknown>).code, -32600);
+    assert.equal((byId(10).result as Record<string, unknown>).resourceTemplates instanceof Array, true);
+    assert.equal((byId(11).error as Record<string, unknown>).code, -32602);
+    assert.equal((byId(12).result as Record<string, unknown>).isError, true);
+    assert.equal((byId(13).result as Record<string, unknown>).isError, true);
+    assert.equal((byId(14).result as Record<string, unknown>).isError, true);
+    assert.equal((byId(15).result as Record<string, unknown>).isError, true);
+    assert.equal((byId(16).result as Record<string, unknown>).protocolVersion, "2024-11-05");
+    assert.equal((responses.find((response) => response.id === null)?.error as Record<string, unknown>).code, -32700);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
 });

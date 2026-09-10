@@ -49,7 +49,7 @@ test("provider registry includes OpenCode, Kilo, Codex, and Claude and accepts c
       adapter: "codex",
       binary: "company-codex",
       enabled: true,
-      fallbackModels: ["company-gpt"],
+      modelCatalog: { source: "configured", models: ["company-gpt"] },
     },
   });
   assert.deepEqual(Object.keys(providers).slice(0, 4), ["opencode", "kilo", "codex", "claude"]);
@@ -62,12 +62,12 @@ test("built-in provider overrides are normalized and reject invalid adapters or 
     codex: {
       label: "  Local Codex  ",
       binary: " codex-custom ",
-      fallbackModels: ["gpt-test", ""],
+      modelCatalog: { source: "configured", models: ["gpt-test"] },
     },
   });
   assert.equal(providers.codex.label, "Local Codex");
   assert.equal(providers.codex.binary, "codex-custom");
-  assert.deepEqual(providers.codex.fallbackModels, ["gpt-test"]);
+  assert.deepEqual(providers.codex.modelCatalog, { source: "configured", models: ["gpt-test"] });
   assert.throws(
     () => normalizeProviders({ codex: { adapter: "invalid" as any } }),
     /unsupported adapter/
@@ -182,6 +182,22 @@ test("Codex read-only roles isolate inherited config and withhold MCP tools", ()
   ));
   assert.equal(invocation.args.some((arg) => arg.includes("mcp_servers.docs")), false);
   assert.equal(Object.values(invocation.env).includes("secret"), false);
+});
+
+test("Codex tool-free formatting recovery fails closed without a verified capability", () => {
+  assert.throws(
+    () => buildProviderInvocation(DEFAULT_PROVIDERS.codex, {
+      model: "gpt-5.6-sol",
+      targetProjectPath: providerTargetPath,
+      prompt: "format this response",
+      fullAccess: false,
+      readOnly: true,
+      workspaceMode: "none",
+      webSearch: false,
+      mcpServers: [],
+    }),
+    /verified tools-none capability/
+  );
 });
 
 test("provider capability profiles are adapter-owned and cannot be escalated by configuration", () => {

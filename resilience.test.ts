@@ -9,7 +9,7 @@ import {
   collectRecoveredChildPids,
   completeControlRequest,
   enqueueControlRequest,
-  ensureControlQueue,
+  initControlQueue,
   getControlQueuePaths,
   readControlAck,
   recoverClaimedControlRequests,
@@ -45,7 +45,7 @@ test("short state lock serializes concurrent updates", async () => {
 test("control queue prioritizes STOP and preserves every request", async () => {
   await withTempDir(async (dir) => {
     const paths = getControlQueuePaths(dir);
-    await ensureControlQueue(paths);
+    await initControlQueue(paths);
     const interrupt = await enqueueControlRequest(paths, "INTERRUPT", "inspect");
     const stop = await enqueueControlRequest(paths, "STOP");
     const first = await claimNextControlRequest(paths);
@@ -62,7 +62,7 @@ test("control queue prioritizes STOP and preserves every request", async () => {
 test("malformed control requests are quarantined and cannot escape the ACK directory", async () => {
   await withTempDir(async (dir) => {
     const paths = getControlQueuePaths(path.join(dir, "session"));
-    await ensureControlQueue(paths);
+    await initControlQueue(paths);
     const escapeBase = path.join(dir, "session", "escaped-control-ack");
     await fsp.writeFile(
       path.join(paths.requests, "attacker.json"),
@@ -86,7 +86,7 @@ test("malformed control requests are quarantined and cannot escape the ACK direc
 test("temporary atomic request files are ignored rather than quarantined", async () => {
   await withTempDir(async (dir) => {
     const paths = getControlQueuePaths(dir);
-    await ensureControlQueue(paths);
+    await initControlQueue(paths);
     const tempName = "control_migrate_0123456789ab.json.tmp.123.456.01234567";
     await fsp.writeFile(path.join(paths.requests, tempName), "partial", "utf8");
 
@@ -99,7 +99,7 @@ test("temporary atomic request files are ignored rather than quarantined", async
 test("forged completed ACKs are quarantined and cannot discard claimed requests", async () => {
   await withTempDir(async (dir) => {
     const paths = getControlQueuePaths(dir);
-    await ensureControlQueue(paths);
+    await initControlQueue(paths);
     const requestId = "control_recover_0123456789ab";
     const request = {
       requestId,
@@ -136,7 +136,7 @@ test("forged completed ACKs are quarantined and cannot discard claimed requests"
 test("invalid timestamps and oversized messages are quarantined or rejected", async () => {
   await withTempDir(async (dir) => {
     const paths = getControlQueuePaths(dir);
-    await ensureControlQueue(paths);
+    await initControlQueue(paths);
     const requestId = "control_invalid_0123456789ab";
     await fsp.writeFile(
       path.join(paths.requests, `${requestId}.json`),
@@ -160,7 +160,7 @@ test("invalid timestamps and oversized messages are quarantined or rejected", as
 test("control request filenames must exactly match their validated request id", async () => {
   await withTempDir(async (dir) => {
     const paths = getControlQueuePaths(dir);
-    await ensureControlQueue(paths);
+    await initControlQueue(paths);
     const request = await enqueueControlRequest(paths, "INTERRUPT", "inspect");
     const expectedPath = path.join(paths.requests, `${request.requestId}.json`);
     const mismatchedPath = path.join(paths.requests, "control_legacy_000000000000.json");
@@ -174,6 +174,7 @@ test("control request filenames must exactly match their validated request id", 
 test("control completion rejects invalid results and oversized ACK messages", async () => {
   await withTempDir(async (dir) => {
     const paths = getControlQueuePaths(dir);
+    await initControlQueue(paths);
     const request = await enqueueControlRequest(paths, "STOP");
     const claimed = await claimNextControlRequest(paths);
     assert.equal(claimed?.request.requestId, request.requestId);
@@ -193,7 +194,7 @@ test("control completion rejects invalid results and oversized ACK messages", as
 test("recovery quarantines malformed processing entries instead of replaying them", async () => {
   await withTempDir(async (dir) => {
     const paths = getControlQueuePaths(dir);
-    await ensureControlQueue(paths);
+    await initControlQueue(paths);
     await fsp.writeFile(
       path.join(paths.processing, "control_bad_000000000000.json"),
       "{not-json",

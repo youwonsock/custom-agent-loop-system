@@ -1,3 +1,4 @@
 # Development-only framework evaluations must never enter the runtime package.
 experiments/
 .spike-dist/
+desktop-app/

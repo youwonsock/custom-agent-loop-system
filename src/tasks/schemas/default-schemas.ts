@@ -69,6 +69,13 @@ const commonInputProperties: Record<string, JsonSchema> = {
   review_output: {},
   failure: {},
   recovery: {},
+  verification_contract: {},
+  verification_result: {},
+  verification_feedback: {},
+  verification_criteria_changes: {},
+  previous_cycle_feedback: {},
+  open_findings: {},
+  planning_feedback: {},
 };
 
 function inputSchema(required: string[]): JsonSchema {
@@ -79,6 +86,21 @@ function inputSchema(required: string[]): JsonSchema {
     properties: commonInputProperties,
   };
 }
+
+const verificationCommand: JsonSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["id", "label", "executable", "args", "cwd", "timeoutMs", "requirementIds"],
+  properties: {
+    id: { type: "string", minLength: 1, maxLength: 128 },
+    label: { type: "string", minLength: 1, maxLength: 500 },
+    executable: { type: "string", minLength: 1, maxLength: 4096 },
+    args: { type: "array", maxItems: 128, items: { type: "string", maxLength: 8192 } },
+    cwd: { type: "string", minLength: 1, maxLength: 4096 },
+    timeoutMs: { type: "integer", minimum: 1, maximum: 86400000 },
+    requirementIds: { type: "array", minItems: 1, uniqueItems: true, maxItems: 200, items: { type: "string", minLength: 1, maxLength: 128 } },
+  },
+};
 
 const planChoice: JsonSchema = {
   type: "object",
@@ -95,7 +117,25 @@ const planChoice: JsonSchema = {
       uniqueItems: true,
       items: { type: "string", minLength: 1, maxLength: 128 },
     },
+    verification: {
+      type: "object",
+      additionalProperties: false,
+      required: ["commands", "totalTimeoutMs", "protectedPaths", "testRoots", "allowedNewTestRoots", "generatedOutputPaths"],
+      properties: {
+        commands: { type: "array", minItems: 1, maxItems: 10, items: verificationCommand },
+        totalTimeoutMs: { type: "integer", minimum: 1 },
+        protectedPaths: { type: "array", uniqueItems: true, items: { type: "string", minLength: 1, maxLength: 4096 } },
+        testRoots: { type: "array", uniqueItems: true, items: { type: "string", minLength: 1, maxLength: 4096 } },
+        allowedNewTestRoots: { type: "array", uniqueItems: true, items: { type: "string", minLength: 1, maxLength: 4096 } },
+        generatedOutputPaths: { type: "array", uniqueItems: true, items: { type: "string", minLength: 1, maxLength: 4096 } },
+      },
+    },
   },
+};
+
+const planChoiceV2: JsonSchema = {
+  ...planChoice,
+  required: ["id", "title", "plan", "requirementCoverage", "verification"],
 };
 
 const commandObservation: JsonSchema = {
@@ -201,6 +241,15 @@ export function createDefaultSchemaRegistry(): SchemaRegistry {
         maxItems: 200,
         items: { type: "string", minLength: 1, maxLength: 8_000 },
       },
+      proofId: { type: "string", minLength: 1, maxLength: 256 },
+      contractRevision: { type: "integer", minimum: 1 },
+      resolvedFindingIds: {
+        type: "array",
+        maxItems: 200,
+        uniqueItems: true,
+        items: { type: "string", minLength: 1, maxLength: 256 },
+      },
+      rationale: { type: "string", maxLength: 20_000 },
     },
   };
   registry.register("task_result.audit_quality.v1", auditResult);
@@ -213,6 +262,80 @@ export function createDefaultSchemaRegistry(): SchemaRegistry {
     required: ["decision", "findings", "rationale"],
   });
   registry.register("task_result.analyze_interrupt.v1", {
+    type: "object",
+    additionalProperties: false,
+    required: ["briefing", "facts", "recoveryAction"],
+    properties: {
+      briefing: { type: "string", minLength: 1, maxLength: 20_000 },
+      facts: {
+        type: "array",
+        minItems: 1,
+        maxItems: 100,
+        items: { type: "string", minLength: 1, maxLength: 8_000 },
+      },
+      recoveryAction: { type: "string", minLength: 1, maxLength: 8_000 },
+    },
+  });
+
+  // v2 task contracts carry the verification draft and feedback explicitly.
+  // The v1 registrations above remain available for the stable envelope parser;
+  // the shipped v7 task definitions reference only these v2 contracts, and a
+  // model still cannot manufacture a verification proof.
+  registry.register("task_input.produce_plan.v2", inputSchema(["goal", "requirements", "target_project_path"]));
+  registry.register("task_input.implement_changes.v2", inputSchema([
+    "goal", "requirements", "approved_plan", "plan_approval", "target_project_path", "additional_allowed_paths",
+  ]));
+  registry.register("task_input.run_tests.v2", inputSchema([
+    "goal", "requirements", "implementation_output", "target_project_path", "verification_contract", "verification_feedback", "open_findings",
+  ]));
+  registry.register("task_input.audit_quality.v2", inputSchema([
+    "goal", "requirements", "implementation_output", "test_output", "verification_contract", "verification_result", "open_findings",
+  ]));
+  registry.register("task_input.approve_completion.v2", inputSchema([
+    "goal", "requirements", "implementation_output", "test_output", "review_output", "verification_contract", "verification_result", "open_findings",
+  ]));
+  registry.register("task_input.analyze_interrupt.v2", inputSchema(["goal", "failure", "recovery", "verification_feedback", "open_findings"]));
+  registry.register("task_result.produce_plan.v2", {
+    type: "object",
+    additionalProperties: false,
+    required: ["choices"],
+    properties: { choices: { type: "array", minItems: 1, maxItems: 10, items: planChoiceV2 } },
+  });
+  registry.register("task_result.implement_changes.v2", {
+    type: "object",
+    additionalProperties: false,
+    required: ["changedFiles", "notes"],
+    properties: {
+      changedFiles: { type: "array", maxItems: 1_000, uniqueItems: true, items: { type: "string", minLength: 1, maxLength: 4_096 } },
+      notes: { type: "string", maxLength: 20_000 },
+    },
+  });
+  registry.register("task_result.run_tests.v2", {
+    type: "object",
+    additionalProperties: false,
+    required: ["changedFiles", "issues", "verificationCriteriaChanges"],
+    properties: {
+      changedFiles: { type: "array", maxItems: 1_000, uniqueItems: true, items: { type: "string", minLength: 1, maxLength: 4_096 } },
+      issues: { type: "array", maxItems: 200, items: { type: "string", minLength: 1, maxLength: 8_000 } },
+      verificationCriteriaChanges: { type: "array", maxItems: 200, items: { type: "string", minLength: 1, maxLength: 8_000 } },
+    },
+  });
+  const approvalV2: JsonSchema = {
+    type: "object",
+    additionalProperties: false,
+    required: ["decision", "findings", "proofId", "contractRevision", "resolvedFindingIds", "rationale"],
+    properties: {
+      decision: { enum: ["approved", "rejected"] },
+      findings: { type: "array", maxItems: 200, items: { type: "string", minLength: 1, maxLength: 8_000 } },
+      proofId: { type: "string", minLength: 1, maxLength: 256 },
+      contractRevision: { type: "integer", minimum: 1 },
+      resolvedFindingIds: { type: "array", maxItems: 200, uniqueItems: true, items: { type: "string", minLength: 1, maxLength: 256 } },
+      rationale: { type: "string", minLength: 1, maxLength: 20_000 },
+    },
+  };
+  registry.register("task_result.audit_quality.v2", approvalV2);
+  registry.register("task_result.approve_completion.v2", approvalV2);
+  registry.register("task_result.analyze_interrupt.v2", {
     type: "object",
     additionalProperties: false,
     required: ["briefing", "facts", "recoveryAction"],

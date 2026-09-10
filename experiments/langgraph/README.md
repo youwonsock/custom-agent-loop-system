@@ -1,7 +1,7 @@
 # LangGraph.js structural comparison
 
 This private package compares LangGraph routing with the v4 compiled workflow. It is excluded from the
-root TypeScript build, npm package, and VSIX.
+root TypeScript build, npm package, and Windows desktop installer.
 
 ```powershell
 npm run evaluate:langgraph

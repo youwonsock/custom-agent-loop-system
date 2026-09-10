@@ -8,7 +8,8 @@ again from the adapter before every invocation.
 
 The `Authenticated provider conformance` workflow is intentionally manual and uses the protected
 `provider-conformance` GitHub environment. It runs OpenCode, Kilo, Codex, and Claude on Windows,
-Linux, and macOS. Each job uses a pinned CLI version, a disposable workspace, and two checks:
+Linux, and macOS. Each job uses a pinned CLI version, resolves the exact installed executable,
+and records its normalized version and OS/architecture capability key before running three modes:
 
 The matrix uses Node.js 22 because the pinned Claude CLI requires it. This runner requirement is
 independent of the packaged Agent Loop runtime, which is still tested and supported on Node.js 18.
@@ -17,6 +18,9 @@ independent of the packaged Agent Loop runtime, which is still tested and suppor
 2. A read-only run must leave a byte-hashed workspace unchanged. Codex additionally ignores user
    config, treats every possible project root as untrusted, ignores exec-policy rules, and withholds
    runtime MCP so inherited tools cannot enter the role.
+3. A tool-free run is accepted only for an exact verified adapter/version/OS cell. Codex is
+   currently reported as `blocked_unverified`; that safety decision is never counted as an
+   authenticated tool-free execution (`executionVerified: false`).
 
 Persisted OpenCode/Kilo MCP remains withheld from read-only roles. The separately tested OpenCode
 research path admits only an ephemeral orchestrator-owned server, under a random per-attempt
@@ -36,8 +40,10 @@ the exact value. The report never contains the sentinel. Unknown/destructive int
 remain fail-closed in `ProcessSupervisor`.
 
 Required environment secrets are `OPENCODE_API_KEY`, `KILO_API_KEY`, `OPENAI_API_KEY`, and
-`ANTHROPIC_API_KEY`. Promotion requires all 12 provider/OS jobs and both modes to pass. Reports are
-uploaded as immutable workflow artifacts and must refer to the exact candidate commit.
+`ANTHROPIC_API_KEY`. Promotion requires all 36 provider/OS/mode reports to be present. Verified
+cells must report the pinned CLI version and `outcome: "executed_pass"`; only the explicitly
+declared Codex tool-free cell may use `outcome: "blocked_unverified"`. Reports are uploaded as
+immutable workflow artifacts and must refer to the exact candidate commit.
 
 For an already authenticated local CLI, one matrix cell can be run with:
 

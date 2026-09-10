@@ -7,8 +7,8 @@
       "runner": "agent",
       "description": "Produce three complete implementation choices for the fixed requirements.",
       "expectedOutput": "Three distinct plans, each covering every requirement ID.",
-      "inputSchemaId": "task_input.produce_plan.v1",
-      "resultSchemaId": "task_result.produce_plan.v1",
+      "inputSchemaId": "task_input.produce_plan.v2",
+      "resultSchemaId": "task_result.produce_plan.v2",
       "allowedSignals": ["success"],
       "sideEffect": "none",
       "toolPolicy": { "workspace": "read", "webSearch": true, "mcpServers": [] },
@@ -24,8 +24,8 @@
       "runner": "agent",
       "description": "Implement the selected approved plan in the target workspace.",
       "expectedOutput": "Changed files, focused verification observations, notes, and evidence for every requirement.",
-      "inputSchemaId": "task_input.implement_changes.v1",
-      "resultSchemaId": "task_result.implement_changes.v1",
+      "inputSchemaId": "task_input.implement_changes.v2",
+      "resultSchemaId": "task_result.implement_changes.v2",
       "allowedSignals": ["success"],
       "sideEffect": "workspace_mutation",
       "toolPolicy": { "workspace": "write", "webSearch": true, "mcpServers": [] },
@@ -37,15 +37,14 @@
       "id": "run_tests",
       "runner": "agent",
       "description": "Independently create missing tests when necessary and run acceptance checks.",
-      "expectedOutput": "Observed commands, pass/fail verdict, failures, and evidence for every requirement.",
-      "inputSchemaId": "task_input.run_tests.v1",
-      "resultSchemaId": "task_result.run_tests.v1",
-      "allowedSignals": ["pass", "fail"],
+      "expectedOutput": "Prepare the verification run, report changed files and discovered issues, and provide evidence for every requirement.",
+      "inputSchemaId": "task_input.run_tests.v2",
+      "resultSchemaId": "task_result.run_tests.v2",
+      "allowedSignals": ["prepared"],
       "sideEffect": "workspace_mutation",
       "toolPolicy": { "workspace": "write", "webSearch": false, "mcpServers": [] },
       "guardrails": [
-        { "id": "complete_requirement_evidence" },
-        { "id": "signal_matches_payload", "config": { "field": "verdict" } }
+        { "id": "complete_requirement_evidence" }
       ],
       "effectMapper": "record_test_result",
       "retryPolicy": { "maxAttempts": 2, "formatRecoveryAttempts": 1, "backoffMs": [5000] }
@@ -55,15 +54,16 @@
       "runner": "agent",
       "description": "Audit implementation and test evidence without changing files.",
       "expectedOutput": "Approved/rejected decision, concrete findings, and evidence for every requirement.",
-      "inputSchemaId": "task_input.audit_quality.v1",
-      "resultSchemaId": "task_result.audit_quality.v1",
+      "inputSchemaId": "task_input.audit_quality.v2",
+      "resultSchemaId": "task_result.audit_quality.v2",
       "allowedSignals": ["approved", "rejected"],
       "sideEffect": "none",
       "toolPolicy": { "workspace": "read", "webSearch": false, "mcpServers": [] },
       "guardrails": [
         { "id": "complete_requirement_evidence" },
         { "id": "signal_matches_payload", "config": { "field": "decision" } },
-        { "id": "approval_requires_satisfied_evidence" }
+        { "id": "approval_requires_satisfied_evidence" },
+        { "id": "verification_approval_matches_proof" }
       ],
       "effectMapper": "record_quality_audit",
       "retryPolicy": { "maxAttempts": 2, "formatRecoveryAttempts": 1, "backoffMs": [5000] }
@@ -73,15 +73,16 @@
       "runner": "agent",
       "description": "Make the final acceptance decision for the original goal.",
       "expectedOutput": "Approved/rejected decision with fresh evidence and rationale.",
-      "inputSchemaId": "task_input.approve_completion.v1",
-      "resultSchemaId": "task_result.approve_completion.v1",
+      "inputSchemaId": "task_input.approve_completion.v2",
+      "resultSchemaId": "task_result.approve_completion.v2",
       "allowedSignals": ["approved", "rejected"],
       "sideEffect": "none",
       "toolPolicy": { "workspace": "read", "webSearch": false, "mcpServers": [] },
       "guardrails": [
         { "id": "complete_requirement_evidence" },
         { "id": "signal_matches_payload", "config": { "field": "decision" } },
-        { "id": "approval_requires_satisfied_evidence" }
+        { "id": "approval_requires_satisfied_evidence" },
+        { "id": "verification_approval_matches_proof" }
       ],
       "effectMapper": "record_completion_approval",
       "retryPolicy": { "maxAttempts": 2, "formatRecoveryAttempts": 1, "backoffMs": [5000] }
@@ -91,8 +92,8 @@
       "runner": "agent",
       "description": "Produce a bounded factual briefing after retry exhaustion, security blocking, or oscillation.",
       "expectedOutput": "Facts, failure briefing, and one concrete recovery action.",
-      "inputSchemaId": "task_input.analyze_interrupt.v1",
-      "resultSchemaId": "task_result.analyze_interrupt.v1",
+      "inputSchemaId": "task_input.analyze_interrupt.v2",
+      "resultSchemaId": "task_result.analyze_interrupt.v2",
       "allowedSignals": ["success"],
       "sideEffect": "none",
       "toolPolicy": { "workspace": "read", "webSearch": false, "mcpServers": [] },

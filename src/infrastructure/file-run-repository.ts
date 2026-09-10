@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import type { Dirent } from "node:fs";
 import * as path from "node:path";
 import * as fsp from "node:fs/promises";
 import type { RunRepositoryPort } from "../application/ports/run-repository";
@@ -7,10 +8,37 @@ import { atomicWriteJson } from "../../json_file_store";
 import { withShortFileLock } from "../../resilience";
 
 const SAFE_RUN_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/u;
+const WINDOWS_RESERVED_NAME = /^(?:CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\..*)?$/iu;
+
+function safePathSegment(value: string, label: string): string {
+  if (typeof value !== "string" || !value.trim()) throw new Error(`${label} must be a non-empty path segment.`);
+  const candidate = value.trim();
+  if (path.isAbsolute(candidate) || path.win32.isAbsolute(candidate) || path.posix.isAbsolute(candidate) || candidate.includes("\0")) {
+    throw new Error(`${label} must be a relative path segment.`);
+  }
+  const normalized = candidate.replace(/\\/gu, "/");
+  const parts = normalized.split("/");
+  if (parts.length !== 1 || parts[0] === "." || parts[0] === ".." || !parts[0]) {
+    throw new Error(`${label} contains an unsafe path segment.`);
+  }
+  if (/[\x00-\x1f<>:"|?*]/u.test(parts[0]) || /[ .]$/u.test(parts[0]) || WINDOWS_RESERVED_NAME.test(parts[0])) {
+    throw new Error(`${label} contains a non-portable path segment.`);
+  }
+  return parts[0];
+}
 
 interface FenceRecord {
   epoch: number;
   updatedAt: string;
+}
+
+function validateFenceRecord(value: unknown, filePath: string): FenceRecord {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`Fencing record is invalid: ${filePath}`);
+  const record = value as Partial<FenceRecord>;
+  if (!Number.isSafeInteger(record.epoch) || Number(record.epoch) < 0 || typeof record.updatedAt !== "string" || !Number.isFinite(Date.parse(record.updatedAt))) {
+    throw new Error(`Fencing record is invalid: ${filePath}`);
+  }
+  return record as FenceRecord;
 }
 
 export class RunRevisionConflictError extends Error {
@@ -43,7 +71,7 @@ function seal(
   fencingEpoch: number
 ): RunAggregate {
   const sealed = clone(aggregate);
-  sealed.schemaVersion = 1;
+  sealed.schemaVersion = 2;
   sealed.revision = revision;
   sealed.fencingEpoch = fencingEpoch;
   sealed.checksum = "";
@@ -55,7 +83,7 @@ function isValid(value: unknown): value is RunAggregate {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const aggregate = value as Partial<RunAggregate>;
   return (
-    aggregate.schemaVersion === 1 &&
+    aggregate.schemaVersion === 2 &&
     typeof aggregate.runId === "string" &&
     Number.isSafeInteger(aggregate.revision) &&
     Number(aggregate.revision) >= 0 &&
@@ -91,9 +119,9 @@ export class FileRunRepository implements RunRepositoryPort {
     this.maxWalRecords = options.maxWalRecords ?? 8;
   }
 
-  async initialize(aggregate: RunAggregate): Promise<RunAggregate> {
+  async init(aggregate: RunAggregate): Promise<RunAggregate> {
     const paths = this.paths(aggregate.runId);
-    await fsp.mkdir(paths.runDir, { recursive: true });
+    await this.requireInitializedStorage(paths);
     return withShortFileLock(paths.lock, async () => {
       const existing = await this.loadHighestUnlocked(paths);
       if (existing) throw new Error(`Run ${aggregate.runId} already exists.`);
@@ -109,7 +137,7 @@ export class FileRunRepository implements RunRepositoryPort {
     const paths = this.paths(runId);
     return withShortFileLock(paths.lock, async () => {
       const loaded = await this.loadHighestUnlocked(paths);
-      if (!loaded) throw new Error(`No valid v1 run aggregate exists for ${runId}.`);
+      if (!loaded) throw new Error(`No valid v2 run aggregate exists for ${runId}.`);
       return loaded;
     });
   }
@@ -118,8 +146,10 @@ export class FileRunRepository implements RunRepositoryPort {
     const paths = this.paths(runId);
     return withShortFileLock(paths.lock, async () => {
       const latest = await this.requireHighestUnlocked(paths, runId);
-      const fence = await this.readUnknown(paths.fence) as FenceRecord | null;
-      const nextEpoch = Math.max(latest.fencingEpoch, fence?.epoch ?? 0) + 1;
+      const fenceRaw = await this.readUnknown(paths.fence);
+      if (fenceRaw === null) throw new Error(`Fencing record is missing: ${paths.fence}`);
+      const fence = validateFenceRecord(fenceRaw, paths.fence);
+      const nextEpoch = Math.max(latest.fencingEpoch, fence.epoch) + 1;
       await atomicWriteJson(paths.fence, {
         epoch: nextEpoch,
         updatedAt: new Date().toISOString(),
@@ -139,8 +169,10 @@ export class FileRunRepository implements RunRepositoryPort {
       if (latest.revision !== expectedRevision) {
         throw new RunRevisionConflictError(expectedRevision, latest.revision);
       }
-      const fence = await this.readUnknown(paths.fence) as FenceRecord | null;
-      const currentEpoch = Math.max(latest.fencingEpoch, fence?.epoch ?? 0);
+      const fenceRaw = await this.readUnknown(paths.fence);
+      if (fenceRaw === null) throw new Error(`Fencing record is missing: ${paths.fence}`);
+      const fence = validateFenceRecord(fenceRaw, paths.fence);
+      const currentEpoch = Math.max(latest.fencingEpoch, fence.epoch);
       if (fencingEpoch !== currentEpoch) {
         throw new RunFencingConflictError(fencingEpoch, currentEpoch);
       }
@@ -188,12 +220,16 @@ export class FileRunRepository implements RunRepositoryPort {
     if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
       throw new Error(`Run path escapes configured runs root: ${runId}.`);
     }
+    const snapshotFileName = safePathSegment(this.snapshotFileName, "snapshotFileName");
+    const lockFileName = safePathSegment(this.lockFileName, "lockFileName");
+    const walDirectoryName = safePathSegment(this.walDirectoryName, "walDirectoryName");
+    const fenceFileName = safePathSegment(this.fenceFileName, "fenceFileName");
     return {
       runDir,
-      snapshot: path.join(runDir, this.snapshotFileName),
-      lock: path.join(runDir, this.lockFileName),
-      wal: path.join(runDir, this.walDirectoryName),
-      fence: path.join(runDir, this.fenceFileName),
+      snapshot: path.join(runDir, snapshotFileName),
+      lock: path.join(runDir, lockFileName),
+      wal: path.join(runDir, walDirectoryName),
+      fence: path.join(runDir, fenceFileName),
     };
   }
 
@@ -206,8 +242,24 @@ export class FileRunRepository implements RunRepositoryPort {
     runId: string
   ): Promise<RunAggregate> {
     const latest = await this.loadHighestUnlocked(paths);
-    if (!latest) throw new Error(`No valid v1 run aggregate exists for ${runId}.`);
+    if (!latest) throw new Error(`No valid v2 run aggregate exists for ${runId}.`);
     return latest;
+  }
+
+  private async requireInitializedStorage(
+    paths: ReturnType<FileRunRepository["paths"]>
+  ): Promise<void> {
+    for (const directory of [paths.runDir, paths.wal]) {
+      let stat: Awaited<ReturnType<typeof fsp.stat>>;
+      try { stat = await fsp.stat(directory); }
+      catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+          throw new Error(`Run storage is not initialized: ${directory}`);
+        }
+        throw error;
+      }
+      if (!stat.isDirectory()) throw new Error(`Run storage path is not a directory: ${directory}`);
+    }
   }
 
   private async loadHighestUnlocked(
@@ -215,14 +267,42 @@ export class FileRunRepository implements RunRepositoryPort {
   ): Promise<RunAggregate | null> {
     const candidates: RunAggregate[] = [];
     const snapshot = await this.readUnknown(paths.snapshot);
-    if (isValid(snapshot)) candidates.push(snapshot);
-    await fsp.mkdir(paths.wal, { recursive: true });
-    const names = (await fsp.readdir(paths.wal).catch(() => [] as string[])).filter((name) =>
-      /^revision_\d+\.json$/u.test(name)
-    );
+    if (snapshot !== null) {
+      if (!isValid(snapshot)) throw new Error(`Run snapshot failed integrity validation: ${paths.snapshot}`);
+      candidates.push(snapshot);
+    }
+    let entries: Dirent[];
+    try {
+      entries = await fsp.readdir(paths.wal, { withFileTypes: true });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        throw new Error(`Run WAL directory is not initialized: ${paths.wal}`);
+      }
+      throw error;
+    }
+    const names: string[] = [];
+    for (const entry of entries) {
+      if (/^revision_\d+\.json$/u.test(entry.name)) {
+        if (!entry.isFile()) throw new Error(`Run WAL record is not a regular file: ${path.join(paths.wal, entry.name)}`);
+        names.push(entry.name);
+        continue;
+      }
+      // A process can leave an atomic-write temporary behind after a crash;
+      // it is non-authoritative and may be discarded on the next successful
+      // commit. Every other WAL entry is an unexplained state and fails fast.
+      if (/^revision_\d+\.json\.tmp\.\d+\.\d+(?:\.[a-f0-9]+)?$/u.test(entry.name)) continue;
+      throw new Error(`Unexpected run WAL entry: ${path.join(paths.wal, entry.name)}`);
+    }
     for (const name of names) {
       const candidate = await this.readUnknown(path.join(paths.wal, name));
-      if (isValid(candidate)) candidates.push(candidate);
+      if (candidate === null) continue;
+      if (!isValid(candidate)) throw new Error(`Run WAL record failed integrity validation: ${path.join(paths.wal, name)}`);
+      const revisionText = name.slice("revision_".length, -".json".length);
+      const encodedRevision = Number(revisionText);
+      if (!Number.isSafeInteger(encodedRevision) || encodedRevision !== candidate.revision) {
+        throw new Error(`Run WAL filename does not match its revision: ${path.join(paths.wal, name)}`);
+      }
+      candidates.push(candidate);
     }
     if (candidates.length === 0) return null;
     const highest = candidates.sort((left, right) => right.revision - left.revision)[0];
@@ -241,9 +321,17 @@ export class FileRunRepository implements RunRepositoryPort {
     const sealed = seal(aggregate, revision, fencingEpoch);
     await atomicWriteJson(this.walPath(paths, revision), sealed);
     await atomicWriteJson(paths.snapshot, sealed);
-    const names = (await fsp.readdir(paths.wal)).filter((name) =>
-      /^revision_\d+\.json$/u.test(name)
-    ).sort();
+    const entries = await fsp.readdir(paths.wal, { withFileTypes: true });
+    const names: string[] = [];
+    for (const entry of entries) {
+      if (/^revision_\d+\.json$/u.test(entry.name)) {
+        if (!entry.isFile()) throw new Error(`Run WAL record is not a regular file: ${path.join(paths.wal, entry.name)}`);
+        names.push(entry.name);
+      } else if (!/^revision_\d+\.json\.tmp\.\d+\.\d+(?:\.[a-f0-9]+)?$/u.test(entry.name)) {
+        throw new Error(`Unexpected run WAL entry: ${path.join(paths.wal, entry.name)}`);
+      }
+    }
+    names.sort();
     for (const name of names.slice(0, Math.max(0, names.length - this.maxWalRecords))) {
       await fsp.rm(path.join(paths.wal, name), { force: true });
     }
@@ -255,7 +343,8 @@ export class FileRunRepository implements RunRepositoryPort {
       return JSON.parse(await fsp.readFile(filePath, "utf8")) as unknown;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
-      return null;
+      if (error instanceof SyntaxError) throw new Error(`Malformed JSON: ${filePath}`);
+      throw error;
     }
   }
 }

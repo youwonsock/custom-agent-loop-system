@@ -107,7 +107,7 @@ jobs:
         env:
           RELEASE_TAG: ${{ steps.candidate.outputs.release_tag }}
         run: >-
-          node -e "const fs=require('node:fs');const expected=process.env.RELEASE_TAG.slice(1);for(const file of ['package.json','vscode-extension/package.json']){const actual=JSON.parse(fs.readFileSync(file)).version;if(actual!==expected)throw new Error(file+' '+actual+' != '+expected)}"
+          node -e "const fs=require('node:fs');const expected=process.env.RELEASE_TAG.slice(1);for(const file of ['package.json','desktop-app/package.json']){const actual=JSON.parse(fs.readFileSync(file)).version;if(actual!==expected)throw new Error(file+' '+actual+' != '+expected)}"
 
       - name: Download exact CI release candidates
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
@@ -131,10 +131,10 @@ jobs:
         run: >-
           node scripts/verify-release-bundle.js release-bundle
           --expected-commit ${{ steps.candidate.outputs.expected_commit }}
-          --expected-count 5
-          --expected-vsix-targets win32-x64,linux-x64,darwin-arm64,darwin-x64
+          --expected-count 2
+          --expected-desktop-targets win32-x64
 
-      - name: Verify all 24 authenticated provider/OS/mode reports
+      - name: Verify all 36 authenticated provider/OS/mode reports
         run: node scripts/verify-provider-conformance-bundle.js provider-conformance
 
       - name: Verify GitHub build-provenance attestations
@@ -145,7 +145,7 @@ jobs:
           set -euo pipefail
           while IFS= read -r artifact; do
             gh attestation verify "$artifact" --repo "$GITHUB_REPOSITORY"
-          done < <(find release-bundle -maxdepth 1 -type f \( -name '*.tgz' -o -name '*.vsix' \) -print | sort)
+          done < <(find release-bundle -maxdepth 1 -type f \( -name '*.tgz' -o -name '*.exe' \) -print | sort)
 
       - name: Create recoverable draft release before publication
         shell: bash

@@ -6,13 +6,17 @@ import { RecoveryService } from "../application/recovery-service";
 import { RunReducer } from "../application/run-reducer";
 import { TaskInputAssembler } from "../application/task-input-assembler";
 import { TransitionRouter } from "../application/transition-router";
+import { VerificationRunner } from "../application/verification-runner";
+import { VerificationContractService } from "../application/verification-contract-service";
 import { WorkflowRunner } from "../application/workflow-runner";
 import { createDefaultDefinitionRegistries } from "../definitions/default-registries";
 import { FileArtifactStore } from "../infrastructure/file-artifact-store";
 import { FileRunControlRepository } from "../infrastructure/file-run-control-repository";
 import { FileRunRepository } from "../infrastructure/file-run-repository";
-import { FileRunProjection } from "../interfaces/vscode/run-projection";
+import { FileWorkspaceIntegrity } from "../infrastructure/workspace-integrity";
+import { FileRunProjection } from "../interfaces/operator/run-projection";
 import { SupervisedAgentRuntime } from "../runtime/supervised-agent-runtime";
+import { VerificationProcessRuntime } from "../runtime/verification-process-runtime";
 import type { LoopConfig } from "../../runtime_config";
 
 export interface ApplicationCompositionOptions {
@@ -29,6 +33,7 @@ export function composeApplication(options: ApplicationCompositionOptions): {
   commands: CommandService;
   recovery: RecoveryService;
   projection: FileRunProjection;
+  verificationContracts: VerificationContractService;
 } {
   const runsRoot = path.resolve(options.dataRoot, options.config.paths.sessionsRoot);
   const runDirectory = path.join(runsRoot, options.runId);
@@ -57,6 +62,8 @@ export function composeApplication(options: ApplicationCompositionOptions): {
     defaults: options.config.defaults,
     destructivePrompts: options.config.destructivePrompts,
     runDataRoot: runsRoot,
+    attemptLogsDirName: options.config.paths.attemptLogsDirName,
+    runtimeInputsDirName: "runtime_inputs",
     secretValues: options.secretValues,
     controls,
     onChildPid: options.onChildPid,
@@ -68,6 +75,21 @@ export function composeApplication(options: ApplicationCompositionOptions): {
     new PromptComposer(),
     registries
   );
+  const verificationRuntime = new VerificationProcessRuntime({
+    terminationGraceMs: options.config.defaults.terminationGraceMs,
+    killTimeoutMs: options.config.defaults.killTimeoutMs,
+    sensitiveValues: Object.values(options.secretValues ?? {}),
+  });
+  const workspaceIntegrity = new FileWorkspaceIntegrity();
+  const verificationRunner = new VerificationRunner(
+    verificationRuntime,
+    workspaceIntegrity,
+    artifacts
+  );
+  const verificationContracts = new VerificationContractService(
+    workspaceIntegrity,
+    artifacts
+  );
   const reducer = new RunReducer();
   const runner = new WorkflowRunner(
     repository,
@@ -78,13 +100,16 @@ export function composeApplication(options: ApplicationCompositionOptions): {
     projection,
     undefined,
     undefined,
-    controls
+    controls,
+    verificationRunner,
+    verificationContracts
   );
   return {
     repository,
     runner,
-    commands: new CommandService(repository, reducer, projection, controls),
-    recovery: new RecoveryService(repository, reducer, projection),
+    commands: new CommandService(repository, reducer, projection, controls, verificationContracts),
+    recovery: new RecoveryService(repository, reducer, projection, workspaceIntegrity),
     projection,
+    verificationContracts,
   };
 }

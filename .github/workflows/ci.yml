@@ -14,6 +14,7 @@ concurrency:
 jobs:
   source-validation:
     name: Source / ${{ matrix.os }} / Node 20
+    needs: verification-helper
     strategy:
       fail-fast: false
       matrix:
@@ -27,21 +28,21 @@ jobs:
           cache: npm
           cache-dependency-path: |
             package-lock.json
-            vscode-extension/package-lock.json
+            desktop-app/package-lock.json
       - run: npm ci
+      - if: runner.os == 'Windows'
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: verification-helper-win32-x64
+          path: native/bin/win32-x64
       - run: npm run generated:check
       - run: npm run typecheck
       - run: npm test
       - run: npm run smoke
-      - run: npm ci
-        working-directory: vscode-extension
-      - run: npm run typecheck
-        working-directory: vscode-extension
-      - run: npm test
-        working-directory: vscode-extension
 
   node-18-source:
     name: Source / Ubuntu / minimum Node 18
+    needs: verification-helper
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -54,26 +55,52 @@ jobs:
       - run: npm test
       - run: npm run smoke
 
-  extension-host-e2e:
-    name: Real VS Code Extension Host E2E
+  verification-helper:
+    name: Build Windows verification helper / win32-x64
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Build helper
+        shell: pwsh
+        run: .\scripts\build-verification-helper.ps1
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: verification-helper-win32-x64
+          path: native/bin/win32-x64/*
+          if-no-files-found: error
+          retention-days: 30
+
+  desktop-e2e:
+    name: Electron desktop development smoke
+    needs: verification-helper
     runs-on: windows-2025
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
-          node-version: 20
+          node-version: 22.20
           cache: npm
           cache-dependency-path: |
             package-lock.json
-            vscode-extension/package-lock.json
+            desktop-app/package-lock.json
       - run: npm ci
-      - run: npm ci
-        working-directory: vscode-extension
-      - run: npm run test:host
-        working-directory: vscode-extension
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: verification-helper-win32-x64
+          path: native/bin/win32-x64
+      - run: npm run bundle:desktop-core
+      - run: npm ci --ignore-scripts
+        working-directory: desktop-app
+      - run: npm run build
+        working-directory: desktop-app
+      - run: npm run test:utility
+        working-directory: desktop-app
+      - run: npm run test:e2e
+        working-directory: desktop-app
 
   coverage:
-    name: Core and extension coverage thresholds
+    name: Core coverage thresholds
+    needs: verification-helper
     runs-on: windows-2025
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -83,13 +110,13 @@ jobs:
           cache: npm
           cache-dependency-path: |
             package-lock.json
-            vscode-extension/package-lock.json
+            desktop-app/package-lock.json
       - run: npm ci
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: verification-helper-win32-x64
+          path: native/bin/win32-x64
       - run: npm run coverage
-      - run: npm ci
-        working-directory: vscode-extension
-      - run: npm run coverage
-        working-directory: vscode-extension
 
   supply-chain:
     name: Dependency audit and runtime SBOM
@@ -99,18 +126,21 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
-          node-version: 20
+          node-version: 22.20
           cache: npm
           cache-dependency-path: |
             package-lock.json
-            vscode-extension/package-lock.json
+            desktop-app/package-lock.json
       - run: npm ci
       - run: npm audit --omit=dev --audit-level=high
+      - run: npm ci --ignore-scripts
+        working-directory: desktop-app
+      # Forge/webpack are build-only tooling and are not shipped in the
+      # desktop runtime. Audit the installed production dependency graph here;
+      # the root runtime graph is audited above with the same high threshold.
+      - run: npm audit --omit=dev --audit-level=high
+        working-directory: desktop-app
       - run: npm run sbom
-      - run: npm ci
-        working-directory: vscode-extension
-      - run: npm audit --audit-level=high
-        working-directory: vscode-extension
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: diagnostic-runtime-sbom
@@ -120,7 +150,9 @@ jobs:
 
   npm-candidate:
     name: Build npm candidate once
-    needs: source-validation
+    needs:
+      - source-validation
+      - verification-helper
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -133,6 +165,10 @@ jobs:
           node-version: 20
           cache: npm
       - run: npm ci
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: verification-helper-win32-x64
+          path: native/bin/win32-x64
       - run: npm run package:npm
       - run: npm run sbom:npm-artifact
       - run: npm run verify:npm-artifact
@@ -167,25 +203,19 @@ jobs:
         with:
           name: release-npm
           path: artifacts/npm
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: verification-helper-win32-x64
+          path: native/bin/win32-x64
       - run: npm run verify:npm-artifact
       - run: npm run verify:release-bundle -- artifacts/npm --expected-commit ${{ github.sha }}
 
-  vsix-candidate:
-    name: Exact VSIX / ${{ matrix.target }} / Node 20 + 18
-    needs: source-validation
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: windows-2025
-            target: win32-x64
-          - os: ubuntu-24.04
-            target: linux-x64
-          - os: macos-15
-            target: darwin-arm64
-          - os: macos-15-intel
-            target: darwin-x64
-    runs-on: ${{ matrix.os }}
+  desktop-candidate:
+    name: Exact Windows Setup.exe / win32-x64 / Node 22.20
+    needs:
+      - source-validation
+      - verification-helper
+    runs-on: windows-2025
     permissions:
       contents: read
       id-token: write
@@ -194,40 +224,81 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
-          node-version: 20
+          node-version: 22.20
           cache: npm
           cache-dependency-path: |
             package-lock.json
-            vscode-extension/package-lock.json
+            desktop-app/package-lock.json
       - run: npm ci
-      - run: npm ci
-        working-directory: vscode-extension
-      - name: Assert native candidate target
-        env:
-          EXPECTED_TARGET: ${{ matrix.target }}
-        run: node -e "const actual=process.platform+'-'+process.arch;if(actual!==process.env.EXPECTED_TARGET)throw new Error(actual+' != '+process.env.EXPECTED_TARGET)"
-      - run: npm run package
-        working-directory: vscode-extension
-      - run: npm run verify:vsix
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
-          node-version: 18
-      - name: Reverify the same VSIX on the minimum Node runtime
-        run: npm run verify:vsix
+          name: verification-helper-win32-x64
+          path: native/bin/win32-x64
+      - run: npm run bundle:desktop-core
+      - run: npm ci
+        working-directory: desktop-app
+      - name: Assert native candidate target
+        run: node -e "const actual=process.platform+'-'+process.arch;if(actual!=='win32-x64')throw new Error(actual+' != win32-x64')"
+      - name: Build the one Windows candidate
+        run: npm run make
+        working-directory: desktop-app
+      - name: Verify release Electron fuse wire
+        run: npm run verify:fuses
+        working-directory: desktop-app
+      - name: Smoke the Electron ABI native PTY
+        run: npm run test:native
+        working-directory: desktop-app
+      - name: Smoke the Electron utility-process core
+        run: npm run test:utility
+        working-directory: desktop-app
+      - run: node scripts/package-desktop-artifact.js
+      - run: npm run verify:desktop
       - run: npm run checksum:artifacts
-      - run: npm run verify:release-bundle -- vscode-extension --expected-commit ${{ github.sha }}
+      - run: npm run verify:release-bundle -- artifacts/desktop --expected-commit ${{ github.sha }} --expected-count 1 --expected-desktop-targets win32-x64
       - if: github.event_name == 'push'
         uses: actions/attest-build-provenance@43d14bc2b83dec42d39ecae14e916627a18bb661 # v3
         with:
-          subject-path: vscode-extension/agent-loop-vscode-${{ matrix.target }}-*.vsix
+          subject-path: artifacts/desktop/*.exe
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: release-vsix-${{ matrix.target }}
+          name: release-desktop-win32-x64
           path: |
-            vscode-extension/agent-loop-vscode-${{ matrix.target }}-*.vsix
-            vscode-extension/agent-loop-vscode-${{ matrix.target }}-*.vsix.sha256
-            vscode-extension/agent-loop-vscode-${{ matrix.target }}-*.vsix.cdx.json
-            vscode-extension/agent-loop-vscode-${{ matrix.target }}-*.vsix.manifest.json
+            artifacts/desktop/*.exe
+            artifacts/desktop/*.exe.sha256
+            artifacts/desktop/*.exe.cdx.json
+            artifacts/desktop/*.exe.manifest.json
+          if-no-files-found: error
+          retention-days: 30
+
+  # The release candidate is created once on Windows and the exact Setup.exe
+  # is promoted; no other OS/native candidate is produced for v7.
+  desktop-packaged-smoke:
+    name: Packaged desktop smoke
+    needs: desktop-candidate
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 22.20
+          cache: npm
+          cache-dependency-path: desktop-app/package-lock.json
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: release-desktop-win32-x64
+          path: artifacts/desktop
+      - run: npm run verify:desktop
+      - name: Install, launch, and uninstall the exact Setup.exe
+        shell: pwsh
+        run: |
+          $setup = (Get-ChildItem artifacts/desktop -Filter '*win32-x64-Setup.exe' | Select-Object -First 1).FullName
+          if (-not $setup) { throw 'Setup.exe candidate is missing.' }
+          node desktop-app/scripts/packaged-smoke.cjs $setup
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: desktop-smoke-evidence
+          path: |
+            artifacts/desktop/*.exe.manifest.json
           if-no-files-found: error
           retention-days: 30
 
@@ -237,11 +308,12 @@ jobs:
     needs:
       - source-validation
       - node-18-source
-      - extension-host-e2e
+      - desktop-e2e
       - coverage
       - supply-chain
       - npm-artifact-matrix
-      - vsix-candidate
+      - desktop-candidate
+      - desktop-packaged-smoke
     runs-on: ubuntu-24.04
     steps:
       - name: Require every source, coverage, supply-chain, and exact-artifact job

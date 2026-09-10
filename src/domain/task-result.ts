@@ -56,7 +56,7 @@ export interface NodeFailure {
 
 export interface PendingHumanInput {
   requestId: string;
-  kind: "plan_approval" | "access_approval" | "custom";
+  kind: "plan_approval" | "access_approval" | "verification_approval" | "custom";
   nodeId: string;
   activationId: string;
   prompt: string;

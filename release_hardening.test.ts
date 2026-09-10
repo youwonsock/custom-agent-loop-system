@@ -63,20 +63,20 @@ function writeArtifactBundle(
   return artifactPath;
 }
 
-test("release bundle verification binds artifacts, sidecars, commit, count, and VSIX targets", () => {
+test("release bundle verification binds artifacts, sidecars, commit, count, and desktop targets", () => {
   const temporaryRoot = fs.mkdtempSync(path.join(os.tmpdir(), "agent-loop-release-test-"));
   const commit = "a".repeat(40);
   try {
     const npmArtifact = writeArtifactBundle(
       temporaryRoot,
-      "custom-agent-loop-system-4.0.0.tgz",
+      "custom-agent-loop-system-5.0.0.tgz",
       commit
     );
     writeArtifactBundle(
       temporaryRoot,
-      "agent-loop-vscode-linux-x64-4.0.0.vsix",
+      "AgentLoopOrchestrator-5.0.0-win32-x64-Setup.exe",
       commit,
-      "linux-x64"
+      "win32-x64"
     );
     const valid = runScript("verify-release-bundle.js", [
       temporaryRoot,
@@ -84,8 +84,8 @@ test("release bundle verification binds artifacts, sidecars, commit, count, and 
       commit,
       "--expected-count",
       "2",
-      "--expected-vsix-targets",
-      "linux-x64",
+      "--expected-desktop-targets",
+      "win32-x64",
     ]);
     assert.equal(valid.status, 0, valid.stderr);
 
@@ -98,25 +98,38 @@ test("release bundle verification binds artifacts, sidecars, commit, count, and 
   }
 });
 
-test("provider promotion gate requires all 24 passing protected reports", () => {
+test("provider promotion gate requires all 36 passing protected reports", () => {
   const temporaryRoot = fs.mkdtempSync(path.join(os.tmpdir(), "agent-loop-provider-gate-"));
   const providers = ["opencode", "kilo", "codex", "claude"];
   const platforms = ["win32", "linux", "darwin"];
-  const modes = ["write", "read-only"];
+  const modes = ["write", "read-only", "tools-none"];
+  const versions: Record<string, string> = {
+    opencode: "1.18.14",
+    kilo: "7.3.54",
+    codex: "0.146.1",
+    claude: "2.1.233",
+  };
   try {
     for (const provider of providers) {
       for (const platform of platforms) {
         for (const mode of modes) {
-          const expectedFailClosed = false;
+          const expectedFailClosed = provider === "codex" && mode === "tools-none";
+          const providerVersion = expectedFailClosed ? null : versions[provider];
           fs.writeFileSync(
             path.join(temporaryRoot, `${provider}-${platform}-${mode}.json`),
             `${JSON.stringify({
-              schemaVersion: 1,
+              schemaVersion: 2,
               provider,
               platform,
               architecture: "x64",
               mode,
-              providerVersion: "pinned-version",
+              providerVersion,
+              expectedCliVersion: versions[provider],
+              resolvedBinary: expectedFailClosed ? null : `C:\\providers\\${provider}.exe`,
+              capabilityKey: `${provider}:${providerVersion ?? "unknown"}:${platform}:x64:${mode}`,
+              capabilityStatus: expectedFailClosed ? "unverified" : "verified",
+              outcome: expectedFailClosed ? "blocked_unverified" : "executed_pass",
+              executionVerified: !expectedFailClosed,
               authenticatedExecution: !expectedFailClosed,
               spawned: !expectedFailClosed,
               passed: true,
@@ -132,7 +145,7 @@ test("provider promotion gate requires all 24 passing protected reports", () => 
     }
     const valid = runScript("verify-provider-conformance-bundle.js", [temporaryRoot]);
     assert.equal(valid.status, 0, valid.stderr);
-    fs.rmSync(path.join(temporaryRoot, "claude-darwin-read-only.json"));
+    fs.rmSync(path.join(temporaryRoot, "claude-darwin-tools-none.json"));
     const incomplete = runScript("verify-provider-conformance-bundle.js", [temporaryRoot]);
     assert.notEqual(incomplete.status, 0);
     assert.match(incomplete.stderr, /incomplete/);
@@ -155,8 +168,8 @@ test("release workflows pin Actions and promotion never rebuilds candidates", ()
 
   const ci = fs.readFileSync(path.join(workflowDirectory, "ci.yml"), "utf8");
   assert.match(ci, /npm-artifact-matrix:[\s\S]*node-version:\s*18/);
-  assert.match(ci, /vsix-candidate:[\s\S]*Reverify the same VSIX/);
-  assert.match(ci, /npm run coverage[\s\S]*working-directory: vscode-extension/);
+  assert.match(ci, /desktop-candidate:[\s\S]*Setup\.exe/);
+  assert.doesNotMatch(ci, /extension-host-e2e|vsix-candidate/);
   assert.match(ci, /attest-build-provenance@[0-9a-f]{40}/);
 
   const promotion = fs.readFileSync(path.join(workflowDirectory, "promote.yml"), "utf8");

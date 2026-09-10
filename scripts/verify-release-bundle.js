@@ -9,15 +9,15 @@ function option(name) {
   const index = process.argv.indexOf(`--${name}`);
   return index >= 0 ? process.argv[index + 1] : null;
 }
-const optionNames = new Set(["--expected-commit", "--expected-count", "--expected-vsix-targets"]);
+const optionNames = new Set(["--expected-commit", "--expected-count", "--expected-desktop-targets"]);
 const positional = process.argv.slice(2).filter((value, index, values) =>
   !optionNames.has(value) && !optionNames.has(values[index - 1])
 );
 const expectedCommit = option("expected-commit");
 const expectedCountText = option("expected-count");
 const expectedCount = expectedCountText === null ? null : Number(expectedCountText);
-const expectedVsixTargets = new Set(
-  (option("expected-vsix-targets") || "").split(",").map((value) => value.trim()).filter(Boolean)
+const expectedDesktopTargets = new Set(
+  (option("expected-desktop-targets") || "").split(",").map((value) => value.trim()).filter(Boolean)
 );
 if (process.argv.includes("--expected-commit") && !expectedCommit) {
   throw new Error("--expected-commit requires a full commit SHA.");
@@ -39,11 +39,43 @@ function walk(directory) {
     const entryPath = path.join(directory, entry.name);
     if (
       entry.isDirectory() &&
-      !["node_modules", ".git", ".vscode-test", "out", "core"].includes(entry.name)
+      !["node_modules", ".git", "out", "core"].includes(entry.name)
     ) files.push(...walk(entryPath));
     else if (entry.isFile()) files.push(entryPath);
   }
   return files;
+}
+
+function propertyValue(sbom, name) {
+  const properties = sbom.metadata?.component?.properties;
+  if (!Array.isArray(properties)) return null;
+  const property = properties.find((item) => item && item.name === name);
+  return typeof property?.value === "string" ? property.value : null;
+}
+
+function assertVerificationHelperBinding(artifact, manifest, sbom, expectedCommit) {
+  const majorVersion = Number.parseInt(String(manifest.packageVersion || "0").split(".")[0], 10);
+  if (majorVersion < 6) return;
+  const helper = manifest.verificationHelper;
+  if (
+    !helper ||
+    helper.target !== "win32-x64" ||
+    !/^[a-f0-9]{64}$/u.test(helper.sha256 || "") ||
+    typeof helper.sourceCommit !== "string" ||
+    !helper.sourceCommit
+  ) {
+    throw new Error(`Artifact ${path.basename(artifact)} is missing a valid verification helper identity.`);
+  }
+  if (expectedCommit && helper.sourceCommit !== expectedCommit) {
+    throw new Error(`Artifact ${path.basename(artifact)} embeds a helper from ${helper.sourceCommit}, not ${expectedCommit}.`);
+  }
+  if (
+    propertyValue(sbom, "agent-loop:verificationHelperTarget") !== helper.target ||
+    propertyValue(sbom, "agent-loop:verificationHelperSha256") !== helper.sha256 ||
+    propertyValue(sbom, "agent-loop:verificationHelperSourceCommit") !== helper.sourceCommit
+  ) {
+    throw new Error(`SBOM verification helper identity does not match ${path.basename(artifact)}.`);
+  }
 }
 
 if (!fs.existsSync(bundleInput)) {
@@ -51,12 +83,12 @@ if (!fs.existsSync(bundleInput)) {
 }
 const bundleRoot = fs.statSync(bundleInput).isDirectory() ? bundleInput : path.dirname(bundleInput);
 const files = fs.statSync(bundleInput).isDirectory() ? walk(bundleInput) : [bundleInput];
-const artifacts = files.filter((file) => file.endsWith(".tgz") || file.endsWith(".vsix"));
-if (artifacts.length === 0) throw new Error(`No npm or VSIX artifacts found at ${bundleInput}.`);
+const artifacts = files.filter((file) => file.endsWith(".tgz") || file.endsWith(".exe"));
+if (artifacts.length === 0) throw new Error(`No npm or desktop artifacts found at ${bundleInput}.`);
 if (expectedCount !== null && artifacts.length !== expectedCount) {
   throw new Error(`Expected ${expectedCount} release artifacts, found ${artifacts.length}.`);
 }
-const observedVsixTargets = new Set();
+const observedDesktopTargets = new Set();
 
 for (const artifact of artifacts) {
   const digest = sha256File(artifact);
@@ -86,28 +118,29 @@ for (const artifact of artifacts) {
       `Artifact ${path.basename(artifact)} was built from ${manifest.sourceCommit}, not ${expectedCommit}.`
     );
   }
-  if (artifact.endsWith(".vsix")) observedVsixTargets.add(manifest.targetPlatform);
+  if (artifact.endsWith(".exe")) observedDesktopTargets.add(manifest.targetPlatform);
   const sbom = JSON.parse(fs.readFileSync(sbomPath, "utf8"));
   if (sbom.bomFormat !== "CycloneDX") throw new Error(`Invalid CycloneDX SBOM for ${artifact}.`);
   const hashes = sbom.metadata?.component?.hashes || [];
   if (!hashes.some((hash) => hash.alg === "SHA-256" && hash.content === digest)) {
     throw new Error(`SBOM does not bind the SHA-256 of ${artifact}.`);
   }
+  assertVerificationHelperBinding(artifact, manifest, sbom, expectedCommit);
 }
 
-const missingVsixTargets = [...expectedVsixTargets].filter(
-  (target) => !observedVsixTargets.has(target)
+const missingDesktopTargets = [...expectedDesktopTargets].filter(
+  (target) => !observedDesktopTargets.has(target)
 );
-const unexpectedVsixTargets = [...observedVsixTargets].filter(
-  (target) => !expectedVsixTargets.has(target)
+const unexpectedDesktopTargets = [...observedDesktopTargets].filter(
+  (target) => !expectedDesktopTargets.has(target)
 );
 if (
-  expectedVsixTargets.size > 0 &&
-  (missingVsixTargets.length > 0 || unexpectedVsixTargets.length > 0)
+  expectedDesktopTargets.size > 0 &&
+  (missingDesktopTargets.length > 0 || unexpectedDesktopTargets.length > 0)
 ) {
   throw new Error(
-    `VSIX target mismatch. Missing: ${missingVsixTargets.join(", ") || "none"}; ` +
-      `unexpected: ${unexpectedVsixTargets.join(", ") || "none"}.`
+    `Desktop target mismatch. Missing: ${missingDesktopTargets.join(", ") || "none"}; ` +
+      `unexpected: ${unexpectedDesktopTargets.join(", ") || "none"}.`
   );
 }
 

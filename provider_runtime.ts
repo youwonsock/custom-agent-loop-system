@@ -2,20 +2,29 @@ import * as path from "node:path";
 import { createHash } from "node:crypto";
 import {
   ProviderAdapter,
+  ProviderCapabilityStatus,
   ProviderCapabilities,
   assertProviderCapabilities,
   capabilitiesForAdapter,
 } from "./provider_capabilities";
 
-export { ProviderAdapter, ProviderCapabilities } from "./provider_capabilities";
+export {
+  ProviderAdapter,
+  ProviderCapabilityStatus,
+  ProviderCapabilities,
+  resolveProviderCapability,
+} from "./provider_capabilities";
+
+export type ProviderModelCatalog =
+  | { source: "command"; args: string[] }
+  | { source: "configured"; models: string[] };
 
 export interface ProviderConfig {
   label: string;
   adapter: ProviderAdapter;
   binary: string;
   enabled: boolean;
-  modelsArgs: string[];
-  fallbackModels: string[];
+  modelCatalog: ProviderModelCatalog;
   interactionWhitelist?: string[];
   capabilities: ProviderCapabilities;
 }
@@ -67,16 +76,23 @@ export interface ProviderInvocationOptions {
   fullAccess: boolean;
   /** Force providers with a native filesystem sandbox to deny workspace writes. */
   readOnly?: boolean;
+  workspaceMode?: "none" | "read" | "write";
   webSearch: boolean;
   webSearchMode?: "cached" | "live";
   mcpServers: McpServerConfig[];
   claudeMcpConfigPath?: string;
   /** Runtime-owned prompt attachment used to avoid Windows command-line limits. */
   promptFilePath?: string;
-  /** Values resolved by the VS Code SecretStorage bridge. Never persist this map. */
+  /** Values resolved by the desktop/CLI secret bridge. Never persist this map. */
   secretValues?: Record<string, string>;
   /** Per-attempt name preventing inherited user agent configuration collisions. */
   readOnlyAgentName?: string;
+  /**
+   * Runtime-owned proof that this exact adapter/CLI/OS combination may start
+   * a tool-free invocation. Persistent provider configuration never supplies
+   * this value.
+   */
+  toolsNoneCapability?: ProviderCapabilityStatus;
 }
 
 export interface ProviderInvocation {
@@ -91,8 +107,7 @@ export const DEFAULT_PROVIDERS: Record<string, ProviderConfig> = {
     adapter: "opencode",
     binary: "opencode",
     enabled: true,
-    modelsArgs: ["models"],
-    fallbackModels: ["opencode/big-pickle"],
+    modelCatalog: { source: "command", args: ["models"] },
     capabilities: capabilitiesForAdapter("opencode"),
   },
   kilo: {
@@ -100,8 +115,7 @@ export const DEFAULT_PROVIDERS: Record<string, ProviderConfig> = {
     adapter: "kilo",
     binary: "kilo",
     enabled: true,
-    modelsArgs: ["models", "--pure"],
-    fallbackModels: ["anthropic/claude-sonnet-4-5"],
+    modelCatalog: { source: "command", args: ["models", "--pure"] },
     capabilities: capabilitiesForAdapter("kilo"),
   },
   codex: {
@@ -109,8 +123,7 @@ export const DEFAULT_PROVIDERS: Record<string, ProviderConfig> = {
     adapter: "codex",
     binary: "codex",
     enabled: true,
-    modelsArgs: [],
-    fallbackModels: ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"],
+    modelCatalog: { source: "configured", models: ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"] },
     capabilities: capabilitiesForAdapter("codex"),
   },
   claude: {
@@ -118,11 +131,27 @@ export const DEFAULT_PROVIDERS: Record<string, ProviderConfig> = {
     adapter: "claude",
     binary: "claude",
     enabled: true,
-    modelsArgs: [],
-    fallbackModels: ["sonnet", "opus"],
+    modelCatalog: { source: "configured", models: ["sonnet", "opus"] },
     capabilities: capabilitiesForAdapter("claude"),
   },
 };
+
+/** Each adapter has one authoritative model-catalog mechanism.  Command
+ * discovery is intentionally limited to the OpenCode-family adapters; the
+ * Codex/Claude CLIs do not expose a stable model-list command and therefore
+ * use the operator-configured catalog instead. */
+function expectedCatalogSource(adapter: ProviderAdapter): ProviderModelCatalog["source"] {
+  return adapter === "opencode" || adapter === "kilo" ? "command" : "configured";
+}
+
+function defaultCatalogForAdapter(adapter: ProviderAdapter): ProviderModelCatalog {
+  switch (adapter) {
+    case "opencode": return { source: "command", args: ["models"] };
+    case "kilo": return { source: "command", args: ["models", "--pure"] };
+    case "codex": return { source: "configured", models: ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"] };
+    case "claude": return { source: "configured", models: ["sonnet", "opus"] };
+  }
+}
 
 export const DEFAULT_TOOL_ACCESS: ToolAccessConfig = {
   webSearch: { enabled: false, mode: "cached" },
@@ -251,23 +280,83 @@ export function normalizeProviders(
   input?: Record<string, Partial<ProviderConfig>> | null
 ): Record<string, ProviderConfig> {
   const merged: Record<string, ProviderConfig> = {};
+  const allowedKeys = new Set(["label", "adapter", "binary", "enabled", "modelCatalog", "interactionWhitelist", "capabilities"]);
+  const normalizeCatalog = (providerId: string, candidate: unknown, base: ProviderModelCatalog, adapter: ProviderAdapter, allowAdapterDefault = false): ProviderModelCatalog => {
+    const expectedSource = expectedCatalogSource(adapter);
+    if (candidate === undefined) {
+      const inherited = base.source === expectedSource
+        ? base
+        : allowAdapterDefault ? defaultCatalogForAdapter(adapter) : base;
+      if ((inherited.source === "command" && inherited.args.length === 0) || (inherited.source === "configured" && inherited.models.length === 0)) {
+        throw new Error(`Provider ${providerId} must define a non-empty model catalog.`);
+      }
+      return {
+        source: inherited.source,
+        ...(inherited.source === "command" ? { args: [...inherited.args] } : { models: [...inherited.models] }),
+      } as ProviderModelCatalog;
+    }
+    if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) {
+      throw new Error(`Provider ${providerId} must define a model catalog.`);
+    }
+    const record = candidate as Record<string, unknown>;
+    if (record.source === "command") {
+      if (expectedSource !== "command") throw new Error(`Provider ${providerId} adapter '${adapter}' requires a configured model catalog.`);
+      for (const key of Object.keys(record)) {
+        if (key !== "source" && key !== "args") throw new Error(`Provider ${providerId} command catalog contains an unsupported field: ${key}.`);
+      }
+      if (!Array.isArray(record.args) || record.args.length === 0 || record.args.some((value) => typeof value !== "string" || !value.trim())) {
+        throw new Error(`Provider ${providerId} command catalog args must be a non-empty string array.`);
+      }
+      return { source: "command", args: record.args.map(String) };
+    }
+    if (record.source === "configured") {
+      if (expectedSource !== "configured") throw new Error(`Provider ${providerId} adapter '${adapter}' requires a command model catalog.`);
+      for (const key of Object.keys(record)) {
+        if (key !== "source" && key !== "models") throw new Error(`Provider ${providerId} configured catalog contains an unsupported field: ${key}.`);
+      }
+      if (!Array.isArray(record.models) || record.models.length === 0 || record.models.some((value) => typeof value !== "string" || !value.trim())) {
+        throw new Error(`Provider ${providerId} configured catalog models must be a non-empty string array.`);
+      }
+      return { source: "configured", models: record.models.map((value) => String(value).trim()) };
+    }
+    throw new Error(`Provider ${providerId} has an invalid model catalog source.`);
+  };
+  const assertAllowedKeys = (providerId: string, candidate: Record<string, unknown>): void => {
+    for (const key of Object.keys(candidate)) {
+      if (!allowedKeys.has(key)) throw new Error(`Provider ${providerId} contains an unsupported configuration field.`);
+    }
+  };
   for (const [id, base] of Object.entries(DEFAULT_PROVIDERS)) {
-    const override = input?.[id] ?? {};
+    const supplied = input?.[id];
+    if (supplied !== undefined && (!supplied || typeof supplied !== "object" || Array.isArray(supplied))) {
+      throw new Error(`Provider ${id} configuration must be an object.`);
+    }
+    const override = (supplied ?? {}) as Partial<ProviderConfig> & Record<string, unknown>;
+    assertAllowedKeys(id, override);
     const adapter = override.adapter ?? base.adapter;
     if (!["opencode", "kilo", "codex", "claude"].includes(adapter)) {
       throw new Error(`Provider ${id} has an unsupported adapter.`);
     }
     const binary = String(override.binary ?? base.binary).trim();
     if (!binary) throw new Error(`Provider ${id} must define a binary.`);
+    if (override.label !== undefined && (typeof override.label !== "string" || !override.label.trim())) {
+      throw new Error(`Provider ${id} must define a non-empty label.`);
+    }
+    if (override.binary !== undefined && (typeof override.binary !== "string" || !override.binary.trim())) {
+      throw new Error(`Provider ${id} must define a binary.`);
+    }
+    if (override.enabled !== undefined && typeof override.enabled !== "boolean") {
+      throw new Error(`Provider ${id}.enabled must be boolean.`);
+    }
+    if (override.interactionWhitelist !== undefined && (!Array.isArray(override.interactionWhitelist) || override.interactionWhitelist.some((entry) => typeof entry !== "string"))) {
+      throw new Error(`Provider ${id}.interactionWhitelist must be an array of strings.`);
+    }
     merged[id] = {
-      label: String(override.label ?? base.label).trim() || base.label,
+      label: override.label === undefined ? base.label : override.label.trim(),
       adapter,
       binary,
       enabled: override.enabled !== false,
-      modelsArgs: Array.isArray(override.modelsArgs) ? override.modelsArgs.map(String) : [...base.modelsArgs],
-      fallbackModels: Array.isArray(override.fallbackModels)
-        ? override.fallbackModels.map(String).filter(Boolean)
-        : [...base.fallbackModels],
+      modelCatalog: normalizeCatalog(id, override.modelCatalog, base.modelCatalog, adapter, true),
       interactionWhitelist: Array.isArray(override.interactionWhitelist)
         ? override.interactionWhitelist.map(String)
         : base.interactionWhitelist,
@@ -276,24 +365,35 @@ export function normalizeProviders(
   }
   for (const [id, candidate] of Object.entries(input ?? {})) {
     if (merged[id]) continue;
+    if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) {
+      throw new Error(`Provider ${id} configuration must be an object.`);
+    }
     if (!SAFE_ID.test(id)) throw new Error(`Unsafe provider id: ${id}`);
-    const adapter = candidate.adapter;
+    const candidateRecord = candidate as Partial<ProviderConfig> & Record<string, unknown>;
+    assertAllowedKeys(id, candidateRecord);
+    const adapter = candidateRecord.adapter;
     if (!adapter || !["opencode", "kilo", "codex", "claude"].includes(adapter)) {
       throw new Error(`Provider ${id} has an unsupported adapter.`);
     }
-    const binary = String(candidate.binary ?? "").trim();
+    if (candidateRecord.label !== undefined && (typeof candidateRecord.label !== "string" || !candidateRecord.label.trim())) {
+      throw new Error(`Provider ${id} must define a non-empty label.`);
+    }
+    if (candidateRecord.enabled !== undefined && typeof candidateRecord.enabled !== "boolean") {
+      throw new Error(`Provider ${id}.enabled must be boolean.`);
+    }
+    if (candidateRecord.interactionWhitelist !== undefined && (!Array.isArray(candidateRecord.interactionWhitelist) || candidateRecord.interactionWhitelist.some((entry) => typeof entry !== "string"))) {
+      throw new Error(`Provider ${id}.interactionWhitelist must be an array of strings.`);
+    }
+    const binary = String(candidateRecord.binary ?? "").trim();
     if (!binary) throw new Error(`Provider ${id} must define a binary.`);
     merged[id] = {
-      label: String(candidate.label ?? id),
+      label: candidateRecord.label === undefined ? id : candidateRecord.label.trim(),
       adapter,
       binary,
-      enabled: candidate.enabled !== false,
-      modelsArgs: Array.isArray(candidate.modelsArgs) ? candidate.modelsArgs.map(String) : [],
-      fallbackModels: Array.isArray(candidate.fallbackModels)
-        ? candidate.fallbackModels.map(String).filter(Boolean)
-        : [],
-      interactionWhitelist: Array.isArray(candidate.interactionWhitelist)
-        ? candidate.interactionWhitelist.map(String)
+      enabled: candidateRecord.enabled !== false,
+      modelCatalog: normalizeCatalog(id, candidateRecord.modelCatalog, { source: "command", args: [] }, adapter),
+      interactionWhitelist: Array.isArray(candidateRecord.interactionWhitelist)
+        ? candidateRecord.interactionWhitelist.map(String)
         : undefined,
       capabilities: capabilitiesForAdapter(adapter),
     };
@@ -302,41 +402,85 @@ export function normalizeProviders(
 }
 
 export function validateToolAccess(input?: Partial<ToolAccessConfig> | null): ToolAccessConfig {
+  if (input !== undefined && input !== null && (typeof input !== "object" || Array.isArray(input))) {
+    throw new Error("toolAccess must be an object.");
+  }
+  if (input) {
+    for (const key of Object.keys(input)) if (key !== "webSearch" && key !== "mcpServers") throw new Error(`toolAccess contains an unsupported field: ${key}.`);
+  }
   const webInput = input?.webSearch;
+  if (webInput !== undefined && (!webInput || typeof webInput !== "object" || Array.isArray(webInput))) {
+    throw new Error("toolAccess.webSearch must be an object.");
+  }
+  if (webInput?.enabled !== undefined && typeof webInput.enabled !== "boolean") {
+    throw new Error("toolAccess.webSearch.enabled must be boolean.");
+  }
+  if (webInput?.mode !== undefined && webInput.mode !== "cached" && webInput.mode !== "live") {
+    throw new Error("toolAccess.webSearch.mode is invalid.");
+  }
+  if (webInput) for (const key of Object.keys(webInput)) if (key !== "enabled" && key !== "mode") throw new Error(`toolAccess.webSearch contains an unsupported field: ${key}.`);
   const webSearch = {
     enabled: Boolean(webInput?.enabled),
     mode: webInput?.mode === "live" ? "live" as const : "cached" as const,
   };
+  if (input?.mcpServers !== undefined && !Array.isArray(input.mcpServers)) {
+    throw new Error("toolAccess.mcpServers must be an array.");
+  }
+  const serverKeys = new Set(["id", "name", "enabled", "type", "command", "args", "url", "environment", "headers", "timeoutMs", "tools", "allowedTools", "runtimeOwned"]);
   const ids = new Set<string>();
   const mcpServers = (input?.mcpServers ?? []).map((raw) => {
-    const id = String(raw.id ?? "").trim();
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new Error("MCP server configuration must be an object.");
+    for (const key of Object.keys(raw)) if (!serverKeys.has(key)) throw new Error(`MCP server contains an unsupported field: ${key}.`);
+    const candidate = raw as McpServerConfig & Record<string, unknown>;
+    const id = typeof candidate.id === "string" ? candidate.id.trim() : "";
     if (!SAFE_ID.test(id)) throw new Error(`Unsafe MCP server id: ${id}`);
     if (ids.has(id)) throw new Error(`Duplicate MCP server id: ${id}`);
     ids.add(id);
-    const type = raw.type === "remote" ? "remote" as const : "local" as const;
-    const command = String(raw.command ?? "").trim();
-    const url = String(raw.url ?? "").trim();
+    if (typeof candidate.name !== "string" || !candidate.name.trim()) throw new Error(`MCP server ${id} needs a name.`);
+    if (typeof candidate.enabled !== "boolean") throw new Error(`MCP server ${id}.enabled must be boolean.`);
+    if (candidate.type !== "local" && candidate.type !== "remote") throw new Error(`MCP server ${id}.type is invalid.`);
+    const type = candidate.type;
+    if (candidate.runtimeOwned !== undefined && candidate.runtimeOwned !== true) throw new Error(`MCP server ${id}.runtimeOwned is invalid.`);
+    if (candidate.command !== undefined && (typeof candidate.command !== "string" || !candidate.command.trim())) throw new Error(`MCP server ${id}.command must be a non-empty string.`);
+    const command = typeof candidate.command === "string" ? candidate.command.trim() : "";
+    if (candidate.url !== undefined && (typeof candidate.url !== "string" || !candidate.url.trim())) throw new Error(`MCP server ${id}.url must be a non-empty string.`);
+    const url = typeof candidate.url === "string" ? candidate.url.trim() : "";
     if (type === "local" && !command) throw new Error(`Local MCP server ${id} needs a command.`);
     if (type === "remote" && !/^https?:\/\//i.test(url)) {
       throw new Error(`Remote MCP server ${id} needs an http(s) URL.`);
     }
-    const timeoutMs = raw.timeoutMs === undefined ? undefined : Number(raw.timeoutMs);
-    if (timeoutMs !== undefined && (!Number.isFinite(timeoutMs) || timeoutMs <= 0)) {
+    if (candidate.args !== undefined && (!Array.isArray(candidate.args) || candidate.args.some((entry) => typeof entry !== "string"))) throw new Error(`MCP server ${id}.args must be an array of strings.`);
+    const timeoutMs = candidate.timeoutMs === undefined ? undefined : Number(candidate.timeoutMs);
+    if (timeoutMs !== undefined && (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0)) {
       throw new Error(`MCP server ${id} timeoutMs must be positive.`);
     }
-    if (Array.isArray(raw.allowedTools) && !Array.isArray(raw.tools)) {
+    if (candidate.allowedTools !== undefined && (!Array.isArray(candidate.allowedTools) || candidate.allowedTools.some((entry) => typeof entry !== "string"))) {
+      throw new Error(`MCP server ${id}.allowedTools must be an array of strings.`);
+    }
+    if (Array.isArray(candidate.allowedTools) && !Array.isArray(candidate.tools)) {
       throw new Error(
         `MCP server ${id} uses the removed name-only allowedTools contract; declare tools with sideEffect.`
       );
     }
-    const toolCandidates = Array.isArray(raw.tools) ? raw.tools : [];
+    if (candidate.environment !== undefined && (!candidate.environment || typeof candidate.environment !== "object" || Array.isArray(candidate.environment))) throw new Error(`MCP server ${id}.environment must be an object.`);
+    if (candidate.headers !== undefined && (!candidate.headers || typeof candidate.headers !== "object" || Array.isArray(candidate.headers))) throw new Error(`MCP server ${id}.headers must be an object.`);
+    for (const [field, values] of [["environment", candidate.environment], ["headers", candidate.headers]] as const) {
+      for (const [key, value] of Object.entries(values ?? {})) {
+        if (typeof value !== "string") throw new Error(`MCP server ${id}.${field}.${key} must be a string.`);
+      }
+    }
+    if (candidate.tools !== undefined && !Array.isArray(candidate.tools)) throw new Error(`MCP server ${id}.tools must be an array.`);
+    const toolCandidates = Array.isArray(candidate.tools) ? candidate.tools : [];
     const toolNames = new Set<string>();
     const tools = toolCandidates.map((rawTool) => {
-      const name = String(rawTool.name ?? "").trim();
+      if (!rawTool || typeof rawTool !== "object" || Array.isArray(rawTool)) throw new Error(`MCP server ${id} tool configuration must be an object.`);
+      const toolRecord = rawTool as McpToolConfig & Record<string, unknown>;
+      for (const key of Object.keys(toolRecord)) if (key !== "name" && key !== "sideEffect") throw new Error(`MCP server ${id} tool contains an unsupported field: ${key}.`);
+      const name = typeof toolRecord.name === "string" ? toolRecord.name.trim() : "";
       if (!SAFE_TOOL_NAME.test(name)) throw new Error(`MCP server ${id} has an unsafe tool name: ${name}`);
       if (toolNames.has(name)) throw new Error(`MCP server ${id} has a duplicate tool: ${name}`);
       toolNames.add(name);
-      const sideEffect = rawTool.sideEffect;
+      const sideEffect = toolRecord.sideEffect;
       if (!(["read_only", "write", "unknown"] as const).includes(sideEffect)) {
         throw new Error(`MCP server ${id} tool ${name} has an invalid side effect.`);
       }
@@ -344,14 +488,14 @@ export function validateToolAccess(input?: Partial<ToolAccessConfig> | null): To
     });
     return {
       id,
-      name: String(raw.name ?? id).trim() || id,
-      enabled: raw.enabled !== false,
+      name: candidate.name.trim(),
+      enabled: candidate.enabled,
       type,
       command: command || undefined,
-      args: Array.isArray(raw.args) ? raw.args.map(String) : [],
+      args: Array.isArray(candidate.args) ? candidate.args.map(String) : [],
       url: url || undefined,
-      environment: jsonObject(raw.environment),
-      headers: jsonObject(raw.headers),
+      environment: jsonObject(candidate.environment),
+      headers: jsonObject(candidate.headers),
       timeoutMs,
       tools,
       allowedTools: tools.map((tool) => tool.name),
@@ -424,6 +568,12 @@ export function assertProviderInvocationSupported(
   opts: ProviderInvocationOptions,
   selectedMcpServers: readonly McpServerConfig[] = opts.mcpServers
 ): void {
+  if (opts.workspaceMode === "none" && selectedMcpServers.length > 0) {
+    throw new Error("Tool-free invocations cannot receive MCP servers.");
+  }
+  if (opts.workspaceMode === "none" && opts.webSearch) {
+    throw new Error("Tool-free invocations cannot enable web search.");
+  }
   const trustedCapabilities = capabilitiesForAdapter(provider.adapter);
   assertProviderCapabilities(provider.adapter, trustedCapabilities, {
     readOnly: opts.readOnly === true,
@@ -433,6 +583,8 @@ export function assertProviderInvocationSupported(
     webSearch: opts.webSearch,
     webSearchMode: opts.webSearchMode ?? trustedCapabilities.webSearchModes[0] ?? "cached",
     hasMcpServers: selectedMcpServers.length > 0,
+    toolsNone: opts.workspaceMode === "none",
+    toolsNoneCapability: opts.toolsNoneCapability,
   });
   if (opts.readOnly && selectedMcpServers.some(
     (server) => (server.tools ?? []).some((tool) => tool.sideEffect !== "read_only")
@@ -452,7 +604,7 @@ export function assertMcpCredentialsAreReferenced(toolAccess: ToolAccessConfig):
         if (!value || SECRET_REFERENCE.test(value) || ENV_REFERENCE.test(value)) continue;
         throw new Error(
           `MCP server ${server.id} ${scope}.${key} contains an inline value. ` +
-          `Use \${env:VARIABLE_NAME}, or save it through the VS Code tools settings so SecretStorage is used.`
+          `Use \${env:VARIABLE_NAME}, or save it through the desktop tools settings so secure storage is used.`
         );
       }
     }
@@ -513,6 +665,26 @@ function externalDirectoryPermission(paths: readonly string[]): Record<string, "
 }
 
 function opencodePermissionDocument(opts: ProviderInvocationOptions): Record<string, unknown> {
+  if (opts.workspaceMode === "none") {
+    return {
+      "*": "deny",
+      read: "deny",
+      glob: "deny",
+      grep: "deny",
+      list: "deny",
+      bash: "deny",
+      edit: "deny",
+      write: "deny",
+      patch: "deny",
+      apply_patch: "deny",
+      task: "deny",
+      todowrite: "deny",
+      skill: "deny",
+      question: "deny",
+      websearch: "deny",
+      webfetch: "deny",
+    };
+  }
   const permission: Record<string, unknown> = opts.readOnly ? { "*": "deny" } : {};
   Object.assign(permission, {
     read: "allow",
@@ -571,6 +743,7 @@ function opencodeReadOnlyAgentPermission(
 function opencodeReadOnlyAgentDocument(
   opts: ProviderInvocationOptions
 ): Record<string, unknown> {
+  const toolsNone = opts.workspaceMode === "none";
   const mcpTools = Object.fromEntries(
     opencodeReadOnlyMcpToolNames(opts).map((toolName) => [toolName, true])
   );
@@ -584,7 +757,9 @@ function opencodeReadOnlyAgentDocument(
       "Return the requested structured response in assistant text and include every required final token or verdict.",
       "Do not replace the requested task with generic workspace-management conventions, CurrentWork templates, or sibling-project patterns.",
       "Never claim the task is unspecified when the prompt contains an ORIGINAL USER GOAL.",
-      "Use only explicitly enabled read or research tools, and do not ask to create planning files.",
+      toolsNone
+        ? "This is a tool-free formatting recovery; do not invoke any workspace, network, or MCP tool."
+        : "Use only explicitly enabled read or research tools, and do not ask to create planning files.",
     ].join(" "),
     tools: {
       "*": false,
@@ -602,14 +777,14 @@ function opencodeReadOnlyAgentDocument(
       recall: false,
       kilo_local_recall: false,
       lsp: false,
-      read: true,
-      glob: true,
-      grep: true,
-      list: true,
-      codebase_search: true,
-      semantic_search: true,
-      webfetch: opts.webSearch,
-      websearch: opts.webSearch,
+      read: !toolsNone,
+      glob: !toolsNone,
+      grep: !toolsNone,
+      list: !toolsNone,
+      codebase_search: !toolsNone,
+      semantic_search: !toolsNone,
+      webfetch: !toolsNone && opts.webSearch,
+      websearch: !toolsNone && opts.webSearch,
       ...mcpTools,
     },
     permission: opencodeReadOnlyAgentPermission(opts),
@@ -714,7 +889,7 @@ export function buildProviderInvocation(
   const selectedMcpServers = selectMcpServersForInvocation(
     provider,
     opts.mcpServers,
-    opts.readOnly === true
+    opts.readOnly === true && opts.workspaceMode !== "none"
   );
   assertProviderInvocationSupported(provider, opts, selectedMcpServers);
   const mcpServers = resolveMcpServerSecrets(selectedMcpServers, opts.secretValues);
@@ -797,7 +972,13 @@ export function buildProviderInvocation(
       for (const allowedPath of opts.additionalAllowedPaths ?? []) {
         args.push("--add-dir", path.resolve(allowedPath));
       }
-      if (opts.readOnly) {
+      if (opts.workspaceMode === "none") {
+        // An explicit empty allowlist is the only safe default for format
+        // recovery: omitting --tools would allow the CLI's evolving default
+        // tool set to reintroduce reads, shell, or MCP.
+        args.push("--tools", "");
+        args.push("--strict-mcp-config");
+      } else if (opts.readOnly) {
         // Claude's --tools flag is an available-tool allowlist. Keep read-only
         // roles fail-closed as the CLI adds tools over time: delegation, shell,
         // mutation, skills, and MCP are absent unless explicitly listed here.
@@ -832,19 +1013,4 @@ export function buildProviderInvocation(
     }
   }
   return { binary: provider.binary, args, env };
-}
-
-export function providerModelEntries(
-  providers: Record<string, ProviderConfig>,
-  discovered?: Record<string, { models?: string[] }>
-): Array<{ providerId: string; model: string }> {
-  const entries: Array<{ providerId: string; model: string }> = [];
-  for (const [providerId, provider] of Object.entries(providers)) {
-    if (!provider.enabled) continue;
-    const models = discovered?.[providerId]?.models?.length
-      ? discovered[providerId].models!
-      : provider.fallbackModels;
-    for (const model of models) entries.push({ providerId, model });
-  }
-  return entries;
 }

@@ -8,11 +8,11 @@ updates:
       core-dependencies:
         patterns: ["*"]
   - package-ecosystem: npm
-    directory: /vscode-extension
+    directory: /desktop-app
     schedule:
       interval: weekly
     groups:
-      extension-dependencies:
+      desktop-dependencies:
         patterns: ["*"]
   - package-ecosystem: npm
     directory: /experiments/langgraph

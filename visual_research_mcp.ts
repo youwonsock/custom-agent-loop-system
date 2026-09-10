@@ -641,41 +641,55 @@ function visualPrompt(input: RemoteImageInput, images: readonly DownloadedImage[
 
 export function extractVisualAssistantText(jsonl: string): string {
   const direct: string[] = [];
-  const fallback: string[] = [];
+  const terminal: string[] = [];
   for (const line of jsonl.split(/\r?\n/)) {
     if (!line.trim()) continue;
     let event: Record<string, unknown>;
     try {
       const parsed = JSON.parse(line) as unknown;
-      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) continue;
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("Visual provider frame must be an object.");
       event = parsed as Record<string, unknown>;
-    } catch {
-      continue;
+    } catch (error) {
+      if (error instanceof SyntaxError) throw new Error("Visual provider output contains malformed JSON.");
+      throw error;
     }
     if (event.type === "text") {
       const part = event.part as Record<string, unknown> | undefined;
       const text = typeof part?.text === "string"
         ? part.text
-        : typeof event.text === "string"
-          ? event.text
-          : null;
+          : typeof event.text === "string"
+            ? event.text
+            : null;
+      if (text === null) throw new Error("Visual text frame has no text payload.");
       if (text) direct.push(text);
     } else if (event.type === "item.completed") {
       const item = event.item as Record<string, unknown> | undefined;
-      if (item?.type === "agent_message" && typeof item.text === "string") direct.push(item.text);
+      if (!item || item.type !== "agent_message" || typeof item.text !== "string") throw new Error("Visual item.completed frame is invalid.");
+      if (item.text) direct.push(item.text);
     } else if (event.type === "assistant") {
       const message = event.message as Record<string, unknown> | undefined;
-      const content = Array.isArray(message?.content) ? message.content : [];
+      if (!message || !Array.isArray(message.content)) throw new Error("Visual assistant frame is invalid.");
+      const content = message.content;
       const blocks = content
-        .filter((block): block is Record<string, unknown> => Boolean(block) && typeof block === "object")
-        .filter((block) => block.type === "text" && typeof block.text === "string")
-        .map((block) => String(block.text));
+        .map((block) => {
+          if (!block || typeof block !== "object" || Array.isArray(block) || (block as Record<string, unknown>).type !== "text" || typeof (block as Record<string, unknown>).text !== "string") {
+            throw new Error("Visual assistant content block is invalid.");
+          }
+          return String((block as Record<string, unknown>).text);
+        });
       if (blocks.length > 0) direct.push(blocks.join("\n"));
     } else if (event.type === "result" && typeof event.result === "string") {
-      fallback.push(event.result);
+      if (event.result) terminal.push(event.result);
+    } else if (event.type === "result") {
+      throw new Error("Visual result frame is invalid.");
     }
   }
-  return (direct.length > 0 ? direct : fallback).join("\n").trim();
+  const directText = direct.join("\n").trim();
+  const terminalText = terminal.join("\n").trim();
+  if (directText && terminalText && directText !== terminalText) {
+    throw new Error("Visual output contains contradictory assistant and terminal frames.");
+  }
+  return (directText || terminalText).trim();
 }
 
 function boundedAppend(current: string, chunk: Buffer | string): { text: string; overflow: boolean } {
@@ -689,26 +703,58 @@ function boundedAppend(current: string, chunk: Buffer | string): { text: string;
 async function terminateChildProcess(pid: number): Promise<void> {
   if (pid <= 0) return;
   if (process.platform === "win32") {
-    await new Promise<void>((resolve) => {
-      const killer = execFile(
-        "taskkill",
-        ["/T", "/F", "/PID", String(pid)],
-        { timeout: 5000, windowsHide: true },
-        () => resolve()
-      );
-      killer.on("error", () => resolve());
+    await new Promise<void>((resolve, reject) => {
+      let settled = false;
+      const finish = (error?: Error): void => {
+        if (settled) return;
+        settled = true;
+        if (error) reject(error);
+        else resolve();
+      };
+      let killer: ReturnType<typeof execFile>;
+      try {
+        killer = execFile(
+          "taskkill",
+          ["/T", "/F", "/PID", String(pid)],
+          { timeout: 5000, windowsHide: true },
+          (error) => error ? finish(error) : finish()
+        );
+      } catch (error) {
+        finish(error instanceof Error ? error : new Error(String(error)));
+        return;
+      }
+      killer.on("error", (error) => finish(error));
+    }).catch((error) => {
+      // Treat a taskkill failure as a race only after confirming that the
+      // target has exited. A missing executable, permission error, timeout,
+      // or live process must remain actionable.
+      try {
+        process.kill(pid, 0);
+      } catch (livenessError) {
+        if ((livenessError as NodeJS.ErrnoException).code === "ESRCH") return;
+        throw error;
+      }
+      throw error;
     });
     return;
   }
-  try {
-    process.kill(-pid, "SIGKILL");
-  } catch {
-    try {
-      process.kill(pid, "SIGKILL");
-    } catch {
-      // Already exited.
+  try { process.kill(-pid, "SIGKILL"); }
+  catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code !== "ESRCH") throw error;
+    try { process.kill(pid, "SIGKILL"); }
+    catch (parentError) {
+      const parentCode = (parentError as NodeJS.ErrnoException).code;
+      if (parentCode !== "ESRCH") throw parentError;
     }
   }
+}
+
+export async function initVisualCall(callRoot: string): Promise<string> {
+  await fsp.mkdir(callRoot, { recursive: true });
+  const callDirectory = await fsp.mkdtemp(path.join(callRoot, "call-"));
+  if (!isContainedPath(callRoot, callDirectory)) throw new Error("Visual research temporary directory escaped its configured root.");
+  return callDirectory;
 }
 
 async function runVisualModel(
@@ -770,10 +816,16 @@ async function runVisualModel(
   let stdout = "";
   let stderr = "";
   let abortReason: string | null = null;
+  let abortError: unknown = null;
+  let abortPromise: Promise<void> | null = null;
   const abort = (reason: string): void => {
     if (abortReason) return;
     abortReason = reason;
-    if (child.pid) void terminateChildProcess(child.pid);
+    if (child.pid) {
+      abortPromise = terminateChildProcess(child.pid).catch((error) => {
+        abortError = error;
+      });
+    }
   };
   child.stdout.on("data", (chunk: Buffer | string) => {
     const appended = boundedAppend(stdout, chunk);
@@ -799,8 +851,15 @@ async function runVisualModel(
   });
   const outcome = await Promise.race([closePromise, timeoutPromise]);
   if (timer) clearTimeout(timer);
-  if ("timeout" in outcome) throw new Error("Visual model invocation timed out.");
+  if ("timeout" in outcome) {
+    if (abortPromise) await abortPromise;
+    const timeoutError = new Error("Visual model invocation timed out.");
+    if (abortError) throw new AggregateError([timeoutError, abortError], "Visual model timeout and process termination both failed.");
+    throw timeoutError;
+  }
   if (outcome.error) throw new Error(`Visual model could not start: ${outcome.error.message}`);
+  if (abortPromise) await abortPromise;
+  if (abortError) throw new Error(`Visual model termination failed: ${errorMessage(abortError)}`);
   if (abortReason) throw new Error(abortReason);
   if (outcome.code !== 0) {
     const detail = stderr.trim().slice(-2000) || `signal ${outcome.signal ?? "unknown"}`;
@@ -821,11 +880,9 @@ async function inspectRemoteImages(
   rawInput: unknown
 ): Promise<string> {
   const input = parseRemoteImageInput(rawInput);
-  await fsp.mkdir(runtime.tempRoot, { recursive: true });
-  const callDirectory = await fsp.mkdtemp(path.join(runtime.tempRoot, "call-"));
-  if (!isContainedPath(runtime.tempRoot, callDirectory)) {
-    throw new Error("Visual research temporary directory escaped its configured root.");
-  }
+  const callDirectory = await initVisualCall(runtime.tempRoot);
+  let primaryError: unknown;
+  let result: string | undefined;
   try {
     const totalBytes = { value: 0 };
     const images: DownloadedImage[] = [];
@@ -861,12 +918,22 @@ async function inspectRemoteImages(
       `[visual-research] model=${runtime.model} images=${images.length} ` +
       `sha256=${images.map((image) => image.sha256.slice(0, 12)).join(",")}\n`
     );
-    return audit;
-  } finally {
+    result = audit;
+  } catch (error) {
+    primaryError = error;
+  }
+  let releaseError: unknown;
+  try {
     if (isContainedPath(runtime.tempRoot, callDirectory)) {
       await fsp.rm(callDirectory, { recursive: true, force: true });
     }
+  } catch (error) {
+    releaseError = error;
   }
+  if (primaryError !== undefined && releaseError !== undefined) throw new AggregateError([primaryError, releaseError], "Visual call failed and temporary-file release also failed.");
+  if (primaryError !== undefined) throw primaryError;
+  if (releaseError !== undefined) throw releaseError;
+  return result!;
 }
 
 function visualToolDefinition(): Record<string, unknown> {

@@ -1,0 +1,48 @@
+{
+  "name": "agent-loop-orchestrator-desktop",
+  "productName": "Agent Loop Orchestrator",
+  "version": "7.0.0",
+  "description": "Windows operator console for Agent Loop Orchestrator",
+  "private": true,
+  "main": ".webpack/main",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "start": "electron-forge start",
+    "package": "electron-forge package",
+    "make": "electron-forge make",
+    "test:utility": "electron scripts/utility-process-smoke.cjs",
+    "test:native": "electron scripts/native-pty-smoke.cjs",
+    "test:packaged": "node scripts/packaged-smoke.cjs",
+    "verify:fuses": "node scripts/verify-fuses.cjs",
+    "build:e2e": "webpack --config webpack.e2e.main.config.js && webpack --config webpack.e2e.renderer.config.js",
+    "pretest:e2e": "npm run build:e2e",
+    "test:e2e": "playwright test",
+    "rebuild": "@electron/rebuild -f -w node-pty"
+  },
+  "dependencies": {
+    "fs-extra": "11.3.0",
+    "node-pty": "1.1.0"
+  },
+  "devDependencies": {
+    "@electron-forge/cli": "7.11.2",
+    "@electron-forge/maker-squirrel": "7.11.2",
+    "@electron-forge/plugin-auto-unpack-natives": "7.11.2",
+    "@electron-forge/plugin-fuses": "7.11.2",
+    "@electron-forge/plugin-webpack": "7.11.2",
+    "@electron/fuses": "2.1.3",
+    "@playwright/test": "1.62.1",
+    "css-loader": "7.1.2",
+    "electron": "44.0.0",
+    "@electron/rebuild": "4.2.0",
+    "html-webpack-plugin": "5.6.8",
+    "mini-css-extract-plugin": "2.9.2",
+    "ts-loader": "9.5.4",
+    "typescript": "5.9.3",
+    "webpack": "5.110.3",
+    "webpack-cli": "6.0.1"
+  }
+}

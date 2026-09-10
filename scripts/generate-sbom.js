@@ -4,6 +4,7 @@ const fs = require("node:fs");
 const crypto = require("node:crypto");
 const path = require("node:path");
 const { spawnSync } = require("node:child_process");
+const { readVerificationHelperIdentity } = require("./verification-helper-identity.js");
 
 const root = path.resolve(__dirname, "..");
 const npmCli = process.env.npm_execpath;
@@ -48,10 +49,33 @@ if (artifactPath) {
   ];
   sbom.metadata.component.properties = [
     ...(sbom.metadata.component.properties || []).filter(
-      (property) => property.name !== "agent-loop:artifactFile"
+      (property) => ![
+        "agent-loop:artifactFile",
+        "agent-loop:verificationHelperTarget",
+        "agent-loop:verificationHelperSha256",
+        "agent-loop:verificationHelperSourceCommit",
+      ].includes(property.name)
     ),
     { name: "agent-loop:artifactFile", value: path.basename(artifactPath) },
   ];
+  const helper = readVerificationHelperIdentity(root);
+  sbom.metadata.component.properties.push(
+    { name: "agent-loop:verificationHelperTarget", value: helper.target },
+    { name: "agent-loop:verificationHelperSha256", value: helper.sha256 },
+    { name: "agent-loop:verificationHelperSourceCommit", value: helper.sourceCommit },
+  );
+} else {
+  const helper = readVerificationHelperIdentity(root, { required: false });
+  if (helper) {
+    sbom.metadata = sbom.metadata || {};
+    sbom.metadata.component = sbom.metadata.component || {};
+    sbom.metadata.component.properties = [
+      ...(sbom.metadata.component.properties || []),
+      { name: "agent-loop:verificationHelperTarget", value: helper.target },
+      { name: "agent-loop:verificationHelperSha256", value: helper.sha256 },
+      { name: "agent-loop:verificationHelperSourceCommit", value: helper.sourceCommit },
+    ];
+  }
 }
 const outputPath = artifactPath
   ? `${artifactPath}.cdx.json`

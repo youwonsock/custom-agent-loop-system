@@ -6,11 +6,12 @@
 - Packaged core code, validated definitions, the composition root, and the configured data root are
   trusted control-plane inputs.
 - Provider capabilities are adapter-owned facts; configuration cannot elevate them.
-- The VS Code extension is a command client and read-only projection consumer, not state authority.
+- The desktop renderer is a command client and read-only projection consumer, not state authority; the
+  main process validates every bridge request before invoking core.
 
 ## Workflow authority
 
-Only the v4 core can advance a workflow. The final assistant response must be one JSON object matching
+Only the v7 core can advance a workflow. The final assistant response must be one JSON object matching
 `TaskResultEnvelopeV1`; the task payload schema, allowed signal, and guardrails are validated before an
 effect mapper runs. Provider text, prompt echoes, tool events, and completion markers cannot directly
 select transitions.
@@ -18,6 +19,12 @@ select transitions.
 Effect mappers return a closed `DomainEffect` union and cannot import repositories or routers.
 `RunReducer` is the sole aggregate mutation boundary. Results, effects, transition, activation
 completion, and events are committed together under revision CAS and fencing checks.
+
+For v7 definitions, a successful terminal additionally requires a core-owned verification proof,
+the approved contract and baseline hashes, a clean process tree, and QA/master approvals that refer
+to the same proof revision. Model output can report findings or feedback, but cannot create a proof
+or mark convergence. A changed protected file, command, test, or execution policy creates a hashed
+same-session reapproval candidate; stale request IDs and candidate hashes are rejected.
 
 ## Mutation and recovery
 
@@ -27,6 +34,13 @@ completion, and events are committed together under revision CAS and fencing che
   resume fails closed until an operator reconciles the workspace.
 - A provider permission boundary may wait for explicit access approval and continue the same activation
   with a new recorded attempt.
+- Verification commands run sequentially with bounded output and durable reserve/start/complete
+  checkpoints. A normal non-zero exit is a recorded verification failure; timeout, interruption,
+  tree-cleanup uncertainty, or an unknown mutation stops the remaining commands and fails closed.
+- Workspace fingerprints include untracked files, content, type, and mode. A watcher is a conservative
+  signal: an observed change or watcher error permanently invalidates the current proof.
+- A project lease covers the target and approved additional roots across data roots; it is checked
+  again before approvals, review, and success.
 - Human-gate request IDs and control command IDs are idempotent.
 - LangGraph checkpoint/replay is not used in production.
 

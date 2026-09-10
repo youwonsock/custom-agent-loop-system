@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Agent Loop Orchestrator</title>
+  </head>
+  <body>
+    <div id="app" aria-live="polite">
+      <aside class="sidebar">
+        <div class="brand"><span class="brand-mark">ALO</span><span>Agent Loop<br />Orchestrator</span></div>
+        <button id="new-session" class="primary">＋ New Session</button>
+        <div class="session-heading"><span>Sessions</span><button id="refresh" title="Refresh">↻</button></div>
+        <nav id="session-list" aria-label="Sessions"></nav>
+        <button id="settings" class="secondary">Settings</button>
+        <button id="maintenance" class="secondary" hidden>Repair profile</button>
+        <button id="quit" class="danger secondary">Stop &amp; Quit</button>
+      </aside>
+      <main class="content">
+        <header class="topbar"><div><h1 id="session-title">No session selected</h1><p id="session-subtitle">Create a session to begin.</p></div><div id="status-pill" class="status">Idle</div></header>
+        <div id="notice" class="notice" hidden></div>
+        <div class="tabs" role="tablist">
+          <button data-tab="overview" class="active" role="tab">Overview</button>
+          <button data-tab="plan" role="tab">Plan</button>
+          <button data-tab="log" role="tab">Log</button>
+          <button data-tab="timeline" role="tab">Timeline</button>
+          <button data-tab="notes" role="tab">Notes</button>
+          <button data-tab="summary" role="tab">Summary</button>
+        </div>
+        <section id="tab-overview" class="tab-panel active"></section>
+        <section id="tab-plan" class="tab-panel" hidden></section>
+        <section id="tab-log" class="tab-panel" hidden><pre id="log-output" class="log"></pre></section>
+        <section id="tab-timeline" class="tab-panel" hidden></section>
+        <section id="tab-notes" class="tab-panel" hidden></section>
+        <section id="tab-summary" class="tab-panel" hidden></section>
+      </main>
+    </div>
+    <dialog id="session-dialog"><form method="dialog" id="session-form"><h2>New Session</h2><label>Goal<textarea id="goal" required maxlength="65536" rows="5" placeholder="What should the workflow accomplish?"></textarea></label><label>Project directory<div class="picker"><input id="project" readonly required /><button type="button" id="pick-project">Choose…</button></div></label><label class="checkbox"><input id="full-access" type="checkbox" /> Allow Full Access for this session</label><div class="dialog-actions"><button value="cancel">Cancel</button><button id="start" class="primary" value="default">Start Session</button></div></form></dialog>
+    <dialog id="settings-dialog"><form method="dialog" id="settings-form"><h2>Settings</h2><p class="muted">Provider CLIs are installed and authenticated separately. Agent Loop only detects their availability.</p><h3>Providers</h3><div id="provider-settings"></div><h3>Web search</h3><label class="checkbox"><input id="web-search-enabled" type="checkbox" /> Enable web search</label><label>Mode<select id="web-search-mode"><option value="cached">Cached</option><option value="live">Live</option></select></label><h3>Timeouts and retry</h3><div class="settings-grid"><label>Phase timeout (ms)<input id="phase-timeout" type="number" min="1" step="1" /></label><label>Transport timeout (ms)<input id="transport-timeout" type="number" min="1" step="1" /></label><label>Idle timeout (ms)<input id="idle-timeout" type="number" min="1" step="1" /></label><label>Tool timeout (ms)<input id="tool-timeout" type="number" min="1" step="1" /></label><label>Max agent attempts<input id="max-attempts" type="number" min="1" step="1" /></label><label>Retry backoff (ms, comma separated)<input id="retry-backoff" type="text" /></label></div><h3>MCP servers</h3><textarea id="mcp-json" rows="8" spellcheck="false" aria-label="MCP servers JSON"></textarea><p class="muted">Use secret or environment references for credentials; plaintext values are rejected.</p><label>Store or replace secrets (JSON, optional)<textarea id="secret-json" rows="4" spellcheck="false" aria-label="Secret values JSON" placeholder='{"API_KEY":"value"}'></textarea></label><p class="muted">Values are encrypted with Windows secure storage and are cleared from this form after saving.</p><div class="dialog-actions"><button value="cancel">Close</button><button type="button" id="discover" class="secondary">Discover Models</button><button type="button" id="save-settings" class="primary">Save</button></div></form></dialog>
+  </body>
+</html>

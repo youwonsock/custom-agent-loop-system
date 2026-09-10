@@ -11,6 +11,16 @@ import type {
   CompiledWorkflowBundle,
   HumanGateResponse,
 } from "./workflow";
+import type {
+  FindingRecord,
+  ReviewApprovalRecord,
+  VerificationApprovalCandidate,
+  VerificationCommandRecord,
+  VerificationContract,
+  VerificationFeedback,
+  VerificationProof,
+  VerificationContractDraft,
+} from "./verification";
 
 export type RunStatus =
   | "RUNNING"
@@ -38,7 +48,10 @@ export interface WorkflowContext {
     id: string;
     title: string;
     planArtifactId: string;
+    verification?: VerificationContractDraft;
   }>;
+  /** Verification draft selected together with the approved plan. */
+  selectedVerificationDraft: VerificationContractDraft | null;
   requirementEvidence: Array<{
     activationId: string;
     requirementId: string;
@@ -51,9 +64,33 @@ export interface WorkflowContext {
   convergence: {
     stagnantCycles: number;
     history: Array<{ signature: string; improved: boolean; recordedAt: string }>;
+    lastContractHash?: string | null;
+    lastReachedStep?: number | null;
+    highestReachedStep?: number | null;
+    lastFailedCommandIds?: string[];
+    lastUnsatisfiedRequirementIds?: string[];
+    lastUnresolvedFindingIds?: string[];
   };
   interruptBriefing: { artifactId: string; summary: string } | null;
   humanResponses: Record<string, HumanGateResponse>;
+  verificationContract: VerificationContract | null;
+  verificationRecords: VerificationCommandRecord[];
+  verificationProof: VerificationProof | null;
+  verificationCandidate: VerificationApprovalCandidate | null;
+  verificationInvalidationReason: string | null;
+  reviewApprovals: ReviewApprovalRecord[];
+  findings: FindingRecord[];
+  verificationFeedback: VerificationFeedback[];
+  /** Last fingerprint confirmed by the core immediately before a gate/terminal. */
+  latestWorkspaceFingerprint: string | null;
+  /** Criteria-change proposals reported by TEST and awaiting operator
+   * reapproval. They are informational input from the model; the core never
+   * applies them as policy without a new candidate approval. */
+  verificationCriteriaChanges: string[];
+  /** Accumulated wall-clock time spent in the current verification contract. */
+  verificationElapsedMs: number;
+  requestSequence: number;
+  resumeNodeId: string | null;
 }
 
 export interface ExecutionState {
@@ -122,7 +159,7 @@ export interface DomainEvent {
 }
 
 export interface RunAggregate {
-  schemaVersion: 1;
+  schemaVersion: 2;
   runId: string;
   definition: CompiledWorkflowBundle;
   context: WorkflowContext;

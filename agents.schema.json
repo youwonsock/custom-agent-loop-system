@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://custom-agent-loop.local/v4/agents.schema.json",
+  "$id": "https://custom-agent-loop.local/v7/agents.schema.json",
   "title": "Agent definitions",
   "type": "object",
   "additionalProperties": false,

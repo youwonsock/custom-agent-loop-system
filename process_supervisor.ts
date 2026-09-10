@@ -11,11 +11,11 @@ import {
   checkProcessLiveness,
   delay,
 } from "./resilience";
+import { StreamingRedactor } from "./src/runtime/bounded-output";
 
 type AnyObj = Record<string, unknown>;
 const MIN_RAW_LOG_BYTES = 8 * 1024 * 1024;
 const MAX_RAW_LOG_BYTES = 32 * 1024 * 1024;
-const REDACTION_MARKER = "[REDACTED]";
 const EXIT_DATA_DRAIN_MS = 100;
 const EMPTY_RESULT_EXIT_DATA_DRAIN_MS = 1_000;
 const RAW_LOG_CLOSE_TIMEOUT_MS = 5_000;
@@ -53,9 +53,23 @@ async function openRawLogStream(filePath: string): Promise<fs.WriteStream> {
       encoding: "utf8",
     });
   } catch (err) {
-    try { fs.closeSync(descriptor); } catch { /* already closed */ }
+    try { fs.closeSync(descriptor); }
+    catch (releaseError) {
+      const releaseCode = (releaseError as NodeJS.ErrnoException).code;
+      if (releaseCode !== "EBADF") throw new AggregateError([err, releaseError], `Raw log descriptor release failed: ${filePath}`);
+    }
     throw err;
   }
+}
+
+/** Create the owning attempt-log directory at an explicit lifecycle boundary. */
+export async function initAttemptLog(directory: string): Promise<void> {
+  const parent = path.dirname(directory);
+  const parentStat = await fsp.stat(parent);
+  if (!parentStat.isDirectory()) throw new Error(`Attempt log parent is not a directory: ${parent}`);
+  await fsp.mkdir(directory, { recursive: true });
+  const stat = await fsp.stat(directory);
+  if (!stat.isDirectory()) throw new Error(`Attempt log storage is not a directory: ${directory}`);
 }
 
 function errorDescription(err: unknown): string {
@@ -64,72 +78,6 @@ function errorDescription(err: unknown): string {
     return code && !err.message.includes(code) ? `${code}: ${err.message}` : err.message;
   }
   return String(err);
-}
-
-function fixedLengthRedaction(length: number): string {
-  if (length <= REDACTION_MARKER.length) return REDACTION_MARKER.slice(0, length);
-  return REDACTION_MARKER + "*".repeat(length - REDACTION_MARKER.length);
-}
-
-class StreamingRedactor {
-  private carry = "";
-  private readonly patterns: string[];
-  private readonly maximumPatternLength: number;
-
-  constructor(sensitiveValues: readonly string[]) {
-    const patterns = new Set<string>();
-    for (const secret of sensitiveValues.filter(Boolean)) {
-      patterns.add(secret);
-      const jsonEscaped = JSON.stringify(secret).slice(1, -1);
-      if (jsonEscaped !== secret) patterns.add(jsonEscaped);
-    }
-    this.patterns = [...patterns].sort((left, right) => right.length - left.length);
-    this.maximumPatternLength = this.patterns[0]?.length ?? 0;
-  }
-
-  push(chunk: string): string {
-    if (this.patterns.length === 0) return chunk;
-    const combined = this.carry + chunk;
-    const safeBoundary = Math.max(0, combined.length - (this.maximumPatternLength - 1));
-    return this.consume(combined, safeBoundary);
-  }
-
-  flush(): string {
-    if (this.patterns.length === 0) return "";
-    const combined = this.carry;
-    return this.consume(combined, combined.length);
-  }
-
-  /**
-   * PTYs may insert visual line wraps inside a secret. JSON reassembly removes
-   * those wraps before parsing, so apply the same patterns once more to the
-   * complete reconstructed record before it enters persisted event state.
-   */
-  redactComplete(value: string): string {
-    let redacted = value;
-    for (const pattern of this.patterns) {
-      if (!redacted.includes(pattern)) continue;
-      redacted = redacted.split(pattern).join(fixedLengthRedaction(pattern.length));
-    }
-    return redacted;
-  }
-
-  private consume(combined: string, safeBoundary: number): string {
-    let index = 0;
-    let output = "";
-    while (index < safeBoundary) {
-      const match = this.patterns.find((pattern) => combined.startsWith(pattern, index));
-      if (match) {
-        output += fixedLengthRedaction(match.length);
-        index += match.length;
-      } else {
-        output += combined[index];
-        index += 1;
-      }
-    }
-    this.carry = combined.slice(index);
-    return output;
-  }
 }
 
 function utf8Prefix(value: string, maximumBytes: number): string {
@@ -475,9 +423,25 @@ async function execFileBounded(
   args: string[],
   timeoutMs: number
 ): Promise<void> {
-  await new Promise<void>((resolve) => {
-    const child = execFile(file, args, { timeout: timeoutMs, windowsHide: true }, () => resolve());
-    child.on("error", () => resolve());
+  await new Promise<void>((resolve, reject) => {
+    let settled = false;
+    const finish = (error?: Error): void => {
+      if (settled) return;
+      settled = true;
+      if (error) reject(error);
+      else resolve();
+    };
+    let child: ReturnType<typeof execFile>;
+    try {
+      child = execFile(file, args, { timeout: timeoutMs, windowsHide: true }, (error) => {
+        if (error) finish(error);
+        else finish();
+      });
+    } catch (error) {
+      finish(error instanceof Error ? error : new Error(String(error)));
+      return;
+    }
+    child.on("error", (error) => finish(error));
   });
 }
 
@@ -499,7 +463,14 @@ export async function terminateProcessTreeBounded(
 ): Promise<ProcessLiveness> {
   if (pid <= 0) return "dead";
   if (process.platform === "win32") {
-    await execFileBounded("taskkill", ["/T", "/F", "/PID", String(pid)], timeoutMs);
+    try {
+      await execFileBounded("taskkill", ["/T", "/F", "/PID", String(pid)], timeoutMs);
+    } catch (error) {
+      // A taskkill race is safe only after independently confirming that the
+      // target has already exited. Missing tools, access failures, and a
+      // still-live target remain visible to the caller.
+      if (checkProcessLiveness(pid) !== "dead") throw error;
+    }
   } else {
     let groupSignalSent = false;
     try {
@@ -508,29 +479,34 @@ export async function terminateProcessTreeBounded(
       // and they are re-parented while shutdown is in progress.
       process.kill(-pid, "SIGTERM");
       groupSignalSent = true;
-    } catch {
-      // Fall back for PTY implementations that do not create a process group.
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code !== "ESRCH") throw error;
     }
     if (!groupSignalSent) {
-      await execFileBounded("pkill", ["-TERM", "-P", String(pid)], Math.max(500, timeoutMs / 2));
       try {
-        process.kill(pid, "SIGTERM");
-      } catch {
-        // It may already have exited.
+        await execFileBounded("pkill", ["-TERM", "-P", String(pid)], Math.max(500, timeoutMs / 2));
+      } catch (error) {
+        if (checkProcessLiveness(pid) !== "dead") throw error;
+      }
+      try { process.kill(pid, "SIGTERM"); }
+      catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code !== "ESRCH") throw error;
       }
     }
     await delay(Math.min(500, timeoutMs));
     if (checkProcessGroupLiveness(pid) === "alive") {
-      try {
-        process.kill(-pid, "SIGKILL");
-      } catch {
-        // The group may have exited between checks.
+      try { process.kill(-pid, "SIGKILL"); }
+      catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code !== "ESRCH") throw error;
       }
     } else if (checkProcessLiveness(pid) === "alive") {
-      try {
-        process.kill(pid, "SIGKILL");
-      } catch {
-        // It may already have exited.
+      try { process.kill(pid, "SIGKILL"); }
+      catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code !== "ESRCH") throw error;
       }
     }
     const deadline = Date.now() + Math.max(0, timeoutMs - Math.min(500, timeoutMs));
@@ -573,7 +549,8 @@ export class ProcessSupervisor {
     });
     let rawLog: fs.WriteStream;
     try {
-      await fsp.mkdir(path.dirname(options.rawLogPath), { recursive: true });
+      const parent = await fsp.stat(path.dirname(options.rawLogPath));
+      if (!parent.isDirectory()) throw new Error(`Attempt log storage is not a directory: ${path.dirname(options.rawLogPath)}`);
       // Supplying an already-open descriptor prevents createWriteStream's
       // asynchronous open errors from becoming an unhandled EventEmitter error.
       // A bad path therefore fails before the provider process is spawned.
@@ -759,6 +736,7 @@ export class ProcessSupervisor {
     let controlTimer: NodeJS.Timeout | null = null;
     let exitDrainTimer: NodeJS.Timeout | null = null;
     let controlPollRunning = false;
+    let progressFailure: unknown = null;
     const absoluteDeadlineAtMs = Math.max(
       Date.now() + 1,
       options.absoluteDeadlineAtMs ?? Date.now() + options.phaseTimeoutMs
@@ -783,7 +761,12 @@ export class ProcessSupervisor {
           activity,
           deadlineAt: new Date(currentPhaseDeadlineAtMs).toISOString(),
         })
-      ).catch(() => {});
+      ).catch((error: unknown) => {
+        progressFailure ??= error;
+        if (!terminating && !resolved) {
+          void terminate("spawn_error", "permission", `Progress callback failed: ${errorDescription(error)}`, false);
+        }
+      });
     };
 
     const clearRuntimeTimers = (): void => {
@@ -867,6 +850,7 @@ export class ProcessSupervisor {
       if (terminating || resolved) return;
       terminating = true;
       clearRuntimeTimers();
+      try {
       let liveness: ProcessLiveness;
       if (process.platform === "win32") {
         // taskkill /T must observe the PTY root while it is still alive. Calling
@@ -875,18 +859,18 @@ export class ProcessSupervisor {
         // enumerate them. Those orphans retain the target as their current
         // directory and can survive STOP/tool-timeout cleanup.
         liveness = await terminateProcessTreeBounded(pid, options.killTimeoutMs);
-        try {
-          child.kill();
-        } catch {
-          // taskkill may already have closed the PTY root.
+        try { child.kill(); }
+        catch (error) {
+          const code = (error as NodeJS.ErrnoException).code;
+          if (code !== "ENOENT" && code !== "ESRCH") throw error;
         }
         await Promise.race([exitPromise, delay(options.killTimeoutMs)]);
         liveness = checkProcessLiveness(pid);
       } else {
-        try {
-          child.kill();
-        } catch {
-          // Already exited.
+        try { child.kill(); }
+        catch (error) {
+          const code = (error as NodeJS.ErrnoException).code;
+          if (code !== "ENOENT" && code !== "ESRCH") throw error;
         }
         await Promise.race([exitPromise, delay(options.terminationGraceMs)]);
         liveness = checkProcessLiveness(pid);
@@ -910,6 +894,14 @@ export class ProcessSupervisor {
       // exits so session IDs, tool events, and completion text are not dropped.
       if (exitSeen) await delay(exitDataDrainMs());
       finish(intendedOutcome, intendedFailure, message, cancelled);
+      } catch (error) {
+        finish(
+          "orphaned_process",
+          "unknown",
+          `Process termination failed after ${message}: ${errorDescription(error)}`,
+          cancelled
+        );
+      }
     };
 
     onRawLogFailure = (err) => {

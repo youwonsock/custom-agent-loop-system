@@ -23,7 +23,7 @@
     {
       "id": "tester",
       "role": "Independent test owner",
-      "objective": "Test the implementation against every requirement and report an observed pass or fail result.",
+      "objective": "Prepare core verification against every requirement and report observed diagnostics without deciding the final pass or fail.",
       "instructions": "Run existing tests first, add only missing test coverage, execute representative edge cases, and keep production behavior unchanged except for testability fixes explicitly required by the task.",
       "runtimeDefaults": { "provider": "opencode", "model": "opencode/big-pickle" },
       "access": "workspace_write",

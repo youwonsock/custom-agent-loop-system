@@ -5,6 +5,7 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const { spawnSync } = require("node:child_process");
+const { readVerificationHelperIdentity } = require("./verification-helper-identity.js");
 
 const root = path.resolve(__dirname, "..");
 const packageJson = require(path.join(root, "package.json"));
@@ -70,6 +71,15 @@ if (
 ) {
   fail("Artifact manifest identity, size, or digest does not match the exact npm artifact.");
 }
+const sourceHelper = readVerificationHelperIdentity(root);
+if (
+  !manifest.verificationHelper ||
+  manifest.verificationHelper.target !== sourceHelper.target ||
+  manifest.verificationHelper.sha256 !== sourceHelper.sha256 ||
+  manifest.verificationHelper.sourceCommit !== sourceHelper.sourceCommit
+) {
+  fail("Artifact manifest is not bound to the expected verification helper.");
+}
 
 const temporaryRoot = fs.mkdtempSync(path.join(os.tmpdir(), "agent-loop-npm-artifact-"));
 try {
@@ -103,6 +113,14 @@ try {
   if (installedPackage.dependencies?.["@langchain/langgraph"] !== undefined) {
     fail("The production package unexpectedly depends on LangGraph.");
   }
+  const installedHelper = path.join(installedRoot, "native", "bin", "win32-x64", "verification-host.exe");
+  const installedHelperManifest = path.join(installedRoot, "native", "bin", "win32-x64", "verification-host.manifest.json");
+  if (!fs.existsSync(installedHelper) || !fs.existsSync(installedHelperManifest)) fail("Installed verification helper is missing.");
+  const installedHelperDigest = sha256File(installedHelper);
+  const installedHelperInfo = JSON.parse(fs.readFileSync(installedHelperManifest, "utf8"));
+  if (installedHelperInfo.target !== "win32-x64" || installedHelperInfo.sha256 !== installedHelperDigest || installedHelperDigest !== sourceHelper.sha256) {
+    fail("Installed verification helper identity does not match the release candidate.");
+  }
 
   const files = listFiles(installedRoot);
   for (const required of [
@@ -116,6 +134,8 @@ try {
     "workflow.json",
     "workflow.schema.json",
     "scripts/fix-pty-permissions.js",
+    "native/bin/win32-x64/verification-host.exe",
+    "native/bin/win32-x64/verification-host.manifest.json",
   ]) {
     if (!files.includes(required)) fail(`Installed artifact is missing ${required}.`);
   }
@@ -124,7 +144,7 @@ try {
     file.endsWith(".js.map") ||
     file.endsWith(".test.js") ||
     file.startsWith("experiments/") ||
-    file.startsWith("vscode-extension/")
+    file.startsWith("desktop-app/")
   );
   if (forbidden.length > 0) {
     fail(`Installed artifact leaks development files:\n${forbidden.join("\n")}`);
@@ -167,6 +187,16 @@ try {
     [
       path.join(root, "scripts", "pty-smoke-child.js"),
       path.join(temporaryRoot, "node_modules", "node-pty"),
+      temporaryRoot,
+    ],
+    { cwd: temporaryRoot, timeout: 30_000 }
+  );
+  run(
+    "installed verification process lifecycle",
+    process.execPath,
+    [
+      path.join(root, "scripts", "verification-process-smoke.js"),
+      path.join(installedRoot, "dist", "src", "runtime", "verification-process-runtime.js"),
       temporaryRoot,
     ],
     { cwd: temporaryRoot, timeout: 30_000 }

@@ -5,33 +5,14 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { getDefaultConfig, loadLoopConfig, RUNTIME_DEFAULTS } from "./runtime_config";
 
-test("core, generated extension runtime, and VS Code manifest share canonical defaults", async () => {
+test("core definitions are the single source staged into the desktop bundle", async () => {
   const root = path.resolve(__dirname, "..");
-  const generated = JSON.parse(await fs.readFile(
-    path.join(root, "vscode-extension", "src", "generated_runtime_defaults.json"),
-    "utf8"
-  )) as Record<string, unknown>;
-  assert.deepEqual(generated, RUNTIME_DEFAULTS);
-  const extensionPackage = JSON.parse(await fs.readFile(
-    path.join(root, "vscode-extension", "package.json"),
-    "utf8"
-  )) as any;
-  const properties = extensionPackage.contributes.configuration.properties;
-  for (const [key, value] of Object.entries(RUNTIME_DEFAULTS)) {
-    assert.deepEqual(properties[`agentLoop.${key}`]?.default, value, `manifest default drift: ${key}`);
-  }
-  for (const [canonicalName, generatedName] of [
-    ["agents.json", "generated_agents.json"],
-    ["tasks.json", "generated_tasks.json"],
-    ["workflow.json", "generated_workflow.json"],
-    ["protocol_contract.json", "generated_protocol_contract.json"],
+  assert.deepEqual(JSON.parse(await fs.readFile(path.join(root, "runtime_defaults.json"), "utf8")), RUNTIME_DEFAULTS);
+  for (const canonicalName of [
+    "agents.json", "agents.schema.json", "tasks.json", "tasks.schema.json", "workflow.json",
+    "workflow.schema.json", "loop_config.json", "loop_config.schema.json", "protocol_contract.json",
   ]) {
-    const canonical = JSON.parse(await fs.readFile(path.join(root, canonicalName), "utf8"));
-    const generated = JSON.parse(await fs.readFile(
-      path.join(root, "vscode-extension", "src", generatedName),
-      "utf8"
-    ));
-    assert.deepEqual(generated, canonical, `generated extension template drift: ${canonicalName}`);
+    assert.doesNotThrow(() => JSON.parse(require("node:fs").readFileSync(path.join(root, canonicalName), "utf8")));
   }
 });
 

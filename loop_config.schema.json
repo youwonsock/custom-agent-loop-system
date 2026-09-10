@@ -34,7 +34,8 @@
         "stateLockFileName": { "$ref": "#/$defs/pathSegment" },
         "leaseFileName": { "$ref": "#/$defs/pathSegment" },
         "registryLockFileName": { "$ref": "#/$defs/pathSegment" },
-        "attemptLogsDirName": { "$ref": "#/$defs/pathSegment" }
+        "attemptLogsDirName": { "$ref": "#/$defs/pathSegment" },
+        "verificationLogsDirName": { "$ref": "#/$defs/pathSegment" }
       },
       "additionalProperties": false
     },
@@ -47,10 +48,6 @@
         "idleTimeoutMs": { "$ref": "#/$defs/positiveInteger" },
         "ptyCols": { "$ref": "#/$defs/positiveInteger" },
         "ptyRows": { "$ref": "#/$defs/positiveInteger" },
-        "profileFallbackModels": {
-          "type": "object",
-          "additionalProperties": { "type": "string", "minLength": 1 }
-        },
         "transportTimeoutMs": { "$ref": "#/$defs/positiveInteger" },
         "toolTimeoutMs": { "$ref": "#/$defs/positiveInteger" },
         "maxAgentAttempts": { "$ref": "#/$defs/positiveInteger" },
@@ -147,15 +144,43 @@
         "adapter": { "enum": ["opencode", "kilo", "codex", "claude"] },
         "binary": { "type": "string", "minLength": 1 },
         "enabled": { "type": "boolean" },
-        "modelsArgs": { "$ref": "#/$defs/stringArray" },
-        "fallbackModels": {
-          "type": "array",
-          "items": { "type": "string", "minLength": 1 }
-        },
+        "modelCatalog": { "$ref": "#/$defs/modelCatalog" },
         "interactionWhitelist": { "$ref": "#/$defs/stringArray" },
         "capabilities": { "$ref": "#/$defs/providerCapabilities" }
       },
+      "allOf": [
+        {
+          "if": { "properties": { "adapter": { "enum": ["opencode", "kilo"] } }, "required": ["adapter", "modelCatalog"] },
+          "then": { "properties": { "modelCatalog": { "properties": { "source": { "const": "command" } } } } }
+        },
+        {
+          "if": { "properties": { "adapter": { "enum": ["codex", "claude"] } }, "required": ["adapter", "modelCatalog"] },
+          "then": { "properties": { "modelCatalog": { "properties": { "source": { "const": "configured" } } } } }
+        }
+      ],
       "additionalProperties": false
+    },
+    "modelCatalog": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["source", "args"],
+          "properties": {
+            "source": { "const": "command" },
+            "args": { "type": "array", "minItems": 1, "items": { "type": "string" } }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["source", "models"],
+          "properties": {
+            "source": { "const": "configured" },
+            "models": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } }
+          },
+          "additionalProperties": false
+        }
+      ]
     },
     "providerCapabilities": {
       "type": "object",
@@ -169,7 +194,8 @@
         "mcpIsolation",
         "readOnlyMcpToolFiltering",
         "processContainment",
-        "structuredEvents"
+        "structuredEvents",
+        "toolsNone"
       ],
       "properties": {
         "readOnlyFilesystem": { "enum": ["enforced", "best_effort", "unsupported"] },
@@ -185,7 +211,8 @@
         "mcpIsolation": { "enum": ["explicit", "inherited", "none"] },
         "readOnlyMcpToolFiltering": { "enum": ["enforced", "unsupported"] },
         "processContainment": { "const": "supervised_tree" },
-        "structuredEvents": { "const": "jsonl" }
+        "structuredEvents": { "const": "jsonl" },
+        "toolsNone": { "enum": ["verified", "unverified", "unsupported"] }
       },
       "additionalProperties": false
     },

@@ -162,6 +162,7 @@ export class DefaultAgentTaskRunner implements AgentTaskRunner {
       prompt,
       toolPolicy,
       mode: "task",
+      workspaceMode: toolPolicy.workspace,
       targetProjectPath: context.aggregate.context.targetProjectPath,
       additionalAllowedPaths: context.aggregate.context.additionalAllowedPaths,
       fullAccess: context.aggregate.context.accessMode === "full_access",
@@ -218,6 +219,7 @@ export class DefaultAgentTaskRunner implements AgentTaskRunner {
         ),
         toolPolicy: FORMAT_RECOVERY_TOOL_POLICY,
         mode: "format_recovery",
+        workspaceMode: "none",
         targetProjectPath: context.aggregate.context.targetProjectPath,
         additionalAllowedPaths: [],
         fullAccess: false,
@@ -244,6 +246,25 @@ export class DefaultAgentTaskRunner implements AgentTaskRunner {
       } catch (recoveryError) {
         return failedResult(
           validationFailure(recoveryError, task, recovery.attemptId),
+          storedArtifacts
+        );
+      }
+      if (task.sideEffect === "workspace_mutation") {
+        // The recovery invocation is deliberately tool-free and can repair
+        // only the response format. It cannot establish what the original
+        // mutation-capable provider did to the workspace, so accepting its
+        // parsed envelope would clear an unknown mutation boundary and could
+        // let the workflow advance toward SUCCESS without a fresh core
+        // verification pass.
+        return failedResult(
+          {
+            kind: "unknown_mutation",
+            message:
+              "Format recovery produced a valid response, but the original workspace mutation outcome is unknown.",
+            retryable: false,
+            ambiguousMutation: true,
+            attemptId: response.attemptId,
+          },
           storedArtifacts
         );
       }

@@ -4,6 +4,7 @@ const crypto = require("node:crypto");
 const fs = require("node:fs");
 const path = require("node:path");
 const { spawnSync } = require("node:child_process");
+const { readVerificationHelperIdentity } = require("./verification-helper-identity.js");
 
 const root = path.resolve(__dirname, "..");
 const packageJson = require(path.join(root, "package.json"));
@@ -48,6 +49,7 @@ if (!Array.isArray(reports) || reports.length !== 1) {
 const report = reports[0];
 const artifactPath = path.join(artifactDirectory, report.filename);
 if (!fs.existsSync(artifactPath)) throw new Error(`npm pack did not create ${artifactPath}.`);
+const verificationHelper = readVerificationHelperIdentity(root);
 
 const files = new Set(report.files.map((entry) => entry.path));
 for (const required of [
@@ -62,6 +64,8 @@ for (const required of [
   "workflow.schema.json",
   "loop_config.schema.json",
   "scripts/fix-pty-permissions.js",
+  "native/bin/win32-x64/verification-host.exe",
+  "native/bin/win32-x64/verification-host.manifest.json",
 ]) {
   if (!files.has(required)) throw new Error(`npm package is missing required file: ${required}`);
 }
@@ -71,7 +75,7 @@ const forbidden = [...files].filter((file) =>
   file.endsWith(".test.js") ||
   file.startsWith("test/") ||
   file.startsWith("experiments/") ||
-  file.startsWith("vscode-extension/") ||
+  file.startsWith("desktop-app/") ||
   file.startsWith(".github/") ||
   file.startsWith(".goal/") ||
   file.startsWith(".kilo/") ||
@@ -90,6 +94,11 @@ const gitResult = spawnSync("git", ["rev-parse", "HEAD"], {
 });
 const sourceCommit = process.env.GITHUB_SHA ||
   (gitResult.status === 0 ? gitResult.stdout.trim() : "unknown");
+if (verificationHelper.sourceCommit !== sourceCommit) {
+  throw new Error(
+    `Verification helper was built from ${verificationHelper.sourceCommit}, not candidate commit ${sourceCommit}.`
+  );
+}
 const manifest = {
   schemaVersion: 1,
   packageName: packageJson.name,
@@ -100,6 +109,7 @@ const manifest = {
   nodeEngine: packageJson.engines.node,
   sourceCommit,
   fileCount: files.size,
+  verificationHelper,
 };
 fs.writeFileSync(`${artifactPath}.sha256`, `${sha256}  ${path.basename(artifactPath)}\n`, "utf8");
 fs.writeFileSync(

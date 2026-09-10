@@ -4,9 +4,25 @@ import * as path from "node:path";
 import * as fsp from "node:fs/promises";
 import { parseCliArgs, type CliOptions } from "../../../cli_application";
 import { canonicalizeRootSet, resolveRootSet, type RootSet } from "../../../root_set";
-import { loadLoopConfig, type LoopConfig } from "../../../runtime_config";
-import { atomicWriteJson } from "../../../json_file_store";
+import { getDefaultConfig, loadLoopConfig, loadLoopPathsForMaintenance, type LoopConfig } from "../../../runtime_config";
 import { SessionOwnership } from "../../../resilience";
+import { initRunStorage } from "../../infrastructure/run-storage";
+import { FileProjectLease } from "../../infrastructure/file-project-lease";
+import { FileRunRepository } from "../../infrastructure/file-run-repository";
+import { atomicWriteJson, renameWithRetry } from "../../../json_file_store";
+import {
+  INIT_DEFINITION_FILES,
+  createInitManifest,
+  hashDefinitionFiles,
+  initManifestPath,
+  readInitManifest,
+  readSessionIndexStrict,
+  validatePackagedSchemaDocument,
+  validateInitializedRoots,
+} from "../../application/init-manifest";
+import { assertJsonSchema, type JsonSchema } from "../../definitions/json-schema";
+import type { JsonValue } from "../../domain/json";
+import { createEmptySessionIndexProjection, validateSessionIndexProjectionV4 } from "../../interfaces/operator/contracts";
 import { composeApplication } from "../../composition/application";
 import { createRunAggregate, deriveWorkflowRequirements } from "../../application/run-factory";
 import { createDefaultDefinitionRegistries } from "../../definitions/default-registries";
@@ -14,13 +30,22 @@ import { loadDefinitionSource } from "../../definitions/definition-loader";
 import { compileWorkflow } from "../../definitions/workflow-compiler";
 import type { AgentRuntimeOverride } from "../../domain/agent";
 import type { DefinitionSourceBundle, HumanGateResponse } from "../../domain/workflow";
+import { discoverAndMergeSessionIndex, discoverProviders } from "../../application/provider-discovery";
+import { MaintenanceService, assertNoMaintenanceInProgress } from "../../application/maintenance-service";
+import {
+  CORE_CAPABILITIES,
+  CORE_PROTOCOL_VERSION,
+  CORE_STATE_SCHEMA_VERSION,
+} from "../../../protocol_contract";
 
-const IMPLEMENTATION_VERSION = "4.0.0";
+const IMPLEMENTATION_VERSION = "7.0.0";
 const SECRET_VALUES_ENV = "AGENT_LOOP_SECRET_VALUES";
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/u;
+const UTILITY_PROCESS_ENV = "AGENT_LOOP_UTILITY_PROCESS";
+const RUNNING_IN_UTILITY_PROCESS = process.env[UTILITY_PROCESS_ENV] === "1";
 
 function usage(): void {
-  console.log(`Custom Agent Loop System ${IMPLEMENTATION_VERSION}
+  console.log(`Agent Loop Orchestrator ${IMPLEMENTATION_VERSION}
 
 Usage:
   agent-loop init [--config-root <path>]
@@ -28,12 +53,16 @@ Usage:
   agent-loop resume --session <id>
   agent-loop approve-plan --session <id> --choice-id <id>
   agent-loop revise-plan --session <id> --message <text>
+  agent-loop approve-verification --session <id> --request-id <id> --candidate-hash <hash>
+  agent-loop reject-verification --session <id> --request-id <id> --candidate-hash <hash> --message <text>
+  agent-loop upgrade --reset-sessions --dry-run
+  agent-loop upgrade --reset-sessions
   agent-loop cancel-plan --session <id>
   agent-loop set-access --session <id> --mode <ask|full_access>
   agent-loop stop --session <id>
   agent-loop interrupt --session <id> --message <text>
   agent-loop status --session <id> [--json]
-  agent-loop models
+  agent-loop models [--json]
   agent-loop capabilities
 
 Common roots:
@@ -48,9 +77,9 @@ function requiredOption(options: CliOptions, name: string): string {
   return value;
 }
 
-function numberOption(options: CliOptions, name: string, fallback: number): number {
+function numberOption(options: CliOptions, name: string, defaultValue: number): number {
   const raw = options[name];
-  if (!raw || raw === "true") return fallback;
+  if (!raw || raw === "true") return defaultValue;
   const value = Number(raw);
   if (!Number.isSafeInteger(value) || value < 1) {
     throw new Error(`--${name} must be a positive integer.`);
@@ -58,9 +87,9 @@ function numberOption(options: CliOptions, name: string, fallback: number): numb
   return value;
 }
 
-function listOption(options: CliOptions, name: string, fallback: number[]): number[] {
+function listOption(options: CliOptions, name: string, defaultValues: number[]): number[] {
   const raw = options[name];
-  if (!raw || raw === "true") return fallback;
+  if (!raw || raw === "true") return defaultValues;
   const values = raw.split(",").map((part) => Number(part.trim()));
   if (values.some((value) => !Number.isSafeInteger(value) || value < 0)) {
     throw new Error(`--${name} must contain non-negative integer delays.`);
@@ -130,6 +159,7 @@ async function withOwnedApplication<T>(
   config: LoopConfig,
   options: {
     secretValues?: Readonly<Record<string, string>>;
+    projectRoots?: ReadonlyArray<string>;
   },
   operation: (app: ReturnType<typeof composeApplication>) => Promise<T>
 ): Promise<T> {
@@ -140,6 +170,7 @@ async function withOwnedApplication<T>(
   if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
     throw new Error(`Run path escapes the configured data root: ${runId}.`);
   }
+  await initRunStorage(roots.dataRoot, runId, config);
   const ownership = new SessionOwnership({
     sessionDir: sessionDirectory,
     ownerLockFileName: config.paths.ownerLockFileName,
@@ -148,30 +179,123 @@ async function withOwnedApplication<T>(
     leaseTtlMs: config.defaults.leaseTtlMs,
   });
   await ownership.acquire();
+  const projectLease = new FileProjectLease();
+  let lease: Awaited<ReturnType<FileProjectLease["acquire"]>> | null = null;
+  let leaseMonitor: NodeJS.Timeout | null = null;
+  let leaseLoss: Error | null = null;
+  let leaseStopRequested = false;
+  let value!: T;
+  let operationError: unknown;
+  const releaseErrors: unknown[] = [];
   try {
-    return await operation(composeApplication({
+    if (options.projectRoots && options.projectRoots.length > 0) {
+      lease = await projectLease.acquire(
+        options.projectRoots,
+        `${process.pid}:${runId}`,
+        config.defaults.leaseTtlMs
+      );
+    }
+    const app = composeApplication({
       dataRoot: roots.dataRoot,
       runId,
       config,
       secretValues: options.secretValues,
       onChildPid: (pid) => ownership.setChildPid(pid),
-    }));
+    });
+    if (lease?.assertOwned) {
+      const checkLease = (): void => {
+        if (!lease || leaseLoss) return;
+        void lease.assertOwned!().catch(async (error) => {
+          leaseLoss ??= error instanceof Error ? error : new Error(String(error));
+          if (leaseStopRequested) return;
+          leaseStopRequested = true;
+          try {
+            // A lost project lease is a safety boundary.  Queue STOP through
+            // the durable control channel so an active provider/verification
+            // process is cleaned up by the owning runner before this process
+            // releases its session ownership.
+            await app.commands.requestControl(
+              runId,
+              `lease_loss_${Date.now().toString(36)}_${randomBytes(3).toString("hex")}`,
+              "stop",
+              "Project lease ownership was lost; stopping the run."
+            );
+          } catch (stopError) {
+            leaseLoss = new AggregateError(
+              [leaseLoss, stopError],
+              "Project lease was lost and the safety stop could not be queued."
+            );
+          }
+        });
+      };
+      leaseMonitor = setInterval(checkLease, Math.max(100, Math.min(5_000, Math.floor(config.defaults.leaseTtlMs / 3))));
+      leaseMonitor.unref();
+    }
+    value = await operation(app);
+    if (lease?.assertOwned) {
+      try { await lease.assertOwned(); }
+      catch (error) { leaseLoss ??= error instanceof Error ? error : new Error(String(error)); }
+    }
+    if (leaseLoss) throw leaseLoss;
+  } catch (error) {
+    operationError = error;
   } finally {
-    await ownership.release();
+    if (leaseMonitor) {
+      clearInterval(leaseMonitor);
+      leaseMonitor = null;
+    }
   }
+  try {
+    await lease?.release();
+  } catch (error) {
+    releaseErrors.push(error);
+  }
+  try {
+    await ownership.release();
+  } catch (error) {
+    releaseErrors.push(error);
+  }
+  if (operationError !== undefined && releaseErrors.length > 0) {
+    throw new AggregateError([operationError, ...releaseErrors], `Run operation and resource release failed for ${runId}.`);
+  }
+  if (operationError !== undefined) throw operationError;
+  if (releaseErrors.length === 1) throw releaseErrors[0];
+  if (releaseErrors.length > 1) throw new AggregateError(releaseErrors, `Resource release failed for ${runId}.`);
+  return value;
+}
+
+async function savedProjectRoots(
+  roots: RootSet,
+  config: LoopConfig,
+  runId: string
+): Promise<string[]> {
+  const runsRoot = path.resolve(roots.dataRoot, config.paths.sessionsRoot);
+  const repository = new FileRunRepository({ runsRoot });
+  const aggregate = await repository.load(runId);
+  const pendingContext = aggregate.pendingInput?.context &&
+    typeof aggregate.pendingInput.context === "object" &&
+    !Array.isArray(aggregate.pendingInput.context)
+    ? aggregate.pendingInput.context as Record<string, unknown>
+    : null;
+  // An access approval can add a write root in the same response that resumes
+  // the run. Include the requested roots in the lease before applying that
+  // response, otherwise the provider could start while only the original
+  // project root is protected.
+  const requestedPaths = Array.isArray(pendingContext?.requestedPaths)
+    ? pendingContext.requestedPaths.filter((value): value is string =>
+        typeof value === "string" &&
+        (path.isAbsolute(value) || path.win32.isAbsolute(value) || path.posix.isAbsolute(value))
+      )
+    : [];
+  return [
+    aggregate.context.targetProjectPath,
+    ...aggregate.context.additionalAllowedPaths,
+    ...requestedPaths,
+  ];
 }
 
 async function definitionSource(roots: RootSet): Promise<DefinitionSourceBundle> {
-  try {
-    return await loadDefinitionSource(roots.configRoot);
-  } catch (configError) {
-    if (path.resolve(roots.configRoot) === path.resolve(roots.codeRoot)) throw configError;
-    try {
-      return await loadDefinitionSource(roots.codeRoot);
-    } catch {
-      throw configError;
-    }
-  }
+  return loadDefinitionSource(roots.configRoot);
 }
 
 function runtimeOverrides(options: CliOptions): Record<string, AgentRuntimeOverride> {
@@ -300,6 +424,14 @@ function printRunStatus(aggregate: Awaited<ReturnType<ReturnType<typeof composeA
   const active = aggregate.execution.activeActivationId
     ? aggregate.nodeExecutions[aggregate.execution.activeActivationId]
     : null;
+  const verificationId = active && aggregate.definition.nodes[active.nodeId]?.kind === "verification"
+    ? `${active.activationId}_verification`
+    : aggregate.context.verificationProof?.verificationId ??
+      aggregate.context.verificationRecords[aggregate.context.verificationRecords.length - 1]?.verificationId ??
+      null;
+  const verificationRecords = verificationId
+    ? aggregate.context.verificationRecords.filter((record) => record.verificationId === verificationId)
+    : [];
   console.log(
     [
       `Run: ${aggregate.runId}`,
@@ -308,6 +440,14 @@ function printRunStatus(aggregate: Awaited<ReturnType<ReturnType<typeof composeA
       `Activation: ${active?.activationId ?? "none"}`,
       `Workflow steps: ${aggregate.execution.workflowStepsConsumed}/${aggregate.definition.budgets.maxWorkflowSteps}`,
       `Cycles: ${aggregate.execution.cyclesStarted}/${aggregate.definition.budgets.maxCycles}`,
+      ...(aggregate.context.verificationContract
+        ? [`Verification: revision ${aggregate.context.verificationContract.revision}, ` +
+            `${verificationRecords.filter((record) => record.status === "completed").length}/` +
+            `${aggregate.context.verificationContract.commands.length} commands`]
+        : []),
+      ...(aggregate.context.verificationInvalidationReason
+        ? [`Verification reason: ${aggregate.context.verificationInvalidationReason}`]
+        : []),
       ...(aggregate.execution.reason ? [`Reason: ${aggregate.execution.reason}`] : []),
     ].join("\n")
   );
@@ -343,10 +483,11 @@ async function cmdRun(options: CliOptions, roots: RootSet, secrets: Record<strin
     config,
     {
       secretValues: secrets,
+      projectRoots: [target],
     },
     async (app) => {
-      const initialized = await app.repository.initialize(initial);
-      await app.projection.update(initialized);
+      const committed = await app.repository.init(initial);
+      await app.projection.update(committed);
       await app.repository.acquireFencingEpoch(runId);
       return app.runner.runUntilBoundary(runId);
     }
@@ -362,12 +503,14 @@ async function cmdResume(options: CliOptions, roots: RootSet, secrets: Record<st
     config,
     options
   );
+  const projectRoots = await savedProjectRoots(roots, config, runId);
   const aggregate = await withOwnedApplication(
     roots,
     runId,
     config,
     {
       secretValues: secrets,
+      projectRoots,
     },
     async (app) => {
       let current = await app.repository.load(runId);
@@ -417,6 +560,83 @@ async function cmdResume(options: CliOptions, roots: RootSet, secrets: Record<st
   printRunStatus(aggregate);
 }
 
+async function cmdVerificationDecision(
+  options: CliOptions,
+  roots: RootSet,
+  secrets: Record<string, string>,
+  approved: boolean
+): Promise<void> {
+  const runId = requiredOption(options, "session");
+  const requestId = requiredOption(options, "request-id");
+  const candidateHash = requiredOption(options, "candidate-hash");
+  const config = await loadLoopConfig(roots.configRoot);
+  const projectRoots = await savedProjectRoots(roots, config, runId);
+  const current = await withOwnedApplication(
+    roots,
+    runId,
+    config,
+    { secretValues: secrets, projectRoots },
+    async (app) => {
+      // Re-acquire the run fencing epoch before applying an approval.  This
+      // makes a CLI process that was started while another owner was active
+      // observe/reconcile stale activations before it can commit a decision.
+      await app.recovery.recoverAfterOwnershipChange(runId);
+      const aggregate = approved
+        ? await app.commands.approveVerification(runId, requestId, candidateHash)
+        : await app.commands.rejectVerification(
+            runId,
+            requestId,
+            candidateHash,
+            requiredOption(options, "message")
+          );
+      return aggregate.execution.status === "RUNNING"
+        ? app.runner.runUntilBoundary(runId)
+        : aggregate;
+    }
+  );
+  printRunStatus(current);
+}
+
+async function cmdUpgrade(options: CliOptions, roots: RootSet): Promise<void> {
+  if (options["reset-sessions"] !== "true") {
+    throw new Error("upgrade requires --reset-sessions.");
+  }
+  // Keep maintenance defaults aligned with the packaged configuration. A
+  // missing profile config must still find `.goal/sessions`; using an older
+  // hard-coded `runs` fallback would silently leave sessions behind.
+  const packagedDefaults = getDefaultConfig();
+  let sessionsRoot = packagedDefaults.paths.sessionsRoot;
+  let registryFileName = packagedDefaults.paths.registryFileName;
+  let sessionsIndexFileName = packagedDefaults.paths.sessionsIndexFileName;
+  let loopHistoryDirName = packagedDefaults.paths.loopHistoryDirName;
+  let ownerLockFileName = packagedDefaults.paths.ownerLockFileName;
+  let leaseFileName = packagedDefaults.paths.leaseFileName;
+  const configuredPaths = await loadLoopPathsForMaintenance(roots.configRoot);
+  if (configuredPaths) {
+    sessionsRoot = configuredPaths.sessionsRoot;
+    registryFileName = configuredPaths.registryFileName;
+    sessionsIndexFileName = configuredPaths.sessionsIndexFileName;
+    loopHistoryDirName = configuredPaths.loopHistoryDirName;
+    ownerLockFileName = configuredPaths.ownerLockFileName;
+    leaseFileName = configuredPaths.leaseFileName;
+  }
+  const service = new MaintenanceService(roots.codeRoot);
+  if (options["dry-run"] === "true") {
+    console.log(JSON.stringify(await service.preview(roots, sessionsRoot, sessionsIndexFileName, registryFileName, loopHistoryDirName), null, 2));
+    return;
+  }
+  const result = await service.upgrade(roots, {
+    resetSessions: true,
+    sessionsRoot,
+    registryFileName,
+    sessionsIndexFileName,
+    loopHistoryDirName,
+    ownerLockFileName,
+    leaseFileName,
+  });
+  console.log(JSON.stringify(result, null, 2));
+}
+
 async function respondToPlanGate(
   options: CliOptions,
   roots: RootSet,
@@ -424,22 +644,34 @@ async function respondToPlanGate(
 ): Promise<void> {
   const runId = requiredOption(options, "session");
   const config = await loadLoopConfig(roots.configRoot);
-  const app = composeApplication({ dataRoot: roots.dataRoot, runId, config });
-  const aggregate = await app.repository.load(runId);
-  const pending = aggregate.pendingInput;
-  if (!pending || pending.kind !== "plan_approval") {
-    throw new Error(`Run ${runId} has no pending plan approval gate.`);
-  }
-  const response: HumanGateResponse = {
-    requestId: pending.requestId,
-    nodeId: pending.nodeId,
-    signal,
-    ...(signal === "approved" ? { choiceId: requiredOption(options, "choice-id") } : {}),
-    ...(options.message && options.message !== "true" ? { value: options.message } : {}),
-    respondedAt: new Date().toISOString(),
-  };
-  const committed = await app.commands.respondToHumanGate(runId, response);
-  printRunStatus(committed);
+  const projectRoots = await savedProjectRoots(roots, config, runId);
+  const aggregate = await withOwnedApplication(
+    roots,
+    runId,
+    config,
+    { projectRoots },
+    async (app) => {
+      // Plan approval captures the initial verification baseline in the same
+      // CAS operation as the human response. Refresh the fencing epoch first
+      // so that capture is performed by the current session/project owner.
+      await app.recovery.recoverAfterOwnershipChange(runId);
+      const current = await app.repository.load(runId);
+      const pending = current.pendingInput;
+      if (!pending || pending.kind !== "plan_approval") {
+        throw new Error(`Run ${runId} has no pending plan approval gate.`);
+      }
+      const response: HumanGateResponse = {
+        requestId: pending.requestId,
+        nodeId: pending.nodeId,
+        signal,
+        ...(signal === "approved" ? { choiceId: requiredOption(options, "choice-id") } : {}),
+        ...(options.message && options.message !== "true" ? { value: options.message } : {}),
+        respondedAt: new Date().toISOString(),
+      };
+      return app.commands.respondToHumanGate(runId, response);
+    }
+  );
+  printRunStatus(aggregate);
 }
 
 async function cmdRevisePlan(
@@ -512,7 +744,7 @@ async function cmdInterrupt(
         roots,
         runId,
         config,
-        { secretValues: secrets },
+        { secretValues: secrets, projectRoots: await savedProjectRoots(roots, config, runId) },
         async (owned) => {
           await owned.repository.acquireFencingEpoch(runId);
           return owned.runner.runUntilBoundary(runId);
@@ -528,6 +760,18 @@ async function cmdStatus(options: CliOptions, roots: RootSet): Promise<void> {
   const app = composeApplication({ dataRoot: roots.dataRoot, runId, config });
   const aggregate = await app.repository.load(runId);
   if (options.json === "true") {
+    const active = aggregate.execution.activeActivationId
+      ? aggregate.nodeExecutions[aggregate.execution.activeActivationId]
+      : null;
+    const verificationId = active && aggregate.definition.nodes[active.nodeId]?.kind === "verification"
+      ? `${active.activationId}_verification`
+      : aggregate.context.verificationProof?.verificationId ??
+        aggregate.context.verificationRecords[aggregate.context.verificationRecords.length - 1]?.verificationId ??
+        null;
+    const verificationRecords = verificationId
+      ? aggregate.context.verificationRecords.filter((record) => record.verificationId === verificationId)
+      : [];
+    const contract = aggregate.context.verificationContract;
     console.log(JSON.stringify({
       schemaVersion: 1,
       runId: aggregate.runId,
@@ -536,6 +780,39 @@ async function cmdStatus(options: CliOptions, roots: RootSet): Promise<void> {
       activeActivationId: aggregate.execution.activeActivationId,
       pendingInput: aggregate.pendingInput,
       reason: aggregate.execution.reason,
+      verification: {
+        contract: contract ? {
+          revision: contract.revision,
+          contractHash: contract.contractHash,
+          commands: contract.commands,
+          totalTimeoutMs: contract.totalTimeoutMs,
+          protectedPaths: contract.protectedPaths,
+          testRoots: contract.testRoots,
+          allowedNewTestRoots: contract.allowedNewTestRoots,
+          generatedOutputPaths: contract.generatedOutputPaths,
+          baselineArtifactId: contract.baselineArtifactId,
+          baselineFingerprint: contract.baselineFingerprint,
+        } : null,
+        elapsedMs: aggregate.context.verificationElapsedMs,
+        contractRevision: contract?.revision ?? null,
+        contractHash: contract?.contractHash ?? null,
+        currentVerificationId: verificationId,
+        proofId: aggregate.context.verificationProof?.proofId ?? null,
+        proofValid: Boolean(aggregate.context.verificationProof?.passed && !aggregate.context.verificationInvalidationReason),
+        pendingApproval: aggregate.context.verificationCandidate,
+        criteriaChanges: aggregate.context.verificationCriteriaChanges ?? [],
+        invalidationReason: aggregate.context.verificationInvalidationReason,
+        commands: verificationRecords.map((record) => ({
+          verificationId: record.verificationId,
+          commandId: record.commandId,
+          status: record.status,
+          exitCode: record.exitCode,
+          signal: record.signal,
+          timedOut: record.timedOut,
+          processTreeClean: record.processTreeClean,
+          summary: record.summary.slice(0, 8_000),
+        })),
+      },
       revision: aggregate.revision,
       fencingEpoch: aggregate.fencingEpoch,
       budgets: {
@@ -555,21 +832,17 @@ async function cmdStatus(options: CliOptions, roots: RootSet): Promise<void> {
 }
 
 async function cmdCapabilities(roots: RootSet): Promise<void> {
+  // Capabilities remain available before initialization, but once a commit
+  // manifest exists this command also validates the persisted configuration so
+  // desktop startup cannot mistake a damaged initialized profile for a ready
+  // core. The check is read-only and does not synthesize any files.
+  if (await readInitManifest(roots.configRoot)) await loadLoopConfig(roots.configRoot);
   console.log(JSON.stringify({
     kind: "agent-loop-capabilities",
-    protocolVersion: 2,
-    stateSchemaVersion: 1,
+    protocolVersion: CORE_PROTOCOL_VERSION,
+    stateSchemaVersion: CORE_STATE_SCHEMA_VERSION,
     implementationVersion: IMPLEMENTATION_VERSION,
-    capabilities: [
-      "compiled-workflow-bundle-v1",
-      "agent-task-runner-v1",
-      "structured-task-result-v1",
-      "activation-checkpoint-v1",
-      "human-gate-v1",
-      "read-only-projection-v1",
-      "cas-fencing-v1",
-      "mutation-no-replay-v1",
-    ],
+    capabilities: [...CORE_CAPABILITIES],
     roots: {
       codeRoot: roots.codeRoot,
       configRoot: roots.configRoot,
@@ -579,68 +852,117 @@ async function cmdCapabilities(roots: RootSet): Promise<void> {
   }));
 }
 
-async function cmdModels(roots: RootSet): Promise<void> {
+async function cmdModels(options: CliOptions, roots: RootSet): Promise<void> {
   const config = await loadLoopConfig(roots.configRoot);
-  const availableModels = [...new Set(
-    Object.values(config.providers)
-      .filter((provider) => provider.enabled)
-      .flatMap((provider) => provider.fallbackModels)
-  )].sort();
   const indexPath = path.join(roots.dataRoot, config.paths.sessionsIndexFileName);
-  let current: Record<string, unknown> = {};
-  try {
-    current = JSON.parse(await fsp.readFile(indexPath, "utf8")) as Record<string, unknown>;
-  } catch {
-    current = {};
+  const discoveries = await discoverProviders(config.providers);
+  const index = await discoverAndMergeSessionIndex(
+    indexPath,
+    path.join(roots.dataRoot, config.paths.registryLockFileName),
+    discoveries,
+    config.variantDefaults
+  );
+  if (options.json === "true") {
+    console.log(JSON.stringify({ schemaVersion: 2, discoveredAt: index.modelsDiscoveredAt, providers: discoveries, models: index.availableModels }, null, 2));
+    return;
   }
-  await atomicWriteJson(indexPath, {
-    version: 4,
-    activeSessionIds: Array.isArray(current.activeSessionIds) ? current.activeSessionIds : [],
-    sessionMetas: Array.isArray(current.sessionMetas) ? current.sessionMetas : [],
-    availableModels,
-    modelsDiscoveredAt: new Date().toISOString(),
-    modelsDiscoveredCli: "configured-provider-fallbacks",
-    manualModelsOverride: null,
-    modelVariants: config.variantDefaults,
-    providerCatalog: Object.fromEntries(
-      Object.entries(config.providers).map(([id, provider]) => [id, {
-        id,
-        label: provider.label,
-        adapter: provider.adapter,
-        binary: provider.binary,
-        enabled: provider.enabled,
-        available: true,
-        models: provider.fallbackModels,
-        discoveredAt: new Date().toISOString(),
-        error: null,
-      }])
-    ),
-  });
-  console.log(availableModels.join("\n"));
+  console.log(index.availableModels.join("\n"));
 }
 
 async function cmdInit(roots: RootSet): Promise<void> {
-  await fsp.mkdir(roots.configRoot, { recursive: true });
-  const files = [
-    "agents.json",
-    "agents.schema.json",
-    "tasks.json",
-    "tasks.schema.json",
-    "workflow.json",
-    "workflow.schema.json",
-    "loop_config.json",
-    "loop_config.schema.json",
-  ];
-  for (const fileName of files) {
+  const existingManifest = await readInitManifest(roots.configRoot);
+  if (existingManifest) {
+    // A structurally valid manifest is not enough to claim a committed
+    // installation. Verify its digest, copied definitions, and authoritative
+    // v4 index before returning the idempotency error; a tampered or partial
+    // profile must fail closed instead of being treated as initialized.
+    const configured = await loadLoopConfig(roots.configRoot);
+    await validateInitializedRoots(roots, IMPLEMENTATION_VERSION, configured.paths.sessionsIndexFileName);
+    throw new Error(`ALREADY_INITIALIZED: Agent Loop is already initialized at ${roots.configRoot}.`);
+  }
+
+  // Validate every packaged document before changing user-owned state. Both
+  // the schema documents and the definition payloads are held in memory for
+  // this pass; no destination file is touched until every check succeeds.
+  const packagedSource = await loadDefinitionSource(roots.codeRoot);
+  const packagedDocuments = new Map<string, unknown>();
+  for (const fileName of INIT_DEFINITION_FILES) {
     const source = path.join(roots.codeRoot, fileName);
-    const destination = path.join(roots.configRoot, fileName);
+    const stat = await fsp.stat(source);
+    if (!stat.isFile()) throw new Error(`Packaged definition is not a file: ${source}`);
+    let parsed: unknown;
+    try { parsed = JSON.parse(await fsp.readFile(source, "utf8")) as unknown; }
+    catch (error) {
+      if (error instanceof SyntaxError) throw new Error(`Packaged definition is not valid JSON: ${source}`);
+      throw error;
+    }
+    packagedDocuments.set(fileName, parsed);
+  }
+  const schemaFiles = new Map<string, JsonSchema>();
+  for (const fileName of ["agents.schema.json", "tasks.schema.json", "workflow.schema.json", "loop_config.schema.json"] as const) {
+    schemaFiles.set(fileName, validatePackagedSchemaDocument(packagedDocuments.get(fileName), fileName));
+  }
+  assertJsonSchema(packagedSource.agents as unknown as JsonValue, schemaFiles.get("agents.schema.json")!, "agents.json");
+  assertJsonSchema(packagedSource.tasks as unknown as JsonValue, schemaFiles.get("tasks.schema.json")!, "tasks.json");
+  assertJsonSchema(packagedSource.workflow as unknown as JsonValue, schemaFiles.get("workflow.schema.json")!, "workflow.json");
+  assertJsonSchema(packagedDocuments.get("loop_config.json") as JsonValue, schemaFiles.get("loop_config.schema.json")!, "loop_config.json");
+  compileWorkflow(packagedSource, createDefaultDefinitionRegistries());
+  const packagedHash = await hashDefinitionFiles(roots.codeRoot);
+  const packagedConfig = await loadLoopConfig(roots.codeRoot);
+  const indexPath = path.join(roots.dataRoot, packagedConfig.paths.sessionsIndexFileName);
+
+  await fsp.mkdir(roots.configRoot, { recursive: true });
+  await fsp.mkdir(roots.dataRoot, { recursive: true });
+  // A pre-existing data index is authoritative user state and is preserved;
+  // only a partially present config definition set is considered an unsafe
+  // initialization attempt.
+  const existingIndex = await readSessionIndexStrict(indexPath);
+  if (existingIndex) validateSessionIndexProjectionV4(existingIndex);
+  const destinations = INIT_DEFINITION_FILES.map((fileName) => path.join(roots.configRoot, fileName));
+  for (const destination of destinations) {
     try {
-      await fsp.copyFile(source, destination, (await import("node:fs")).constants.COPYFILE_EXCL);
+      await fsp.lstat(destination);
+      throw new Error(`PARTIAL_INITIALIZATION: refusing to overwrite existing path ${destination}.`);
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     }
   }
-  console.log(`Initialized v4 definitions at ${roots.configRoot}.`);
+
+  const temporaryFiles: string[] = [];
+  const removeTemporaryFiles = async (): Promise<void> => {
+    const failures: unknown[] = [];
+    await Promise.all(temporaryFiles.map(async (filePath) => {
+      try { await fsp.rm(filePath, { force: true }); }
+      catch (error) { failures.push(error); }
+    }));
+    if (failures.length > 0) throw new AggregateError(failures, "Initialization temporary-file cleanup failed.");
+  };
+  try {
+    for (const fileName of INIT_DEFINITION_FILES) {
+      const source = path.join(roots.codeRoot, fileName);
+      const destination = path.join(roots.configRoot, fileName);
+      const temporary = `${destination}.tmp.${process.pid}.${Date.now()}.${randomBytes(4).toString("hex")}`;
+      temporaryFiles.push(temporary);
+      await fsp.copyFile(source, temporary);
+      await renameWithRetry(temporary, destination);
+      temporaryFiles.splice(temporaryFiles.indexOf(temporary), 1);
+    }
+    if (!existingIndex) await atomicWriteJson(indexPath, createEmptySessionIndexProjection());
+    await atomicWriteJson(
+      initManifestPath(roots.configRoot),
+      createInitManifest(IMPLEMENTATION_VERSION, packagedHash)
+    );
+  } catch (error) {
+    try { await removeTemporaryFiles(); }
+    catch (releaseError) { throw new AggregateError([error, releaseError], "Initialization failed and temporary-file cleanup also failed."); }
+    throw error;
+  }
+  console.log(`Initialized Agent Loop definitions at ${roots.configRoot}.`);
+}
+
+async function assertInitialized(roots: RootSet): Promise<void> {
+  const configured = await loadLoopConfig(roots.configRoot);
+  await validateInitializedRoots(roots, IMPLEMENTATION_VERSION, configured.paths.sessionsIndexFileName);
 }
 
 export async function main(argv = process.argv.slice(2)): Promise<number> {
@@ -651,7 +973,18 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
   const command = argv[0];
   const options = parseCliArgs(argv.slice(1));
   const roots = await prepareRoots(options);
-  const secrets = consumeSecretValues();
+  // An interrupted reset owns a fixed deletion set recorded outside the
+  // session directories.  All ordinary commands must stop before touching
+  // that profile; only `upgrade` may reacquire the maintenance lock and
+  // resume the journal.  Capabilities is a packaged-core probe and does not
+  // read or mutate profile state.
+  if (command !== "upgrade" && command !== "capabilities") {
+    await assertNoMaintenanceInProgress(roots.dataRoot);
+  }
+  if (command !== "init" && command !== "capabilities" && command !== "upgrade") await assertInitialized(roots);
+  const secrets = command === "run" || command === "resume" || command === "revise-plan" || command === "interrupt"
+    ? consumeSecretValues()
+    : {};
   switch (command) {
     case "init":
       await cmdInit(roots);
@@ -667,6 +1000,15 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
       return 0;
     case "revise-plan":
       await cmdRevisePlan(options, roots, secrets);
+      return 0;
+    case "approve-verification":
+      await cmdVerificationDecision(options, roots, secrets, true);
+      return 0;
+    case "reject-verification":
+      await cmdVerificationDecision(options, roots, secrets, false);
+      return 0;
+    case "upgrade":
+      await cmdUpgrade(options, roots);
       return 0;
     case "cancel-plan":
       await respondToPlanGate(options, roots, "cancelled");
@@ -687,7 +1029,7 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
       await cmdCapabilities(roots);
       return 0;
     case "models":
-      await cmdModels(roots);
+      await cmdModels(options, roots);
       return 0;
     default:
       console.error(`Unknown command: ${command}`);
@@ -698,10 +1040,17 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
 
 if (require.main === module) {
   void main().then(
-    (exitCode) => { process.exitCode = exitCode; },
+    (exitCode) => {
+      process.exitCode = exitCode;
+      // Electron utilityProcess keeps its message loop alive after the CLI
+      // promise resolves. Exit on the next turn so stdout/stderr can flush,
+      // while ordinary Node CLI invocations retain their normal semantics.
+      if (RUNNING_IN_UTILITY_PROCESS) setImmediate(() => process.exit(exitCode));
+    },
     (error: unknown) => {
       console.error(`[fatal] ${error instanceof Error ? error.message : String(error)}`);
       process.exitCode = 1;
+      if (RUNNING_IN_UTILITY_PROCESS) setImmediate(() => process.exit(1));
     }
   );
 }

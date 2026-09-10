@@ -1,4 +1,4 @@
-# Release and artifact promotion
+# Release and artifact promotion (7.0.0)
 
 The release pipeline promotes only artifacts that a successful push CI run already built and
 tested. Promotion never runs a build, install, or package command.
@@ -8,18 +8,14 @@ tested. Promotion never runs a build, install, or package command.
 | Artifact | Build target | Exact-artifact verification |
 |---|---|---|
 | npm package | platform-neutral `.tgz`, built once on Ubuntu x64 | install, CLI, ProcessSupervisor, and native PTY on Windows x64, Linux x64, and macOS arm64 with Node 18 |
-| VSIX | `win32-x64` | bundled core, ProcessSupervisor, and PTY on Node 20 and the same VSIX again on Node 18 |
-| VSIX | `linux-x64` | bundled core, ProcessSupervisor, and PTY on Node 20 and the same VSIX again on Node 18 |
-| VSIX | `darwin-arm64` | bundled core, ProcessSupervisor, and PTY on Node 20 and the same VSIX again on Node 18 |
-| VSIX | `darwin-x64` | bundled core, ProcessSupervisor, and PTY on Node 20 and the same VSIX again on Node 18 |
+| Windows desktop installer | `win32-x64` | Electron 44/Squirrel Setup.exe built once on Windows 2025 + Node 22.20, then checksum/SBOM/fuse/native smoke verified |
 
-Source tests run on Windows, Linux, and macOS. Core and extension coverage gates require at least
-80% lines, 60% branches, and 70% functions. The real VS Code Extension Host suite runs separately
-on Windows.
+Source tests run on Windows, Linux, and macOS. Core coverage gates require at least 80% lines, 60%
+branches, and 70% functions. Electron development and packaged smoke suites run on Windows.
 
 ## Candidate contents
 
-Every `.tgz` and `.vsix` has three mandatory sidecars:
+Every `.tgz` and `.exe` has three mandatory sidecars:
 
 - `.sha256`: digest of the exact candidate bytes;
 - `.cdx.json`: CycloneDX SBOM whose application component binds that digest;
@@ -32,22 +28,25 @@ the `github-actions` ecosystem.
 ## Protected provider gate
 
 Before tagging, run `Authenticated provider conformance` for the exact candidate commit through the
-protected `provider-conformance` environment. All four pinned provider CLIs must pass write and
-read-only checks on Windows, Linux, and macOS. This produces
-24 reports. Promotion verifies the workflow commit and every report; it cannot substitute ordinary
-CI evidence or omit a cell.
+protected `provider-conformance` environment. All four pinned provider CLIs must produce the complete
+write/read-only/tools-none matrix on Windows, Linux, and macOS. This produces 36 reports. Verified
+cells must pass authenticated execution with the exact version and capability key; the explicitly
+fail-closed Codex tools-none cell is recorded as blocked and is never counted as an executed
+tool-free proof. Promotion verifies the workflow commit and every report; it cannot substitute
+ordinary CI evidence or omit a cell.
 
 ## Promotion
 
-1. Ensure the package and extension versions equal the intended `vX.Y.Z` tag.
+1. Ensure the package and desktop versions equal the intended `vX.Y.Z` tag.
 2. Ensure a successful **push** CI run exists for that commit and completed the `Protected release
    candidate gate`.
 3. Complete the protected provider conformance workflow for the same commit.
 4. Create the tag. Tag-triggered promotion discovers the successful runs, or invoke
    `Promote tested release artifacts` manually with both run IDs and the existing tag.
 5. The protected `release` environment downloads only the `release-*` candidate artifacts,
-   verifies five artifacts and all sidecars, checks their source commit and four VSIX targets,
-   validates 24 provider reports, and verifies GitHub attestations.
+   verifies the npm and Windows Setup artifacts and all sidecars, checks their source commit and
+   the `win32-x64` target,
+   validates 36 provider reports, and verifies GitHub attestations.
 6. Promotion creates a draft GitHub release from those exact files. An optional manual gate may
    publish the downloaded `.tgz` to npm with provenance. The draft becomes public only after all
    selected publication steps succeed.
@@ -63,29 +62,23 @@ npm test
 npm run coverage
 npm run pack:check
 npm run verify:release-bundle -- artifacts/npm
-
-cd vscode-extension
-npm run coverage
-npm run package
-cd ..
-npm run verify:vsix
-npm run checksum:artifacts
-$vsix = Get-ChildItem vscode-extension -Filter 'agent-loop-vscode-*-4.0.0.vsix' |
-  Sort-Object LastWriteTime -Descending |
-  Select-Object -First 1
-npm run verify:release-bundle -- $vsix.FullName
+npm run bundle:desktop-core
+npm --prefix desktop-app ci
+npm --prefix desktop-app run make
+node scripts/package-desktop-artifact.js
+npm run verify:desktop
+npm run verify:release-bundle -- artifacts
 ```
 
 Local checks can validate the current OS artifact but cannot replace the protected multi-OS and
 authenticated-provider gates.
 
-For live candidate validation, install the VSIX built from the same candidate commit as the core. If
-the installed extension is older, use a separate `--data-root` for workspace-launched sessions. Do not
-let two release builds share recovery ownership of one mutable session root.
+For live candidate validation, install the Windows Setup.exe built from the same candidate commit as
+the core. Do not let two release builds share recovery ownership of one mutable session root.
 
 ## Full-access disclosure
 
 `--full-access` is explicitly unsafe while providers run with the current OS user's privileges.
-The CLI prints this limitation, and the extension requires a modal acknowledgment before enabling
-the mode. Moving the mutable data root is not isolation; use a separate OS identity or enforceable
-native deny boundary when host-level isolation is required.
+The CLI prints this limitation, and the desktop app requires a native modal acknowledgment before
+enabling the mode. Moving the mutable data root is not isolation; use a separate OS identity or
+enforceable native deny boundary when host-level isolation is required.

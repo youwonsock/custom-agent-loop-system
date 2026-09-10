@@ -3,6 +3,7 @@ import type { ToolPolicy } from "../../domain/tool-policy";
 import type { RunControlCommand } from "./control-command";
 
 export type AgentRuntimeMode = "task" | "format_recovery";
+export type AgentWorkspaceMode = "none" | "read" | "write";
 
 export interface AgentRuntimeRequest {
   runId: string;
@@ -14,6 +15,8 @@ export interface AgentRuntimeRequest {
   prompt: string;
   toolPolicy: ToolPolicy;
   mode: AgentRuntimeMode;
+  /** Explicit workspace tool mode, including the tool-free recovery mode. */
+  workspaceMode?: AgentWorkspaceMode;
   targetProjectPath: string;
   additionalAllowedPaths: string[];
   fullAccess: boolean;

@@ -11,14 +11,20 @@ export type JsonSchemaType =
 
 export interface JsonSchema {
   $id?: string;
+  $ref?: string;
+  $defs?: Record<string, JsonSchema>;
   title?: string;
   description?: string;
   type?: JsonSchemaType | JsonSchemaType[];
   const?: JsonValue;
   enum?: JsonValue[];
   oneOf?: JsonSchema[];
+  allOf?: JsonSchema[];
+  if?: JsonSchema;
+  then?: JsonSchema;
   required?: string[];
   properties?: Record<string, JsonSchema>;
+  propertyNames?: JsonSchema;
   additionalProperties?: boolean | JsonSchema;
   items?: JsonSchema;
   minItems?: number;
@@ -63,10 +69,46 @@ export function validateJsonSchema(
   schema: JsonSchema,
   path = "$"
 ): SchemaViolation[] {
+  return validateJsonSchemaNode(value, schema, path, schema);
+}
+
+function resolveLocalReference(schema: JsonSchema, root: JsonSchema): JsonSchema | null {
+  if (!schema.$ref) return schema;
+  const prefix = "#/$defs/";
+  if (!schema.$ref.startsWith(prefix)) return null;
+  const key = schema.$ref.slice(prefix.length);
+  if (!key || !root.$defs || !Object.prototype.hasOwnProperty.call(root.$defs, key)) return null;
+  return root.$defs[key];
+}
+
+function validateJsonSchemaNode(
+  value: JsonValue,
+  schema: JsonSchema,
+  path: string,
+  root: JsonSchema
+): SchemaViolation[] {
   const violations: SchemaViolation[] = [];
+  const resolved = resolveLocalReference(schema, root);
+  if (!resolved) {
+    violations.push({ path, message: `contains an unsupported or unresolved schema reference ${String(schema.$ref)}` });
+    return violations;
+  }
+  if (resolved !== schema) return validateJsonSchemaNode(value, resolved, path, root);
+
+  if (schema.if) {
+    const condition = validateJsonSchemaNode(value, schema.if, path, root);
+    if (condition.length === 0 && schema.then) {
+      violations.push(...validateJsonSchemaNode(value, schema.then, path, root));
+    }
+  }
+  if (schema.allOf) {
+    for (const candidate of schema.allOf) {
+      violations.push(...validateJsonSchemaNode(value, candidate, path, root));
+    }
+  }
   if (schema.oneOf) {
     const candidates = schema.oneOf.map((candidate) =>
-      validateJsonSchema(value, candidate, path)
+      validateJsonSchemaNode(value, candidate, path, root)
     );
     if (candidates.filter((candidate) => candidate.length === 0).length !== 1) {
       violations.push({ path, message: "must match exactly one oneOf schema" });
@@ -123,7 +165,7 @@ export function validateJsonSchema(
     }
     if (schema.items) {
       value.forEach((item, index) => {
-        violations.push(...validateJsonSchema(item, schema.items!, `${path}[${index}]`));
+        violations.push(...validateJsonSchemaNode(item, schema.items!, `${path}[${index}]`, root));
       });
     }
   }
@@ -133,14 +175,17 @@ export function validateJsonSchema(
       if (!(key in value)) violations.push({ path: `${path}.${key}`, message: "is required" });
     }
     for (const [key, child] of Object.entries(value)) {
+      if (schema.propertyNames) {
+        violations.push(...validateJsonSchemaNode(key, schema.propertyNames, `${path}.${key} (property name)`, root));
+      }
       const propertySchema = properties[key];
       if (propertySchema) {
-        violations.push(...validateJsonSchema(child, propertySchema, `${path}.${key}`));
+        violations.push(...validateJsonSchemaNode(child, propertySchema, `${path}.${key}`, root));
       } else if (schema.additionalProperties === false) {
         violations.push({ path: `${path}.${key}`, message: "is not allowed" });
       } else if (typeof schema.additionalProperties === "object") {
         violations.push(
-          ...validateJsonSchema(child, schema.additionalProperties, `${path}.${key}`)
+          ...validateJsonSchemaNode(child, schema.additionalProperties, `${path}.${key}`, root)
         );
       }
     }

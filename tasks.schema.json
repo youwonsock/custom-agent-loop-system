@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://custom-agent-loop.local/v4/tasks.schema.json",
+  "$id": "https://custom-agent-loop.local/v7/tasks.schema.json",
   "title": "Task definitions",
   "type": "object",
   "additionalProperties": false,

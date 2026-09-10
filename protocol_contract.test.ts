@@ -31,4 +31,11 @@ test("core handshake rejects protocol and capability mismatches", () => {
     () => validateCoreCapabilityHandshake({ ...handshake, capabilities: [] }),
     /missing required capabilities/
   );
+  assert.throws(
+    () => validateCoreCapabilityHandshake({
+      ...handshake,
+      capabilities: handshake.capabilities.filter((capability) => capability !== "strict-current-contracts-v1"),
+    }),
+    /strict-current-contracts-v1/
+  );
 });

@@ -52,8 +52,8 @@ test("framework packages and spike sources stay outside production artifacts", (
   const packageJson = JSON.parse(
     fs.readFileSync(path.join(workspaceRoot, "package.json"), "utf8")
   ) as { dependencies: Record<string, string>; devDependencies: Record<string, string> };
-  const extensionPackage = JSON.parse(
-    fs.readFileSync(path.join(workspaceRoot, "vscode-extension", "package.json"), "utf8")
+  const desktopPackage = JSON.parse(
+    fs.readFileSync(path.join(workspaceRoot, "desktop-app", "package.json"), "utf8")
   ) as { dependencies?: Record<string, string>; devDependencies?: Record<string, string> };
   const spikePackage = JSON.parse(
     fs.readFileSync(path.join(workspaceRoot, "experiments", "langgraph", "package.json"), "utf8")
@@ -63,8 +63,8 @@ test("framework packages and spike sources stay outside production artifacts", (
 
   assert.equal(packageJson.dependencies["@langchain/langgraph"], undefined);
   assert.equal(packageJson.devDependencies["@langchain/langgraph"], undefined);
-  assert.equal(extensionPackage.dependencies?.["@langchain/langgraph"], undefined);
-  assert.equal(extensionPackage.devDependencies?.["@langchain/langgraph"], undefined);
+  assert.equal(desktopPackage.dependencies?.["@langchain/langgraph"], undefined);
+  assert.equal(desktopPackage.devDependencies?.["@langchain/langgraph"], undefined);
   assert.equal(spikePackage.devDependencies["@langchain/langgraph"], "1.4.10");
   assert.equal(spikePackage.engines.node, ">=20.0.0");
   assert.match(npmIgnore, /^experiments\/$/m);

@@ -36,7 +36,8 @@
     "stateLockFileName": "state_write.lock",
     "leaseFileName": "session_lease.json",
     "registryLockFileName": "registry.lock",
-    "attemptLogsDirName": "attempt_logs"
+    "attemptLogsDirName": "attempt_logs",
+    "verificationLogsDirName": "verification_logs"
   },
   "defaults": {
     "cliBinary": "opencode",
@@ -56,12 +57,7 @@
     "killTimeoutMs": 5000,
     "heartbeatIntervalMs": 5000,
     "leaseTtlMs": 20000,
-    "maxInMemoryOutputBytes": 1048576,
-    "profileFallbackModels": {
-      "opencode": "opencode/big-pickle",
-      "kilo": "anthropic/claude-sonnet-4-5",
-      "_default": "anthropic/claude-sonnet-4-5"
-    }
+    "maxInMemoryOutputBytes": 1048576
   },
   "cliProfiles": {
     "opencode": {
@@ -120,48 +116,52 @@
       "adapter": "opencode",
       "binary": "opencode",
       "enabled": true,
-      "modelsArgs": [
-        "models"
-      ],
-      "fallbackModels": [
-        "opencode/big-pickle"
-      ]
+      "modelCatalog": {
+        "source": "command",
+        "args": [
+          "models"
+        ]
+      }
     },
     "kilo": {
       "label": "Kilo Code",
       "adapter": "kilo",
       "binary": "kilo",
       "enabled": true,
-      "modelsArgs": [
-        "models",
-        "--pure"
-      ],
-      "fallbackModels": [
-        "anthropic/claude-sonnet-4-5"
-      ]
+      "modelCatalog": {
+        "source": "command",
+        "args": [
+          "models",
+          "--pure"
+        ]
+      }
     },
     "codex": {
       "label": "OpenAI GPT / Codex",
       "adapter": "codex",
       "binary": "codex",
       "enabled": true,
-      "modelsArgs": [],
-      "fallbackModels": [
-        "gpt-5.6-sol",
-        "gpt-5.6-terra",
-        "gpt-5.6-luna"
-      ]
+      "modelCatalog": {
+        "source": "configured",
+        "models": [
+          "gpt-5.6-sol",
+          "gpt-5.6-terra",
+          "gpt-5.6-luna"
+        ]
+      }
     },
     "claude": {
       "label": "Anthropic Claude Code",
       "adapter": "claude",
       "binary": "claude",
       "enabled": true,
-      "modelsArgs": [],
-      "fallbackModels": [
-        "sonnet",
-        "opus"
-      ]
+      "modelCatalog": {
+        "source": "configured",
+        "models": [
+          "sonnet",
+          "opus"
+        ]
+      }
     }
   },
   "toolAccess": {

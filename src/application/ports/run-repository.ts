@@ -1,7 +1,7 @@
 import type { RunAggregate } from "../../domain/run-aggregate";
 
 export interface RunRepositoryPort {
-  initialize(aggregate: RunAggregate): Promise<RunAggregate>;
+  init(aggregate: RunAggregate): Promise<RunAggregate>;
   load(runId: string): Promise<RunAggregate>;
   acquireFencingEpoch(runId: string): Promise<RunAggregate>;
   commit(
