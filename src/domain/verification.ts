@@ -102,9 +102,9 @@ export interface VerificationContract extends VerificationContractDraft {
   baselineArtifactId: string;
   baselineFingerprint: string;
   /** Snapshot metadata retained so a later candidate can classify changes. */
-  baselinePaths?: string[];
-  baselineFileHashes?: Record<string, string>;
-  baselineFileModes?: Record<string, number>;
+  baselinePaths: string[];
+  baselineFileHashes: Record<string, string>;
+  baselineFileModes: Record<string, number>;
 }
 
 export type VerificationCommandStatus = "reserved" | "running" | "completed" | "not_run";
@@ -117,9 +117,9 @@ export interface VerificationCommandRecord {
   args: string[];
   cwd: string;
   /** Approved contract values retained when the runtime wraps the command. */
-  approvedExecutable?: string;
-  approvedArgs?: string[];
-  approvedCwd?: string;
+  approvedExecutable: string;
+  approvedArgs: string[];
+  approvedCwd: string;
   startedAt: string | null;
   completedAt: string | null;
   exitCode: number | null;
@@ -163,24 +163,24 @@ export interface VerificationApprovalCandidate {
   baseRevision: number;
   commands: VerificationCommandSpec[];
   /** Fingerprint observed while constructing the candidate. */
-  baselineFingerprint?: string;
+  baselineFingerprint: string;
   changedPaths: string[];
   addedPaths: string[];
   modifiedPaths: string[];
   deletedPaths: string[];
   diffArtifactId: string | null;
   /** Fingerprint artifact captured at the same approval boundary. */
-  baselineArtifactId?: string | null;
+  baselineArtifactId: string | null;
   /** New baseline metadata captured at the approval boundary. */
-  baselinePaths?: string[];
-  baselineFileHashes?: Record<string, string>;
-  baselineFileModes?: Record<string, number>;
+  baselinePaths: string[];
+  baselineFileHashes: Record<string, string>;
+  baselineFileModes: Record<string, number>;
   /** Proposed execution policy; present when a plan changes more than files. */
-  totalTimeoutMs?: number;
-  protectedPaths?: string[];
-  testRoots?: string[];
-  allowedNewTestRoots?: string[];
-  generatedOutputPaths?: string[];
+  totalTimeoutMs: number;
+  protectedPaths: string[];
+  testRoots: string[];
+  allowedNewTestRoots: string[];
+  generatedOutputPaths: string[];
 }
 
 function normalizedRelative(value: string, projectRoot?: string): string | null {
@@ -286,7 +286,7 @@ function commandExecutionPaths(
 
 function policyChanged(
   contract: Readonly<VerificationContract>,
-  candidate: Readonly<VerificationApprovalCandidate>
+  candidate: Readonly<Omit<VerificationApprovalCandidate, "candidateHash">>
 ): boolean {
   return JSON.stringify(candidate.commands) !== JSON.stringify(contract.commands) ||
     (candidate.totalTimeoutMs !== undefined && candidate.totalTimeoutMs !== contract.totalTimeoutMs) ||
@@ -346,7 +346,6 @@ export function candidateNeedsVerificationApproval(
   projectRoot?: string
 ): boolean {
   if (policyChanged(contract, candidate)) return true;
-  if (!contract.baselinePaths || !contract.baselineFileHashes) return true;
   const relevant = relevantChangedPaths(contract, candidate, projectRoot);
   const roots = contract.allowedNewTestRoots
     .map((root) => root.replace(/\\/gu, "/").replace(/^\.\//u, "").replace(/\/$/u, ""))
@@ -412,40 +411,26 @@ export interface FindingRecord {
 }
 
 export function hashVerificationCandidate(
-  candidate: Pick<VerificationApprovalCandidate, "baseRevision" | "commands" | "changedPaths" | "addedPaths" | "modifiedPaths" | "deletedPaths"> & {
-    baselineFingerprint?: string;
-    baselinePaths?: string[];
-    baselineFileHashes?: Record<string, string>;
-    baselineFileModes?: Record<string, number>;
-    totalTimeoutMs?: number;
-    protectedPaths?: string[];
-    testRoots?: string[];
-    allowedNewTestRoots?: string[];
-    generatedOutputPaths?: string[];
-    diffArtifactId?: string | null;
-    baselineArtifactId?: string | null;
-  }
+  candidate: Readonly<Omit<VerificationApprovalCandidate, "candidateHash">>
 ): string {
   return createHash("sha256")
     .update(canonicalJson({
       baseRevision: candidate.baseRevision,
       commands: candidate.commands,
-      baselineFingerprint: candidate.baselineFingerprint ?? null,
-      baselinePaths: candidate.baselinePaths ? [...candidate.baselinePaths].sort() : null,
-      baselineFileHashes: candidate.baselineFileHashes
-        ? Object.fromEntries(Object.entries(candidate.baselineFileHashes).sort(([left], [right]) => left.localeCompare(right)))
-        : null,
-      baselineFileModes: candidate.baselineFileModes ? { ...candidate.baselineFileModes } : null,
-      totalTimeoutMs: candidate.totalTimeoutMs ?? null,
-      protectedPaths: candidate.protectedPaths ? [...candidate.protectedPaths] : null,
-      testRoots: candidate.testRoots ? [...candidate.testRoots] : null,
-      allowedNewTestRoots: candidate.allowedNewTestRoots ? [...candidate.allowedNewTestRoots] : null,
-      generatedOutputPaths: candidate.generatedOutputPaths ? [...candidate.generatedOutputPaths] : null,
+      baselineFingerprint: candidate.baselineFingerprint,
+      baselinePaths: [...candidate.baselinePaths].sort(),
+      baselineFileHashes: Object.fromEntries(Object.entries(candidate.baselineFileHashes).sort(([left], [right]) => left.localeCompare(right))),
+      baselineFileModes: { ...candidate.baselineFileModes },
+      totalTimeoutMs: candidate.totalTimeoutMs,
+      protectedPaths: [...candidate.protectedPaths],
+      testRoots: [...candidate.testRoots],
+      allowedNewTestRoots: [...candidate.allowedNewTestRoots],
+      generatedOutputPaths: [...candidate.generatedOutputPaths],
       // Artifact ids are content-addressed. Including them in the candidate
       // digest binds the operator response to the exact diff/baseline bytes
       // that were displayed and prevents swapping a reference at approval.
-      diffArtifactId: candidate.diffArtifactId ?? null,
-      baselineArtifactId: candidate.baselineArtifactId ?? null,
+      diffArtifactId: candidate.diffArtifactId,
+      baselineArtifactId: candidate.baselineArtifactId,
       changedPaths: [...candidate.changedPaths].sort(),
       addedPaths: [...candidate.addedPaths].sort(),
       modifiedPaths: [...candidate.modifiedPaths].sort(),

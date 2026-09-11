@@ -6,9 +6,9 @@ export interface WorkspaceFingerprint {
    * file candidates for reapproval diffs. */
   directoryPaths?: string[];
   /** Per-path content digests used to classify reapproval diffs. */
-  fileHashes?: Record<string, string>;
+  fileHashes: Record<string, string>;
   /** File modes are part of the fingerprint and are retained for diagnostics. */
-  fileModes?: Record<string, number>;
+  fileModes: Record<string, number>;
 }
 
 export interface WorkspaceWatch {

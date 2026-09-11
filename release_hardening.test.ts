@@ -63,6 +63,42 @@ function writeArtifactBundle(
   return artifactPath;
 }
 
+function writePortableArtifactBundle(directory: string, name: string, sourceCommit: string): string {
+  const artifactPath = path.join(directory, name);
+  fs.mkdirSync(artifactPath, { recursive: true });
+  const entry = Buffer.from(`portable:${name}`, "utf8");
+  fs.writeFileSync(path.join(artifactPath, "agent-loop-orchestrator.exe"), entry);
+  const entryDigest = sha256(entry);
+  const treeDigest = sha256(Buffer.from(`agent-loop-orchestrator.exe\0${entryDigest}\n`, "utf8"));
+  fs.writeFileSync(`${artifactPath}.sha256`, `${treeDigest}  ${name}/\n`, "utf8");
+  fs.writeFileSync(
+    `${artifactPath}.manifest.json`,
+    `${JSON.stringify({
+      schemaVersion: 1,
+      artifactType: "desktop-portable",
+      artifactFile: name,
+      entryExecutable: "agent-loop-orchestrator.exe",
+      targetPlatform: "win32-x64",
+      sha256: treeDigest,
+      bytes: entry.length,
+      fileCount: 1,
+      sourceCommit,
+    })}\n`,
+    "utf8"
+  );
+  fs.writeFileSync(
+    `${artifactPath}.cdx.json`,
+    `${JSON.stringify({
+      bomFormat: "CycloneDX",
+      specVersion: "1.5",
+      version: 1,
+      metadata: { component: { type: "application", name, hashes: [{ alg: "SHA-256", content: treeDigest }] } },
+    })}\n`,
+    "utf8"
+  );
+  return artifactPath;
+}
+
 test("release bundle verification binds artifacts, sidecars, commit, count, and desktop targets", () => {
   const temporaryRoot = fs.mkdtempSync(path.join(os.tmpdir(), "agent-loop-release-test-"));
   const commit = "a".repeat(40);
@@ -72,11 +108,10 @@ test("release bundle verification binds artifacts, sidecars, commit, count, and 
       "custom-agent-loop-system-5.0.0.tgz",
       commit
     );
-    writeArtifactBundle(
+    writePortableArtifactBundle(
       temporaryRoot,
-      "AgentLoopOrchestrator-5.0.0-win32-x64-Setup.exe",
-      commit,
-      "win32-x64"
+      "AgentLoopOrchestrator-5.0.0-win32-x64",
+      commit
     );
     const valid = runScript("verify-release-bundle.js", [
       temporaryRoot,
@@ -168,7 +203,7 @@ test("release workflows pin Actions and promotion never rebuilds candidates", ()
 
   const ci = fs.readFileSync(path.join(workflowDirectory, "ci.yml"), "utf8");
   assert.match(ci, /npm-artifact-matrix:[\s\S]*node-version:\s*18/);
-  assert.match(ci, /desktop-candidate:[\s\S]*Setup\.exe/);
+  assert.match(ci, /desktop-candidate:[\s\S]*portable desktop/);
   assert.doesNotMatch(ci, /extension-host-e2e|vsix-candidate/);
   assert.match(ci, /attest-build-provenance@[0-9a-f]{40}/);
 

@@ -201,14 +201,14 @@ function verificationPreparationNodeId(aggregate: Readonly<RunAggregate>): strin
     ? aggregate.nodeExecutions[scope.testActivationId]
     : null;
   if (scopedTest?.sideEffect === "workspace_mutation") return scopedTest.nodeId;
-  const verificationNodeId = aggregate.definition.applicationPolicy.verificationNodeId ??
-    Object.values(aggregate.definition.nodes).find((node) => node.kind === "verification")?.id;
-  if (!verificationNodeId) return aggregate.definition.cyclePolicy.startNodeId;
+  const verificationNodeId = aggregate.definition.applicationPolicy.verificationNodeId;
+  if (!verificationNodeId) throw new Error("Compiled workflow is missing its verification node policy.");
   const predecessor = Object.entries(aggregate.definition.transitions)
     .filter(([, transitions]) => Object.values(transitions).includes(verificationNodeId))
     .map(([nodeId]) => aggregate.definition.nodes[nodeId])
     .find((node) => node?.kind !== "verification" && node?.sideEffect === "workspace_mutation");
-  return predecessor?.id ?? aggregate.definition.cyclePolicy.startNodeId;
+  if (!predecessor) throw new Error(`Verification node ${verificationNodeId} has no workspace-mutating predecessor.`);
+  return predecessor.id;
 }
 
 function planningNodeId(aggregate: Readonly<RunAggregate>): string | null {
@@ -229,9 +229,9 @@ function sameVerificationCommandRecord(
     left.executable === right.executable &&
     JSON.stringify(left.args) === JSON.stringify(right.args) &&
     left.cwd === right.cwd &&
-    (left.approvedExecutable ?? null) === (right.approvedExecutable ?? null) &&
-    JSON.stringify(left.approvedArgs ?? null) === JSON.stringify(right.approvedArgs ?? null) &&
-    (left.approvedCwd ?? null) === (right.approvedCwd ?? null) &&
+    left.approvedExecutable === right.approvedExecutable &&
+    JSON.stringify(left.approvedArgs) === JSON.stringify(right.approvedArgs) &&
+    left.approvedCwd === right.approvedCwd &&
     left.startedAt === right.startedAt &&
     left.completedAt === right.completedAt &&
     left.exitCode === right.exitCode &&
@@ -264,13 +264,11 @@ function commandRecordMatchesSpec(
     : expectedExecutable === "npm" || expectedExecutable === "npm.cmd"
       ? actualExecutable === "node" || actualExecutable === "node.exe"
       : actualExecutable.replace(/\.exe$/u, "") === expectedExecutable.replace(/\.(?:exe|cmd|bat)$/u, "");
-  const approvedExecutable = record.approvedExecutable ?? record.executable;
-  const approvedArgs = record.approvedArgs ?? record.args;
-  const approvedCwd = record.approvedCwd ?? record.cwd;
+  const approvedExecutable = record.approvedExecutable;
+  const approvedArgs = record.approvedArgs;
+  const approvedCwd = record.approvedCwd;
   const actualCwd = record.cwd;
-  const approvedExecutableMatches = record.approvedExecutable === undefined
-    ? approvedExecutable === spec.executable || isAbsolutePath(approvedExecutable)
-    : approvedExecutable === spec.executable;
+  const approvedExecutableMatches = approvedExecutable === spec.executable;
   const npmWrapperArgs = (expectedExecutable === "npm" || expectedExecutable === "npm.cmd") &&
     record.args.length === spec.args.length + 1 &&
     basename(record.args[0]) === "npm-cli.js" &&
@@ -312,15 +310,13 @@ function assertCommandRecordShape(
   if (!Array.isArray(record.args) || record.args.some((arg) => typeof arg !== "string")) {
     throw new Error(`Verification command ${record.commandId} arguments are invalid.`);
   }
-  if (record.approvedExecutable !== undefined &&
-      (typeof record.approvedExecutable !== "string" || !record.approvedExecutable.trim())) {
+  if (typeof record.approvedExecutable !== "string" || !record.approvedExecutable.trim()) {
     throw new Error(`Verification command ${record.commandId} approved executable is invalid.`);
   }
-  if (record.approvedArgs !== undefined &&
-      (!Array.isArray(record.approvedArgs) || record.approvedArgs.some((arg) => typeof arg !== "string"))) {
+  if (!Array.isArray(record.approvedArgs) || record.approvedArgs.some((arg) => typeof arg !== "string")) {
     throw new Error(`Verification command ${record.commandId} approved arguments are invalid.`);
   }
-  if (record.approvedCwd !== undefined && typeof record.approvedCwd !== "string") {
+  if (typeof record.approvedCwd !== "string") {
     throw new Error(`Verification command ${record.commandId} approved cwd is invalid.`);
   }
   if (record.status === "reserved") {
@@ -893,7 +889,6 @@ export class RunReducer {
 
   requestHumanInput(
     source: Readonly<RunAggregate>,
-    requestId: string,
     context: JsonValue,
     recordedAt: string
   ): RunAggregate {
@@ -909,11 +904,6 @@ export class RunReducer {
       throw new Error(`Human gate activation ${activationId} is not reserved.`);
     }
     aggregate.context.requestSequence += 1;
-    // The caller-provided value is only a legacy correlation hint.  Request
-    // identity is minted by the reducer from the active activation, input
-    // kind, and a monotonic aggregate sequence so a retried approval can
-    // never reuse an earlier request id.
-    void requestId;
     const effectiveRequestId =
       `request_${activationId}_${node.gate.type}_${aggregate.context.requestSequence}`;
     execution.status = "waiting_user";
@@ -1133,11 +1123,11 @@ export class RunReducer {
         args: [...command.args],
         requirementIds: [...command.requirementIds],
       })),
-      totalTimeoutMs: candidate.totalTimeoutMs ?? contract.totalTimeoutMs,
-      protectedPaths: [...(candidate.protectedPaths ?? contract.protectedPaths)],
-      testRoots: [...(candidate.testRoots ?? contract.testRoots)],
-      allowedNewTestRoots: [...(candidate.allowedNewTestRoots ?? contract.allowedNewTestRoots)],
-      generatedOutputPaths: [...(candidate.generatedOutputPaths ?? contract.generatedOutputPaths)],
+      totalTimeoutMs: candidate.totalTimeoutMs,
+      protectedPaths: [...candidate.protectedPaths],
+      testRoots: [...candidate.testRoots],
+      allowedNewTestRoots: [...candidate.allowedNewTestRoots],
+      generatedOutputPaths: [...candidate.generatedOutputPaths],
     };
     validateVerificationContractDraft(
       nextDraft,
@@ -1444,9 +1434,9 @@ export class RunReducer {
       ...contract,
       baselineArtifactId: baselineArtifact?.artifactId ?? candidate.baselineArtifactId ?? contract.baselineArtifactId,
       baselineFingerprint: candidate.baselineFingerprint,
-      ...(candidate.baselinePaths ? { baselinePaths: [...candidate.baselinePaths] } : {}),
-      ...(candidate.baselineFileHashes ? { baselineFileHashes: { ...candidate.baselineFileHashes } } : {}),
-      ...(candidate.baselineFileModes ? { baselineFileModes: { ...candidate.baselineFileModes } } : {}),
+      baselinePaths: [...candidate.baselinePaths],
+      baselineFileHashes: { ...candidate.baselineFileHashes },
+      baselineFileModes: { ...candidate.baselineFileModes },
     };
     aggregate.context.verificationCandidate = null;
     aggregate.context.verificationCriteriaChanges = [];
@@ -1872,11 +1862,11 @@ export class RunReducer {
             args: [...command.args],
             requirementIds: [...command.requirementIds],
           })),
-          totalTimeoutMs: candidate.totalTimeoutMs ?? activeContract.totalTimeoutMs,
-          protectedPaths: [...(candidate.protectedPaths ?? activeContract.protectedPaths)],
-          testRoots: [...(candidate.testRoots ?? activeContract.testRoots)],
-          allowedNewTestRoots: [...(candidate.allowedNewTestRoots ?? activeContract.allowedNewTestRoots)],
-          generatedOutputPaths: [...(candidate.generatedOutputPaths ?? activeContract.generatedOutputPaths)],
+          totalTimeoutMs: candidate.totalTimeoutMs,
+          protectedPaths: [...candidate.protectedPaths],
+          testRoots: [...candidate.testRoots],
+          allowedNewTestRoots: [...candidate.allowedNewTestRoots],
+          generatedOutputPaths: [...candidate.generatedOutputPaths],
         };
         validateVerificationContractDraft(
           nextDraft,
@@ -1889,10 +1879,10 @@ export class RunReducer {
           approvedRequestId: response.requestId,
           approvedAt: response.respondedAt,
           baselineArtifactId: candidate.baselineArtifactId ?? activeContract.baselineArtifactId,
-          baselineFingerprint: candidate.baselineFingerprint ?? activeContract.baselineFingerprint,
-          ...(candidate.baselinePaths ? { baselinePaths: [...candidate.baselinePaths] } : {}),
-          ...(candidate.baselineFileHashes ? { baselineFileHashes: { ...candidate.baselineFileHashes } } : {}),
-          ...(candidate.baselineFileModes ? { baselineFileModes: { ...candidate.baselineFileModes } } : {}),
+          baselineFingerprint: candidate.baselineFingerprint,
+          baselinePaths: [...candidate.baselinePaths],
+          baselineFileHashes: { ...candidate.baselineFileHashes },
+          baselineFileModes: { ...candidate.baselineFileModes },
         };
         aggregate.context.verificationCandidate = null;
         aggregate.context.verificationCriteriaChanges = [];

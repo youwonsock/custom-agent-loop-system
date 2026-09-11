@@ -130,15 +130,15 @@ test("file helpers, verification contract service, and control queue preserve th
         generatedOutputPaths: ["dist"],
       }
     );
-    const candidate = await service.candidate(
-      prepared.contract,
-      root,
-      [],
-      prepared.contract.baselinePaths,
-      prepared.contract.baselineFileHashes,
-      prepared.contract.baselineFileModes,
-      { totalTimeoutMs: 3_000 }
-    );
+    const candidate = await service.candidate({
+      contract: prepared.contract,
+      projectRoot: root,
+      additionalRoots: [],
+      baselinePaths: prepared.contract.baselinePaths,
+      baselineFileHashes: prepared.contract.baselineFileHashes,
+      baselineFileModes: prepared.contract.baselineFileModes,
+      proposedDraft: { totalTimeoutMs: 3_000 },
+    });
     const applied = service.apply(
       prepared.contract,
       candidate.candidate,
@@ -257,7 +257,6 @@ test("CLI capability and initialization paths, capability runtime, and supervise
     await fs.mkdir(dataRoot, { recursive: true });
     assert.equal(await main(["init", "--config-root", configRoot, "--data-root", dataRoot]), 0);
     assert.equal(await main(["unknown-command", "--config-root", configRoot, "--data-root", dataRoot]), 1);
-    await main(["upgrade", "--reset-sessions", "--dry-run", "--config-root", configRoot, "--data-root", dataRoot]);
     await assert.rejects(
       () => main(["status", "--session", "missing", "--config-root", configRoot, "--data-root", dataRoot]),
       /Run not found|ENOENT|missing/u
@@ -265,10 +264,6 @@ test("CLI capability and initialization paths, capability runtime, and supervise
     await assert.rejects(
       () => main(["run", "--target", root, "--config-root", configRoot, "--data-root", dataRoot]),
       /--goal is required/u
-    );
-    await assert.rejects(
-      () => main(["upgrade", "--config-root", configRoot, "--data-root", dataRoot]),
-      /upgrade requires --reset-sessions/u
     );
     await assert.rejects(
       () => main(["set-access", "--session", "missing", "--mode", "invalid", "--config-root", configRoot, "--data-root", dataRoot]),
@@ -374,7 +369,6 @@ test("CLI operator commands read and mutate a persisted paused session", async (
       () => main(["interrupt", "--session", initial.runId, "--message", "already stopped", "--config-root", configRoot, "--data-root", dataRoot]),
       /Cannot interrupt/u
     );
-    await main(["upgrade", "--reset-sessions", "--config-root", configRoot, "--data-root", dataRoot]);
   } finally {
     await fs.rm(root, { recursive: true, force: true });
   }

@@ -6,7 +6,7 @@ import { shell } from "electron";
 import { CoreProcessRunner, type CoreLogEvent, type CoreProcessHandle } from "./core-process-runner";
 import { initDesktopRoots, validateProjectPath, type DesktopRoots } from "./paths";
 import { SecretStore } from "./secret-store";
-import { validateDesktopSettings, validateDesktopSnapshot, validateModelDiscoveryPayload, validateRunProjectionV2 } from "./shared";
+import { validateDesktopSettings, validateDesktopSnapshot, validateModelDiscoveryPayload, validateProviderDiscoveryResultV2, validateRunProjectionV2 } from "./shared";
 import type {
   DesktopSettings,
   DesktopSnapshot,
@@ -42,22 +42,19 @@ export interface DesktopStartupStatus {
   ready: boolean;
   lifecycle: "new" | "initializing" | "initialized" | "releasing" | "released" | "failed";
   error: string | null;
-}
-
-export interface DesktopMaintenanceResult {
-  operationId: string;
   configRoot: string;
   dataRoot: string;
-  sessionIds: string[];
-  preserved: string[];
-  restartRequired: boolean;
 }
 
 function validateIndex(value: unknown, filePath: string): SessionIndexProjectionV4 {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`Session index is not an object: ${filePath}`);
   const index = value as Partial<SessionIndexProjectionV4>;
-  if (index.version !== 4 || !Array.isArray(index.activeSessionIds) || !Array.isArray(index.sessionMetas) || !Array.isArray(index.availableModels) || index.manualModelsOverride !== null || (index.modelVariants !== null && (typeof index.modelVariants !== "object" || Array.isArray(index.modelVariants)))) {
+  if (index.version !== 4 || !Array.isArray(index.activeSessionIds) || !Array.isArray(index.sessionMetas) || !Array.isArray(index.availableModels) || index.manualModelsOverride !== null || (index.modelVariants !== null && (typeof index.modelVariants !== "object" || Array.isArray(index.modelVariants))) || !index.providerCatalog || typeof index.providerCatalog !== "object" || Array.isArray(index.providerCatalog)) {
     throw new Error(`Session index must use version 4: ${filePath}`);
+  }
+  for (const [providerId, discovery] of Object.entries(index.providerCatalog)) {
+    const validated = validateProviderDiscoveryResultV2(discovery);
+    if (validated.providerId !== providerId) throw new Error(`Session index providerCatalog key mismatch: ${filePath}`);
   }
   if (index.activeSessionIds.some((id) => typeof id !== "string" || !SAFE_ID.test(id))) throw new Error(`Session index contains an invalid active session id: ${filePath}`);
   if (new Set(index.activeSessionIds).size !== index.activeSessionIds.length) throw new Error(`Session index contains duplicate active session ids: ${filePath}`);
@@ -234,58 +231,21 @@ export class DesktopController {
     }
   }
 
-  /**
-   * Expose the bootstrap failure without requiring a valid v2 projection.
-   * This is intentionally callable while the controller is failed so an old
-   * profile can still reach the maintenance command from the desktop UI.
-   */
+  /** Expose bootstrap failures without requiring a valid run projection. */
   getStartupStatus(): DesktopStartupStatus {
     return {
       ready: this.lifecycle === "initialized",
       lifecycle: this.lifecycle,
       error: this.initializationError,
+      configRoot: this.roots.configRoot,
+      dataRoot: this.roots.dataRoot,
     };
   }
 
-  /** Run the profile reset from the maintenance screen after initialization
-   * failed. A successful non-dry run leaves the app in a restart-required
-   * state; normal session APIs remain unavailable until the new manifest has
-   * been loaded by a fresh process. */
-  async runMaintenance(dryRun: boolean): Promise<DesktopMaintenanceResult> {
-    if (this.lifecycle !== "failed") {
-      throw new Error("Profile maintenance is available only after desktop initialization fails.");
-    }
-    const result = await this.runner.runShort(
-      "upgrade",
-      ["--reset-sessions", ...(dryRun ? ["--dry-run"] : [])],
-      { timeoutMs: 120_000 }
-    );
-    if (result.exitCode !== 0) {
-      throw new Error(result.stderr || `Profile maintenance failed (exit ${String(result.exitCode)}).`);
-    }
-    const lines = result.stdout.trim().split(/\r?\n/u).filter(Boolean);
-    const parsed = parseObject(lines.join("\n"), "maintenance output");
-    if (
-      typeof parsed.operationId !== "string" ||
-      typeof parsed.configRoot !== "string" ||
-      typeof parsed.dataRoot !== "string" ||
-      !Array.isArray(parsed.sessionIds) || parsed.sessionIds.some((id) => typeof id !== "string") ||
-      !Array.isArray(parsed.preserved) || parsed.preserved.some((item) => typeof item !== "string")
-    ) {
-      throw new Error("Core maintenance output does not match the expected contract.");
-    }
-    const maintenance: DesktopMaintenanceResult = {
-      operationId: parsed.operationId,
-      configRoot: parsed.configRoot,
-      dataRoot: parsed.dataRoot,
-      sessionIds: parsed.sessionIds as string[],
-      preserved: parsed.preserved as string[],
-      restartRequired: !dryRun,
-    };
-    if (!dryRun) {
-      this.initializationError = "Profile maintenance completed. Restart the desktop app to load the new definitions.";
-    }
-    return maintenance;
+  async openProfileFolder(kind: "config" | "data"): Promise<void> {
+    const folder = kind === "config" ? this.roots.configRoot : this.roots.dataRoot;
+    const error = await shell.openPath(folder);
+    if (error) throw new Error(error);
   }
 
   private assertReady(): void {
@@ -635,7 +595,7 @@ export class DesktopController {
     if (selected && index.activeSessionIds.includes(selected) && projection === null) {
       throw new Error(`Active session ${selected} has no readable run projection.`);
     }
-    const catalog = index.providerCatalog ?? {};
+    const catalog = index.providerCatalog;
     return validateDesktopSnapshot({
       schemaVersion: 3,
       capturedAt: new Date().toISOString(),

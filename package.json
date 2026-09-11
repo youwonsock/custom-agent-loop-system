@@ -44,7 +44,8 @@
     "smoke": "npm run build && node dist/loop_orchestrator.js --help",
     "bundle:desktop-core": "npm run build && node scripts/bundle-core-for-desktop.js",
     "package:npm": "npm run build && node scripts/package-npm-artifact.js",
-    "package:desktop": "npm run bundle:desktop-core && npm --prefix desktop-app ci && npm --prefix desktop-app run make && node scripts/package-desktop-artifact.js",
+    "package:desktop": "npm run bundle:desktop-core && npm --prefix desktop-app ci && npm --prefix desktop-app run package:portable && node scripts/package-desktop-artifact.js",
+    "run:desktop": "npm run package:desktop && node scripts/run-desktop-portable.js",
     "verify:npm-artifact": "node scripts/verify-npm-package.js",
     "pack:check": "npm run package:npm && npm run sbom:npm-artifact && npm run verify:npm-artifact",
     "verify:desktop": "node scripts/verify-desktop-package.js",
@@ -69,6 +70,7 @@
     "node-pty": "^1.0.0"
   },
   "devDependencies": {
+    "@electron/asar": "3.4.1",
     "@types/fs-extra": "^11.0.4",
     "@types/node": "^26.1.2",
     "c8": "10.1.3",

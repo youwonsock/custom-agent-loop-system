@@ -18,7 +18,7 @@ const digest = "a".repeat(64);
 async function fixture(): Promise<RunAggregate> {
   const definition = compileWorkflow(await loadDefinitionSource(process.cwd()), createDefaultDefinitionRegistries());
   return createRunAggregate({
-    runId: "recovery-coverage",
+    runId: "recovery",
     definition,
     goal: "Exercise ownership recovery.",
     requirements: [{ id: "REQ-001", text: "Recover safely." }],
@@ -78,7 +78,7 @@ test("recovery invalidates changed proof fingerprints and handles integrity erro
     startedAt: now, completedAt: null, output: null, signal: null, failure: null,
   };
   const mismatchIntegrity: WorkspaceIntegrityPort = {
-    fingerprint: async () => ({ digest: "b".repeat(64), files: 1, paths: [], fileHashes: {} }),
+    fingerprint: async () => ({ digest: "b".repeat(64), files: 1, paths: [], fileHashes: {}, fileModes: {} }),
     watch: () => ({ dirty: () => false, reliable: true, close: () => undefined }),
   };
   const repository = new Repository(source);

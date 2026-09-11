@@ -23,20 +23,14 @@ export interface VerificationContractCandidate {
   diff: ArtifactReference;
 }
 
-type CandidateDraftArgument =
-  | Readonly<Record<string, number>>
-  | Readonly<Partial<VerificationContractDraft>>;
-
-function isDraftArgument(value: CandidateDraftArgument | undefined): value is Readonly<Partial<VerificationContractDraft>> {
-  if (!value || typeof value !== "object") return false;
-  return [
-    "commands",
-    "totalTimeoutMs",
-    "protectedPaths",
-    "testRoots",
-    "allowedNewTestRoots",
-    "generatedOutputPaths",
-  ].some((key) => Object.prototype.hasOwnProperty.call(value, key));
+export interface VerificationCandidateOptions {
+  contract: Readonly<VerificationContract>;
+  projectRoot: string;
+  additionalRoots: ReadonlyArray<string>;
+  baselinePaths: ReadonlyArray<string>;
+  baselineFileHashes: Readonly<Record<string, string>>;
+  baselineFileModes: Readonly<Record<string, number>>;
+  proposedDraft?: Readonly<Partial<VerificationContractDraft>>;
 }
 
 /** Owns baseline, diff, and reapproval artifacts for a verification contract. */
@@ -76,25 +70,17 @@ export class VerificationContractService {
     };
   }
 
-  async candidate(
-    contract: Readonly<VerificationContract>,
-    projectRoot: string,
-    additionalRoots: ReadonlyArray<string>,
-    baselinePaths: ReadonlyArray<string> = contract.baselinePaths ?? [],
-    baselineFileHashes: Readonly<Record<string, string>> = contract.baselineFileHashes ?? {},
-    baselineFileModesOrDraft: CandidateDraftArgument = contract.baselineFileModes ?? {},
-    proposedDraft?: Readonly<Partial<VerificationContractDraft>>
-  ): Promise<VerificationContractCandidate> {
-    // Keep the sixth argument source-compatible with the original service
-    // signature, where callers passed a proposed draft immediately after the
-    // baseline hashes.  New callers pass baseline mode metadata first so mode
-    // changes are included in the candidate hash.
-    const baselineFileModes = isDraftArgument(baselineFileModesOrDraft)
-      ? (contract.baselineFileModes ?? {})
-      : baselineFileModesOrDraft;
-    const effectiveDraft = isDraftArgument(baselineFileModesOrDraft)
-      ? baselineFileModesOrDraft
-      : proposedDraft;
+  async candidate(options: VerificationCandidateOptions): Promise<VerificationContractCandidate> {
+    const {
+      contract,
+      projectRoot,
+      additionalRoots,
+      baselinePaths,
+      baselineFileHashes,
+      baselineFileModes,
+      proposedDraft,
+    } = options;
+    const effectiveDraft = proposedDraft;
     const fingerprint = await this.integrity.fingerprint(
       projectRoot,
       additionalRoots,
@@ -108,9 +94,9 @@ export class VerificationContractService {
       .filter((item) => before.has(item) && current.has(item))
       .filter((item) => {
         const beforeHash = baselineFileHashes[item];
-        const afterHash = fingerprint.fileHashes?.[item];
+        const afterHash = fingerprint.fileHashes[item];
         const beforeMode = baselineFileModes[item];
-        const afterMode = fingerprint.fileModes?.[item];
+        const afterMode = fingerprint.fileModes[item];
         return (beforeHash !== undefined && afterHash !== undefined && beforeHash !== afterHash) ||
           (beforeMode !== undefined && afterMode !== undefined && beforeMode !== afterMode);
       });
@@ -128,8 +114,8 @@ export class VerificationContractService {
       deletedPaths,
       baselineFingerprint: fingerprint.digest,
       baselinePaths: [...fingerprint.paths],
-      ...(fingerprint.fileHashes ? { baselineFileHashes: { ...fingerprint.fileHashes } } : {}),
-      ...(fingerprint.fileModes ? { baselineFileModes: { ...fingerprint.fileModes } } : {}),
+      baselineFileHashes: { ...fingerprint.fileHashes },
+      baselineFileModes: { ...fingerprint.fileModes },
       totalTimeoutMs: effectiveDraft?.totalTimeoutMs ?? contract.totalTimeoutMs,
       protectedPaths: [...(effectiveDraft?.protectedPaths ?? contract.protectedPaths)],
       testRoots: [...(effectiveDraft?.testRoots ?? contract.testRoots)],
@@ -192,11 +178,11 @@ export class VerificationContractService {
         args: [...command.args],
         requirementIds: [...command.requirementIds],
       })),
-      totalTimeoutMs: candidate.totalTimeoutMs ?? contract.totalTimeoutMs,
-      protectedPaths: [...(candidate.protectedPaths ?? contract.protectedPaths)],
-      testRoots: [...(candidate.testRoots ?? contract.testRoots)],
-      allowedNewTestRoots: [...(candidate.allowedNewTestRoots ?? contract.allowedNewTestRoots)],
-      generatedOutputPaths: [...(candidate.generatedOutputPaths ?? contract.generatedOutputPaths)],
+      totalTimeoutMs: candidate.totalTimeoutMs,
+      protectedPaths: [...candidate.protectedPaths],
+      testRoots: [...candidate.testRoots],
+      allowedNewTestRoots: [...candidate.allowedNewTestRoots],
+      generatedOutputPaths: [...candidate.generatedOutputPaths],
     };
     return {
       ...draft,
@@ -205,10 +191,10 @@ export class VerificationContractService {
       approvedRequestId: requestId,
       approvedAt,
       baselineArtifactId: candidate.baselineArtifactId ?? contract.baselineArtifactId,
-      baselineFingerprint: candidate.baselineFingerprint ?? contract.baselineFingerprint,
-      ...(candidate.baselinePaths ? { baselinePaths: [...candidate.baselinePaths] } : {}),
-      ...(candidate.baselineFileHashes ? { baselineFileHashes: { ...candidate.baselineFileHashes } } : {}),
-      ...(candidate.baselineFileModes ? { baselineFileModes: { ...candidate.baselineFileModes } } : {}),
+      baselineFingerprint: candidate.baselineFingerprint,
+      baselinePaths: [...candidate.baselinePaths],
+      baselineFileHashes: { ...candidate.baselineFileHashes },
+      baselineFileModes: { ...candidate.baselineFileModes },
     };
   }
 }

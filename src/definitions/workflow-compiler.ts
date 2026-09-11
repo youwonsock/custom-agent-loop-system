@@ -274,32 +274,18 @@ function assertSuccessRequiresVerification(
   transitions: Readonly<Record<string, Readonly<Record<string, string>>>>,
   terminals: Readonly<Record<string, TerminalDefinition>>,
   policy: Readonly<{
-    implementationNodeId?: string;
-    testNodeId?: string;
-    verificationNodeId?: string;
-    qaNodeId?: string;
-    completionApprovalNodeId?: string;
+    implementationNodeId: string;
+    testNodeId: string;
+    verificationNodeId: string;
+    qaNodeId: string;
+    completionApprovalNodeId: string;
   }>
 ): void {
-  const configured = [
-    policy.implementationNodeId,
-    policy.testNodeId,
-    policy.verificationNodeId,
-    policy.qaNodeId,
-    policy.completionApprovalNodeId,
-  ].filter((value): value is string => Boolean(value));
-  const hasVerificationNode = Object.values(nodes).some((node) => node.kind === "verification");
-  if (configured.length === 0 && !hasVerificationNode) return;
-  if (configured.length !== 5) {
-    throw new Error(
-      "Verification success policy must specify implementation, test, verification, QA, and completion approval nodes."
-    );
-  }
-  const implementation = nodes[policy.implementationNodeId!];
-  const test = nodes[policy.testNodeId!];
-  const verification = nodes[policy.verificationNodeId!];
-  const qa = nodes[policy.qaNodeId!];
-  const completion = nodes[policy.completionApprovalNodeId!];
+  const implementation = nodes[policy.implementationNodeId];
+  const test = nodes[policy.testNodeId];
+  const verification = nodes[policy.verificationNodeId];
+  const qa = nodes[policy.qaNodeId];
+  const completion = nodes[policy.completionApprovalNodeId];
   if (!implementation || implementation.kind !== "task" || implementation.sideEffect !== "workspace_mutation") {
     throw new Error("applicationPolicy.implementationNodeId must reference a workspace-mutation task node.");
   }
@@ -594,7 +580,7 @@ export function compileWorkflow(
     ["implementationNodeId", source.workflow.applicationPolicy.implementationNodeId],
     ["testNodeId", source.workflow.applicationPolicy.testNodeId],
   ] as const) {
-    if (nodeId && (nodes[nodeId]?.kind !== "task" || nodes[nodeId]?.sideEffect !== "workspace_mutation")) {
+    if (nodes[nodeId]?.kind !== "task" || nodes[nodeId]?.sideEffect !== "workspace_mutation") {
       throw new Error(`applicationPolicy.${key} must reference a workspace-mutation task node.`);
     }
   }
@@ -620,7 +606,7 @@ export function compileWorkflow(
     source.workflow.applicationPolicy.verificationNodeId,
     source.workflow.applicationPolicy.qaNodeId,
     source.workflow.applicationPolicy.completionApprovalNodeId,
-  ].filter((value): value is string => Boolean(value));
+  ];
   for (const nodeId of convergenceNodes) {
     if (transitions[nodeId]?.convergence_stalled !== interruptNodeId) {
       throw new Error(

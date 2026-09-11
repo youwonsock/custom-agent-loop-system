@@ -68,6 +68,7 @@ function eligibleSecondCycleAggregate(): RunAggregate {
     commands: [], totalTimeoutMs: 1, protectedPaths: [], testRoots: [], allowedNewTestRoots: [], generatedOutputPaths: [],
     revision: 2, contractHash: digest, approvedRequestId: "request", approvedAt: "2026-09-06T00:00:00.000Z",
     baselineArtifactId: "artifact_baseline", baselineFingerprint: digest,
+    baselinePaths: [], baselineFileHashes: {}, baselineFileModes: {},
   };
   const execution = (activationId: string, nodeId: string, step: number, cycleNumber: number, status: "completed" | "running") => ({
     activationId, nodeId, taskId: nodeId === "VERIFY" ? null : nodeId, agentId: nodeId === "VERIFY" ? null : nodeId,

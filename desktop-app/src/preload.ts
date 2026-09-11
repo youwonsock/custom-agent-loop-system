@@ -7,7 +7,7 @@ function invoke<T>(channel: string, payload?: unknown): Promise<BridgeResult<T>>
 
 const bridge: DesktopBridge = {
   getStartupStatus: () => invoke("desktop:getStartupStatus"),
-  runMaintenance: (dryRun) => invoke("desktop:runMaintenance", { dryRun }),
+  openProfileFolder: (kind) => invoke("desktop:openProfileFolder", { kind }),
   getSnapshot: (sessionId) => invoke("desktop:getSnapshot", { sessionId }),
   getSessionBundle: (sessionId) => invoke("desktop:getSessionBundle", { sessionId }),
   getSettings: () => invoke<DesktopSettings>("desktop:getSettings"),

@@ -21,7 +21,7 @@ async function fixture(): Promise<RunAggregate> {
     createDefaultDefinitionRegistries()
   );
   return createRunAggregate({
-    runId: "default-policies-coverage",
+    runId: "default-policies",
     definition: bundle,
     goal: "Exercise the default task policy registries.",
     requirements: [{ id: "REQ-001", text: "Exercise policy behavior." }],

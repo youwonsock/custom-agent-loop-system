@@ -37,7 +37,7 @@ async function fixture(): Promise<{ aggregate: RunAggregate; reducer: RunReducer
     createDefaultDefinitionRegistries()
   );
   const aggregate = createRunAggregate({
-    runId: "reducer-coverage",
+    runId: "reducer",
     definition,
     goal: "Exercise reducer boundaries.",
     requirements: [{ id: "REQ-001", text: "Exercise reducer boundaries." }],
@@ -147,7 +147,7 @@ test("reducer records a durable passing proof and routes VERIFY to QA", async ()
   const { aggregate: source, reducer, command } = await verificationFixture();
   const result = artifact("c".repeat(64), "application/vnd.custom-agent-loop.verification-result+json;version=1");
   const proof: VerificationProof = {
-    proofId: "proof-coverage",
+    proofId: "proof",
     verificationId: "verify_verification",
     contractRevision: 1,
     contractHash: source.context.verificationContract!.contractHash,
@@ -165,7 +165,7 @@ test("reducer records a durable passing proof and routes VERIFY to QA", async ()
     resultArtifactId: result.artifactId,
   };
   const withProof = reducer.recordVerificationProof(source, proof, now, result);
-  assert.equal(withProof.context.verificationProof?.proofId, "proof-coverage");
+  assert.equal(withProof.context.verificationProof?.proofId, "proof");
   assert.equal(withProof.context.verificationFeedback[0]?.passed, true);
   const completed = complete(reducer, withProof, "VERIFY", "verify", "pass", "QA_REVIEW");
   assert.equal(completed.execution.currentNodeId, "QA_REVIEW");
@@ -342,7 +342,7 @@ test("reducer handles human input and contract replacement without reusing reque
   let aggregate = initial;
   aggregate.execution.currentNodeId = "PLAN_APPROVAL";
   const reserved = reducer.reserveNode(aggregate, "gate", now);
-  const waiting = reducer.requestHumanInput(reserved, "legacy-request", { prompt: "choose" }, now);
+  const waiting = reducer.requestHumanInput(reserved, { prompt: "choose" }, now);
   assert.match(waiting.pendingInput!.requestId, /^request_gate_plan_approval_1$/u);
   const revised = reducer.applyHumanResponse(waiting, {
     requestId: waiting.pendingInput!.requestId,
@@ -385,6 +385,7 @@ test("reducer records and refreshes verification approval candidates atomically"
     totalTimeoutMs: reserved.context.verificationContract!.totalTimeoutMs,
     protectedPaths: [], testRoots: [], allowedNewTestRoots: [], generatedOutputPaths: [],
     changedPaths: ["src/new-test.ts"], addedPaths: ["src/new-test.ts"], modifiedPaths: [], deletedPaths: [],
+    baselinePaths: [], baselineFileHashes: {}, baselineFileModes: {},
   };
   candidate.candidateHash = hashVerificationCandidate(candidate);
   const waiting = reducer.requestVerificationApproval(reserved, candidate, now, "approve candidate");

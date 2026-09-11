@@ -34,7 +34,7 @@ function draft(overrides: Partial<VerificationContractDraft> = {}): Verification
 }
 
 function contract(overrides: Partial<VerificationContract> = {}): VerificationContract {
-  return {
+  const value = {
     ...draft(),
     revision: 1,
     contractHash: "a".repeat(64),
@@ -48,7 +48,14 @@ function contract(overrides: Partial<VerificationContract> = {}): VerificationCo
       "test/old.test.ts": "d".repeat(64),
       "src/entry.ts": "e".repeat(64),
     },
+    baselineFileModes: {},
     ...overrides,
+  };
+  return {
+    ...value,
+    baselinePaths: value.baselinePaths ?? [],
+    baselineFileHashes: value.baselineFileHashes ?? {},
+    baselineFileModes: value.baselineFileModes ?? {},
   };
 }
 
@@ -94,8 +101,14 @@ test("candidate approval detects policy, execution-surface, test, and allowed-ne
     baselineFingerprint: "f".repeat(64),
     baselinePaths: [...approved.baselinePaths!, "test/fixtures/new.test.ts"],
     baselineFileHashes: { ...approved.baselineFileHashes!, "test/fixtures/new.test.ts": "1".repeat(64) },
+    baselineFileModes: { ...approved.baselineFileModes, "test/fixtures/new.test.ts": 0o644 },
     diffArtifactId: null,
     baselineArtifactId: null,
+    totalTimeoutMs: approved.totalTimeoutMs,
+    protectedPaths: [...approved.protectedPaths],
+    testRoots: [...approved.testRoots],
+    allowedNewTestRoots: [...approved.allowedNewTestRoots],
+    generatedOutputPaths: [...approved.generatedOutputPaths],
   };
   base.candidateHash = hashVerificationCandidate(base);
   assert.equal(candidateNeedsVerificationApproval(approved, base, "C:\\repo"), false);
@@ -115,8 +128,6 @@ test("candidate approval detects policy, execution-surface, test, and allowed-ne
     assert.equal(candidateNeedsVerificationApproval(approved, candidate, "C:\\repo"), true, label);
   }
 
-  const missingBaseline = contract({ baselinePaths: undefined, baselineFileHashes: undefined });
-  assert.equal(candidateNeedsVerificationApproval(missingBaseline, base, "C:\\repo"), true);
 });
 
 test("verification JSON projections copy mutable values and candidate hashes are canonical", () => {
@@ -151,8 +162,15 @@ test("verification JSON projections copy mutable values and candidate hashes are
     deletedPaths: [],
     baselinePaths: ["z", "a"],
     baselineFileHashes: { z: "1", a: "2" },
+    baselineFileModes: { z: 0o644, a: 0o644 },
     diffArtifactId: null,
     baselineArtifactId: null,
+    baselineFingerprint: "f".repeat(64),
+    totalTimeoutMs: 2_000,
+    protectedPaths: [],
+    testRoots: [],
+    allowedNewTestRoots: [],
+    generatedOutputPaths: [],
   };
   const right = { ...left, changedPaths: ["a", "b"], baselinePaths: ["a", "z"] };
   assert.equal(hashVerificationCandidate(left), hashVerificationCandidate(right));

@@ -79,6 +79,42 @@ function seal(
   return sealed;
 }
 
+function recordValue(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
+function hasStrictCurrentAggregateShape(aggregate: RunAggregate): boolean {
+  const definition = recordValue(aggregate.definition);
+  const policy = definition ? recordValue(definition.applicationPolicy) : null;
+  if (!definition || !policy || [
+    "implementationNodeId", "testNodeId", "verificationNodeId", "qaNodeId", "completionApprovalNodeId",
+  ].some((key) => typeof policy[key] !== "string" || !(policy[key] as string).trim())) return false;
+  const context = recordValue(aggregate.context);
+  if (!context || !Number.isSafeInteger(context.requestSequence) || Number(context.requestSequence) < 0) return false;
+  const contract = context.verificationContract;
+  if (contract !== null) {
+    const item = recordValue(contract);
+    if (!item || !Array.isArray(item.baselinePaths) || !recordValue(item.baselineFileHashes) || !recordValue(item.baselineFileModes) || typeof item.baselineFingerprint !== "string" || typeof item.baselineArtifactId !== "string" || !Array.isArray(item.commands)) return false;
+    for (const command of item.commands) {
+      const value = recordValue(command);
+      if (!value || typeof value.id !== "string" || typeof value.executable !== "string" || !Array.isArray(value.args) || typeof value.cwd !== "string") return false;
+    }
+  }
+  if (!Array.isArray(context.verificationRecords) || !Array.isArray(context.verificationCriteriaChanges) || !Array.isArray(context.reviewApprovals) || !Array.isArray(context.findings) || !Array.isArray(context.verificationFeedback)) return false;
+  for (const record of context.verificationRecords) {
+    const value = recordValue(record);
+    if (!value || typeof value.approvedExecutable !== "string" || !Array.isArray(value.approvedArgs) || value.approvedArgs.some((arg) => typeof arg !== "string") || typeof value.approvedCwd !== "string") return false;
+  }
+  const candidate = context.verificationCandidate;
+  if (candidate !== null) {
+    const value = recordValue(candidate);
+    if (!value || typeof value.baselineFingerprint !== "string" || !Array.isArray(value.baselinePaths) || !recordValue(value.baselineFileHashes) || !recordValue(value.baselineFileModes) || typeof value.totalTimeoutMs !== "number" || !Array.isArray(value.protectedPaths) || !Array.isArray(value.testRoots) || !Array.isArray(value.allowedNewTestRoots) || !Array.isArray(value.generatedOutputPaths)) return false;
+  }
+  return true;
+}
+
 function isValid(value: unknown): value is RunAggregate {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const aggregate = value as Partial<RunAggregate>;
@@ -91,7 +127,8 @@ function isValid(value: unknown): value is RunAggregate {
     Number(aggregate.fencingEpoch) >= 0 &&
     typeof aggregate.checksum === "string" &&
     aggregate.checksum.length === 64 &&
-    runChecksum(aggregate as RunAggregate) === aggregate.checksum
+    runChecksum(aggregate as RunAggregate) === aggregate.checksum &&
+    hasStrictCurrentAggregateShape(aggregate as RunAggregate)
   );
 }
 

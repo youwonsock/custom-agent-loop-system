@@ -170,22 +170,22 @@ export class CommandService {
     if (!stored || stored.candidateHash !== candidateHash) {
       throw new Error("Verification approval candidate is no longer pending.");
     }
-    const candidate = await this.verificationContracts.candidate(
+    const candidate = await this.verificationContracts.candidate({
       contract,
-      aggregate.context.targetProjectPath,
-      aggregate.context.additionalAllowedPaths,
-      contract.baselinePaths,
-      contract.baselineFileHashes,
-      contract.baselineFileModes,
-      {
+      projectRoot: aggregate.context.targetProjectPath,
+      additionalRoots: aggregate.context.additionalAllowedPaths,
+      baselinePaths: contract.baselinePaths,
+      baselineFileHashes: contract.baselineFileHashes,
+      baselineFileModes: contract.baselineFileModes,
+      proposedDraft: {
         commands: stored.commands,
         totalTimeoutMs: stored.totalTimeoutMs,
         protectedPaths: stored.protectedPaths,
         testRoots: stored.testRoots,
         allowedNewTestRoots: stored.allowedNewTestRoots,
         generatedOutputPaths: stored.generatedOutputPaths,
-      }
-    );
+      },
+    });
     if (candidate.candidate.candidateHash !== candidateHash) {
       const refreshed = this.reducer.refreshVerificationApprovalCandidate(
         aggregate,

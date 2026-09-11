@@ -31,7 +31,7 @@ class MemoryArtifacts implements ArtifactStorePort {
 }
 
 class StableIntegrity implements WorkspaceIntegrityPort {
-  readonly value: WorkspaceFingerprint = { digest, files: 1, paths: ["test.js"], fileHashes: { "test.js": digest } };
+  readonly value: WorkspaceFingerprint = { digest, files: 1, paths: ["test.js"], fileHashes: { "test.js": digest }, fileModes: { "test.js": 0o644 } };
   fingerprint(): Promise<WorkspaceFingerprint> { return Promise.resolve(this.value); }
   watch(): WorkspaceWatch { return { reliable: true, dirty: () => false, close: () => undefined }; }
 }

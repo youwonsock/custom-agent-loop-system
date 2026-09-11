@@ -6,7 +6,7 @@ import type { ArtifactStorePort } from "../../application/ports/artifact-store";
 import type { ProjectionPort } from "../../application/ports/projection";
 import { atomicWriteJson, atomicWriteText } from "../../../json_file_store";
 import { withShortFileLock } from "../../../resilience";
-import { validateSessionIndexProjectionV4 } from "./contracts";
+import { validateSessionIndexProjectionV4, type ProviderDiscoveryResultV2 } from "./contracts";
 
 const WINDOWS_RESERVED_NAME = /^(?:CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\..*)?$/iu;
 
@@ -74,7 +74,7 @@ export interface RunProjectionV2 {
   interruptBriefing: string | null;
   requirements: RunAggregate["context"]["requirements"];
   requirementEvidence: RunAggregate["context"]["requirementEvidence"];
-  verification?: {
+  verification: {
     /** The exact policy currently approved for core execution. */
     contract: {
       revision: number;
@@ -109,6 +109,9 @@ export interface RunProjectionV2 {
       executable: string;
       args: string[];
       cwd: string;
+      approvedExecutable: string;
+      approvedArgs: string[];
+      approvedCwd: string;
       exitCode: number | null;
       signal: string | null;
       timedOut: boolean;
@@ -143,7 +146,7 @@ export interface SessionIndexProjectionV4 {
   modelsDiscoveredCli: string | null;
   manualModelsOverride: null;
   modelVariants: Record<string, string[]> | null;
-  providerCatalog?: Record<string, unknown>;
+  providerCatalog: Record<string, ProviderDiscoveryResultV2>;
 }
 
 /** The current operator wire projection emitted by the core. */
@@ -343,6 +346,9 @@ export class FileRunProjection implements ProjectionPort {
           executable: record.executable,
           args: [...record.args],
           cwd: record.cwd,
+          approvedExecutable: record.approvedExecutable,
+          approvedArgs: [...record.approvedArgs],
+          approvedCwd: record.approvedCwd,
           exitCode: record.exitCode,
           signal: record.signal,
           timedOut: record.timedOut,

@@ -55,7 +55,7 @@ async function fixture(): Promise<{ aggregate: RunAggregate; reducer: RunReducer
   const definition = compileWorkflow(await loadDefinitionSource(root), createDefaultDefinitionRegistries());
   return {
     aggregate: createRunAggregate({
-      runId: "command-service-coverage",
+      runId: "command-service",
       definition,
       goal: "Exercise command service boundaries.",
       requirements: [{ id: "REQ-001", text: "Exercise command service boundaries." }],
@@ -98,7 +98,7 @@ function pendingPlan(aggregate: RunAggregate, reducer: RunReducer): RunAggregate
     signal: "success", failure: null,
   };
   current = reducer.reserveNode(current, "plan-gate", now);
-  return reducer.requestHumanInput(current, "ignored", { choices: ["choice-1"] }, now);
+  return reducer.requestHumanInput(current, { choices: ["choice-1"] }, now);
 }
 
 test("command service responds to plan approval and captures an initial verification contract", async () => {
@@ -165,6 +165,9 @@ test("command service handles verification approval, idempotent replay, stale ca
     addedPaths: [],
     modifiedPaths: [],
     deletedPaths: [],
+    baselinePaths: [],
+    baselineFileHashes: {},
+    baselineFileModes: {},
   };
   candidate.candidateHash = hashVerificationCandidate(candidate);
   assert.equal(hashVerificationCandidate(candidate), candidate.candidateHash);

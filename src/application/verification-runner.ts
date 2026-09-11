@@ -107,9 +107,9 @@ export function createVerificationContract(
     approvedAt: new Date().toISOString(),
     baselineArtifactId: "",
     baselineFingerprint,
-    ...(baseline?.paths ? { baselinePaths: [...baseline.paths] } : {}),
-    ...(baseline?.fileHashes ? { baselineFileHashes: { ...baseline.fileHashes } } : {}),
-    ...(baseline?.fileModes ? { baselineFileModes: { ...baseline.fileModes } } : {}),
+    baselinePaths: [...(baseline?.paths ?? [])],
+    baselineFileHashes: { ...(baseline?.fileHashes ?? {}) },
+    baselineFileModes: { ...(baseline?.fileModes ?? {}) },
   };
 }
 
@@ -167,8 +167,8 @@ export class VerificationRunner {
     digest: string;
     files: number;
     paths: string[];
-    fileHashes?: Record<string, string>;
-    fileModes?: Record<string, number>;
+    fileHashes: Record<string, string>;
+    fileModes: Record<string, number>;
   }> {
     return this.integrity.fingerprint(
       projectRoot,
@@ -179,19 +179,19 @@ export class VerificationRunner {
 
   buildApprovalCandidate(
     contract: Readonly<VerificationContract>,
-    fingerprint: Readonly<{ digest: string; paths: string[]; fileHashes?: Record<string, string>; fileModes?: Record<string, number> }>,
+    fingerprint: Readonly<{ digest: string; paths: string[]; fileHashes: Record<string, string>; fileModes: Record<string, number> }>,
     proposedDraft?: Readonly<Partial<VerificationContractDraft>>
   ): VerificationApprovalCandidate {
-    const baselinePaths = new Set(contract.baselinePaths ?? []);
+    const baselinePaths = new Set(contract.baselinePaths);
     const currentPaths = new Set(fingerprint.paths);
     const addedPaths = [...currentPaths].filter((item) => !baselinePaths.has(item)).sort();
     const deletedPaths = [...baselinePaths].filter((item) => !currentPaths.has(item)).sort();
     const modifiedPaths = [...currentPaths].filter((item) => {
       if (!baselinePaths.has(item)) return false;
-      const before = contract.baselineFileHashes?.[item];
-      const after = fingerprint.fileHashes?.[item];
-      const beforeMode = contract.baselineFileModes?.[item];
-      const afterMode = fingerprint.fileModes?.[item];
+      const before = contract.baselineFileHashes[item];
+      const after = fingerprint.fileHashes[item];
+      const beforeMode = contract.baselineFileModes[item];
+      const afterMode = fingerprint.fileModes[item];
       return (before !== undefined && after !== undefined && before !== after) ||
         (beforeMode !== undefined && afterMode !== undefined && beforeMode !== afterMode);
     }).sort();
@@ -208,15 +208,16 @@ export class VerificationRunner {
       modifiedPaths,
       deletedPaths,
       diffArtifactId: null,
+      baselineArtifactId: null,
       baselineFingerprint: fingerprint.digest,
       baselinePaths: [...fingerprint.paths],
-      ...(fingerprint.fileHashes ? { baselineFileHashes: { ...fingerprint.fileHashes } } : {}),
+      baselineFileHashes: { ...fingerprint.fileHashes },
       totalTimeoutMs: proposedDraft?.totalTimeoutMs ?? contract.totalTimeoutMs,
       protectedPaths: [...(proposedDraft?.protectedPaths ?? contract.protectedPaths)],
       testRoots: [...(proposedDraft?.testRoots ?? contract.testRoots)],
       allowedNewTestRoots: [...(proposedDraft?.allowedNewTestRoots ?? contract.allowedNewTestRoots)],
       generatedOutputPaths: [...(proposedDraft?.generatedOutputPaths ?? contract.generatedOutputPaths)],
-      ...(fingerprint.fileModes ? { baselineFileModes: { ...fingerprint.fileModes } } : {}),
+      baselineFileModes: { ...fingerprint.fileModes },
     };
     return {
       ...candidateBody,

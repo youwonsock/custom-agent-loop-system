@@ -4,7 +4,7 @@ import * as path from "node:path";
 import * as fsp from "node:fs/promises";
 import { parseCliArgs, type CliOptions } from "../../../cli_application";
 import { canonicalizeRootSet, resolveRootSet, type RootSet } from "../../../root_set";
-import { getDefaultConfig, loadLoopConfig, loadLoopPathsForMaintenance, type LoopConfig } from "../../../runtime_config";
+import { loadLoopConfig, type LoopConfig } from "../../../runtime_config";
 import { SessionOwnership } from "../../../resilience";
 import { initRunStorage } from "../../infrastructure/run-storage";
 import { FileProjectLease } from "../../infrastructure/file-project-lease";
@@ -31,7 +31,6 @@ import { compileWorkflow } from "../../definitions/workflow-compiler";
 import type { AgentRuntimeOverride } from "../../domain/agent";
 import type { DefinitionSourceBundle, HumanGateResponse } from "../../domain/workflow";
 import { discoverAndMergeSessionIndex, discoverProviders } from "../../application/provider-discovery";
-import { MaintenanceService, assertNoMaintenanceInProgress } from "../../application/maintenance-service";
 import {
   CORE_CAPABILITIES,
   CORE_PROTOCOL_VERSION,
@@ -55,8 +54,6 @@ Usage:
   agent-loop revise-plan --session <id> --message <text>
   agent-loop approve-verification --session <id> --request-id <id> --candidate-hash <hash>
   agent-loop reject-verification --session <id> --request-id <id> --candidate-hash <hash> --message <text>
-  agent-loop upgrade --reset-sessions --dry-run
-  agent-loop upgrade --reset-sessions
   agent-loop cancel-plan --session <id>
   agent-loop set-access --session <id> --mode <ask|full_access>
   agent-loop stop --session <id>
@@ -597,46 +594,6 @@ async function cmdVerificationDecision(
   printRunStatus(current);
 }
 
-async function cmdUpgrade(options: CliOptions, roots: RootSet): Promise<void> {
-  if (options["reset-sessions"] !== "true") {
-    throw new Error("upgrade requires --reset-sessions.");
-  }
-  // Keep maintenance defaults aligned with the packaged configuration. A
-  // missing profile config must still find `.goal/sessions`; using an older
-  // hard-coded `runs` fallback would silently leave sessions behind.
-  const packagedDefaults = getDefaultConfig();
-  let sessionsRoot = packagedDefaults.paths.sessionsRoot;
-  let registryFileName = packagedDefaults.paths.registryFileName;
-  let sessionsIndexFileName = packagedDefaults.paths.sessionsIndexFileName;
-  let loopHistoryDirName = packagedDefaults.paths.loopHistoryDirName;
-  let ownerLockFileName = packagedDefaults.paths.ownerLockFileName;
-  let leaseFileName = packagedDefaults.paths.leaseFileName;
-  const configuredPaths = await loadLoopPathsForMaintenance(roots.configRoot);
-  if (configuredPaths) {
-    sessionsRoot = configuredPaths.sessionsRoot;
-    registryFileName = configuredPaths.registryFileName;
-    sessionsIndexFileName = configuredPaths.sessionsIndexFileName;
-    loopHistoryDirName = configuredPaths.loopHistoryDirName;
-    ownerLockFileName = configuredPaths.ownerLockFileName;
-    leaseFileName = configuredPaths.leaseFileName;
-  }
-  const service = new MaintenanceService(roots.codeRoot);
-  if (options["dry-run"] === "true") {
-    console.log(JSON.stringify(await service.preview(roots, sessionsRoot, sessionsIndexFileName, registryFileName, loopHistoryDirName), null, 2));
-    return;
-  }
-  const result = await service.upgrade(roots, {
-    resetSessions: true,
-    sessionsRoot,
-    registryFileName,
-    sessionsIndexFileName,
-    loopHistoryDirName,
-    ownerLockFileName,
-    leaseFileName,
-  });
-  console.log(JSON.stringify(result, null, 2));
-}
-
 async function respondToPlanGate(
   options: CliOptions,
   roots: RootSet,
@@ -973,15 +930,7 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
   const command = argv[0];
   const options = parseCliArgs(argv.slice(1));
   const roots = await prepareRoots(options);
-  // An interrupted reset owns a fixed deletion set recorded outside the
-  // session directories.  All ordinary commands must stop before touching
-  // that profile; only `upgrade` may reacquire the maintenance lock and
-  // resume the journal.  Capabilities is a packaged-core probe and does not
-  // read or mutate profile state.
-  if (command !== "upgrade" && command !== "capabilities") {
-    await assertNoMaintenanceInProgress(roots.dataRoot);
-  }
-  if (command !== "init" && command !== "capabilities" && command !== "upgrade") await assertInitialized(roots);
+  if (command !== "init" && command !== "capabilities") await assertInitialized(roots);
   const secrets = command === "run" || command === "resume" || command === "revise-plan" || command === "interrupt"
     ? consumeSecretValues()
     : {};
@@ -1006,9 +955,6 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
       return 0;
     case "reject-verification":
       await cmdVerificationDecision(options, roots, secrets, false);
-      return 0;
-    case "upgrade":
-      await cmdUpgrade(options, roots);
       return 0;
     case "cancel-plan":
       await respondToPlanGate(options, roots, "cancelled");

@@ -48,18 +48,21 @@ PLANNING
 CLI 요구사항은 Node.js 18 이상과 PATH에서 실행 가능하고 인증된 provider CLI(OpenCode, Kilo,
 Codex, Claude) 중 하나 이상입니다.
 
-독립 데스크톱 앱은 Windows 10/11 x64용 unsigned `Setup.exe`로 배포합니다. 앱 자체는 Node.js를
-요구하지 않으며 Electron 44의 내장 Node와 utility process를 사용합니다. provider CLI는 사용자가
-별도로 설치·인증해야 합니다.
+독립 데스크톱 앱은 Windows 10/11 x64용 portable 빌드로 생성합니다. 빌드 결과는 프로젝트의
+`artifacts/desktop/AgentLoopOrchestrator-<version>-win32-x64/` 아래에 놓이며, 폴더 안의
+`agent-loop-orchestrator.exe`를 직접 실행합니다. 앱 자체는 Node.js를 요구하지 않으며 Electron 44의
+내장 Node와 utility process를 사용합니다. provider CLI는 사용자가 별도로 설치·인증해야 합니다.
 
 ```powershell
-npm run bundle:desktop-core
-npm --prefix desktop-app ci
-npm --prefix desktop-app start
+npm run run:desktop
 ```
 
+빌드된 portable 앱을 바로 실행하려면 프로젝트 루트의 `run.bat`를 더블클릭해도 됩니다.
+아직 portable 빌드가 없으면 `run.bat`가 `npm run package:desktop`을 호출해 먼저 빌드한 뒤
+`agent-loop-orchestrator.exe`를 실행합니다.
+
 앱은 `%APPDATA%\AgentLoopOrchestrator`에 설정을, `%LOCALAPPDATA%\AgentLoopOrchestrator`에
-세션·projection·lease·로그를 저장합니다. 이전 세션·VS Code 확장 데이터는 변환하지 않으며, `upgrade --reset-sessions`로 등록 세션만 초기화합니다. 설정·인증정보·프로젝트 작업 트리는 보존합니다.
+세션·projection·lease·로그를 저장합니다. v7은 이전 세션을 변환하지 않으며 현재 계약과 맞지 않는 프로필을 자동 수정하거나 삭제하지 않습니다. 설정·인증정보·프로젝트 작업 트리는 보존합니다. 프로필 검증 오류가 발생하면 표시된 config/data 폴더를 직접 확인한 뒤 다시 시작해야 합니다.
 
 ```powershell
 npm install
@@ -88,8 +91,6 @@ node dist/loop_orchestrator.js interrupt --session <run-id> --message "중단 �
 node dist/loop_orchestrator.js stop --session <run-id>
 node dist/loop_orchestrator.js models --json
 node dist/loop_orchestrator.js capabilities
-node dist/loop_orchestrator.js upgrade --reset-sessions --dry-run
-node dist/loop_orchestrator.js upgrade --reset-sessions
 ```
 
 `--full-access`는 현재 OS 사용자 권한으로 provider를 실행하는 명시적 비격리 모드입니다.
@@ -153,9 +154,9 @@ npm run package:desktop
 npm run verify:desktop
 ```
 
-Forge는 Electron 44, Squirrel.Windows, Fuses, Auto Unpack Natives를 사용해
-`win32-x64 Setup.exe`를 생성합니다. v1은 수동 업데이트이며 자동 updater나 코드 서명은 포함하지
-않습니다.
+Forge는 Electron 44, Fuses, Auto Unpack Natives를 사용해 설치 프로그램 없이 portable 앱 폴더를
+생성합니다. `npm run package:desktop`은 현재 프로젝트의 `artifacts/desktop`에 실행 파일과 필요한
+resources를 함께 만들고, `npm run run:desktop`과 루트의 `run.bat`은 그 결과를 직접 실행합니다.
 
 ## 개발 검증
 
@@ -171,5 +172,5 @@ npm run verify:release-bundle -- artifacts
 ```
 
 LangGraph는 `experiments/langgraph`의 구조 비교 전용 private package에만 존재합니다. production
-package와 desktop installer에는 CrewAI/LangGraph dependency가 포함되지 않습니다. 결정 근거는
+package와 desktop portable bundle에는 CrewAI/LangGraph dependency가 포함되지 않습니다. 결정 근거는
 [ADR 0008](./docs/adr/0008-agent-task-graph-v4.md)에 기록되어 있습니다.

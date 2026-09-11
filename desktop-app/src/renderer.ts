@@ -10,7 +10,7 @@ let settingsDraft: DesktopSettings | null = null;
 let sessionBundle: SessionBundle | null = null;
 let sessionBundleId: string | undefined;
 const planDraftChoices = new Map<string, string>();
-type StartupStatus = { ready: boolean; lifecycle: string; error: string | null };
+type StartupStatus = { ready: boolean; lifecycle: string; error: string | null; configRoot: string; dataRoot: string };
 
 const el = <T extends HTMLElement>(id: string): T => {
   const node = document.getElementById(id);
@@ -186,42 +186,26 @@ async function action(operation: () => Promise<unknown>): Promise<void> {
   if (!response.ok) setNotice(response.error?.message ?? "Operation failed.", "error"); else { setNotice(""); await loadSnapshot(); }
 }
 
-function showMaintenance(status: StartupStatus): void {
+function showStartupError(status: StartupStatus): void {
   snapshot = null;
   selectedSession = undefined;
-  const maintenanceButton = el<HTMLButtonElement>("maintenance");
-  maintenanceButton.hidden = false;
   el<HTMLButtonElement>("new-session").disabled = true;
   el<HTMLButtonElement>("settings").disabled = true;
   el<HTMLButtonElement>("refresh").disabled = true;
-  el("session-list").innerHTML = `<div class="empty">Profile maintenance is required.</div>`;
-  el("session-title").textContent = "Profile maintenance required";
+  el("session-list").innerHTML = `<div class="empty">The current profile cannot be opened.</div>`;
+  el("session-title").textContent = "Profile validation failed";
   el("session-subtitle").textContent = status.error ?? "The packaged core could not load this profile.";
   const pill = el<HTMLDivElement>("status-pill");
-  pill.textContent = "Maintenance";
+  pill.textContent = "Invalid profile";
   pill.className = "status failed";
-  el("tab-overview").innerHTML = `<div class="card details-card"><h2>Repair profile</h2><p>${escapeHtml(status.error ?? "The profile needs the v7 definitions before sessions can start.")}</p><p class="muted">The reset keeps settings, secure credentials, project source trees, and working-tree changes. Registered session data is removed after a recoverable journaled reset.</p><div class="actions"><button id="maintenance-dry-run" class="secondary">Preview reset</button><button id="maintenance-reset" class="danger primary">Reset sessions and repair</button></div><pre id="maintenance-output" class="notes"></pre></div>`;
+  el("tab-overview").innerHTML = `<div class="card details-card"><h2>Profile validation failed</h2><p>${escapeHtml(status.error ?? "The packaged core could not load this profile.")}</p><p class="muted">Expected current contracts: product 7.0.0, protocol 3/state 2, session index 4, run projection 2/state 5, operator snapshot 3.</p><p class="muted">Config root: <code>${escapeHtml(status.configRoot)}</code><br />Data root: <code>${escapeHtml(status.dataRoot)}</code></p><p class="muted">No files were changed. Review the configuration and data folders, then restart after correcting the reported contract.</p><div class="actions"><button id="open-config-folder" class="secondary">Open config folder</button><button id="open-data-folder" class="secondary">Open data folder</button><button id="quit-invalid-profile" class="danger primary">Quit</button></div></div>`;
   for (const panelId of ["tab-plan", "tab-log", "tab-timeline", "tab-notes", "tab-summary"]) {
-    el(panelId).innerHTML = `<div class="empty">Available after profile maintenance.</div>`;
+    el(panelId).innerHTML = `<div class="empty">Available after profile validation succeeds.</div>`;
   }
-  el<HTMLButtonElement>("maintenance-dry-run").onclick = () => void runMaintenance(true);
-  el<HTMLButtonElement>("maintenance-reset").onclick = () => void runMaintenance(false);
+  el<HTMLButtonElement>("open-config-folder").onclick = () => void action(() => bridge.openProfileFolder("config"));
+  el<HTMLButtonElement>("open-data-folder").onclick = () => void action(() => bridge.openProfileFolder("data"));
+  el<HTMLButtonElement>("quit-invalid-profile").onclick = () => void action(() => bridge.requestQuit());
   activeTab = "overview";
-}
-
-async function runMaintenance(dryRun: boolean): Promise<void> {
-  const response = await bridge.runMaintenance(dryRun);
-  if (!response.ok) { setNotice(response.error.message, "error"); return; }
-  const result = response.value;
-  const output = el<HTMLElement>("maintenance-output");
-  output.textContent = JSON.stringify(result, null, 2);
-  if (result.restartRequired) {
-    setNotice("Profile maintenance completed. Restart the desktop app to continue.", "info");
-    el<HTMLButtonElement>("maintenance-reset").disabled = true;
-    el<HTMLButtonElement>("maintenance-dry-run").disabled = true;
-  } else {
-    setNotice(`Dry run: ${result.sessionIds.length} registered session(s) would be reset.`, "info");
-  }
 }
 
 async function loadSnapshot(): Promise<void> {
@@ -249,10 +233,9 @@ async function bootstrapRenderer(): Promise<void> {
   const response = await bridge.getStartupStatus();
   if (!response.ok) { setNotice(response.error.message, "error"); return; }
   if (!response.value.ready) {
-    showMaintenance(response.value);
+    showStartupError(response.value);
     return;
   }
-  el<HTMLButtonElement>("maintenance").hidden = true;
   await loadSnapshot();
 }
 
@@ -312,7 +295,7 @@ async function openSettings(): Promise<void> {
   el<HTMLDialogElement>("settings-dialog").showModal();
 }
 
-el("new-session").addEventListener("click", () => void openNewSession()); el("settings").addEventListener("click", () => void openSettings()); el("refresh").addEventListener("click", () => void loadSnapshot()); el("maintenance").addEventListener("click", () => void bridge.getStartupStatus().then((response) => { if (response.ok) showMaintenance(response.value); })); el("quit").addEventListener("click", () => void action(() => bridge.requestQuit()));
+el("new-session").addEventListener("click", () => void openNewSession()); el("settings").addEventListener("click", () => void openSettings()); el("refresh").addEventListener("click", () => void loadSnapshot()); el("quit").addEventListener("click", () => void action(() => bridge.requestQuit()));
 el("pick-project").addEventListener("click", async () => { const response = await bridge.chooseProjectDirectory(); if (response.ok && response.value) el<HTMLInputElement>("project").value = response.value; else if (!response.ok) setNotice(response.error.message, "error"); });
 el("session-form").addEventListener("submit", async (event) => { event.preventDefault(); const response = await bridge.startSession({ goal: el<HTMLTextAreaElement>("goal").value, projectPath: el<HTMLInputElement>("project").value, accessMode: el<HTMLInputElement>("full-access").checked ? "full_access" : "ask" }); if (!response.ok) { setNotice(response.error.message, "error"); return; } el<HTMLDialogElement>("session-dialog").close(); selectedSession = response.value.sessionId; await loadSnapshot(); });
 el("discover").addEventListener("click", async () => { const response = await bridge.discoverModels(); if (!response.ok) { setNotice(response.error.message, "error"); return; } for (const provider of response.value.providers) { const target = document.querySelector<HTMLElement>(`[data-provider-status="${CSS.escape(provider.providerId)}"]`); if (target) { target.textContent = provider.available ? `${provider.models.length} model(s)` : provider.error?.message ?? "Unavailable"; target.className = provider.available ? "provider-ok" : "provider-bad"; } const models = document.querySelector<HTMLElement>(`[data-provider-model-list="${CSS.escape(provider.providerId)}"]`); if (models) models.textContent = provider.available ? (provider.models.slice(0, 20).join(", ") || "No models returned") : ""; } });

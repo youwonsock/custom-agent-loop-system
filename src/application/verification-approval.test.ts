@@ -47,7 +47,7 @@ function candidate(contractRevision: number): VerificationApprovalCandidate {
     commands: [{ id: "tests", label: "tests", executable: "node", args: ["test.js"], cwd: ".", timeoutMs: 1000, requirementIds: ["REQ-001"] }],
     changedPaths: [], addedPaths: [], modifiedPaths: [], deletedPaths: [],
     baselineFingerprint: digest,
-    baselinePaths: [], baselineFileHashes: {},
+    baselinePaths: [], baselineFileHashes: {}, baselineFileModes: {},
     totalTimeoutMs: 2000,
     protectedPaths: [], testRoots: [], allowedNewTestRoots: [], generatedOutputPaths: [],
     diffArtifactId: null,

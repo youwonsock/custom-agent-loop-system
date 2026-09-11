@@ -60,10 +60,12 @@ function planningNodeId(aggregate: NodeExecutionContext["aggregate"]): string | 
   return source?.source.kind === "node_output" ? source.source.nodeId : null;
 }
 
-function verificationNodeId(aggregate: NodeExecutionContext["aggregate"]): string | null {
-  return aggregate.definition.applicationPolicy.verificationNodeId ??
-    Object.values(aggregate.definition.nodes).find((node) => node.kind === "verification")?.id ??
-    null;
+function verificationNodeId(aggregate: NodeExecutionContext["aggregate"]): string {
+  const nodeId = aggregate.definition.applicationPolicy.verificationNodeId;
+  if (typeof nodeId !== "string" || !nodeId) {
+    throw new Error("Compiled workflow is missing its verification node policy.");
+  }
+  return nodeId;
 }
 
 /**
@@ -337,7 +339,7 @@ export class TaskInputAssembler {
             failure: context.aggregate.execution.lastFailure,
             sourceActivationId: (() => {
               const nodeId = verificationNodeId(context.aggregate);
-              return nodeId ? context.aggregate.latestCompletedByNode[nodeId] ?? null : null;
+              return context.aggregate.latestCompletedByNode[nodeId] ?? null;
             })(),
           };
       const value = feedback as unknown as JsonValue;

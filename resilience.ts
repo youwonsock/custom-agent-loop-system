@@ -1033,29 +1033,6 @@ export async function readControlAck(
   return read.value;
 }
 
-export async function importLegacyControlFiles(
-  paths: ControlQueuePaths,
-  stopPath: string,
-  interruptPath: string
-): Promise<void> {
-  const importOne = async (
-    filePath: string,
-    type: ControlRequest["type"]
-  ): Promise<void> => {
-    try {
-      const message = (await fsp.readFile(filePath, "utf8")).trim();
-      if (message.length > 0) {
-        await enqueueControlRequest(paths, type, type === "INTERRUPT" ? message : null);
-      }
-      await fsp.rm(filePath, { force: true });
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
-    }
-  };
-  await importOne(stopPath, "STOP");
-  await importOne(interruptPath, "INTERRUPT");
-}
-
 export async function backupFileOnce(filePath: string, suffix: string): Promise<string | null> {
   const backupPath = `${filePath}.${suffix}`;
   try {

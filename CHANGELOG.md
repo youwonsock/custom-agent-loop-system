@@ -7,10 +7,12 @@ All notable changes to this project are documented here. Published versions are 
 ### Migration and contract boundary
 
 - Promote the core and desktop product to 7.0.0 and require the strict-current-contracts handshake capability.
-- Reset old session, registry, index, and loop-history runtime state through a fixed-target resumable journal;
-  preserve settings, credentials, project sources, and working-tree changes.
+- Finalize the v7 session boundary without replaying or converting old run state; settings, credentials,
+  project sources, and working-tree changes remain outside the reset scope.
 - Remove superseded projection/snapshot readers, workflow schema 1/completion fallback, and VS Code/VSIX runtime paths.
 - Add legacy-boundary, migration recovery, and installed-artifact checks to the release gates.
+- Replace the Windows Squirrel installer with a portable Electron build generated in the project artifact
+  directory and launched directly from `agent-loop-orchestrator.exe`.
 
 ## 6.0.0 - 2026-09-07
 

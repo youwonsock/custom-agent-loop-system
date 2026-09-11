@@ -10,7 +10,10 @@ export class SuccessEligibilityError extends Error {
 
 /** All compiled v7 workflows require the core-owned verification path. */
 export function requiresCoreVerification(aggregate: Readonly<RunAggregate>): boolean {
-  return Boolean(aggregate.definition.applicationPolicy.verificationNodeId);
+  if (typeof aggregate.definition.applicationPolicy.verificationNodeId !== "string" || !aggregate.definition.applicationPolicy.verificationNodeId) {
+    throw new SuccessEligibilityError("Compiled workflow is missing the required verification node policy.");
+  }
+  return true;
 }
 
 function expectedVerificationActivations(aggregate: Readonly<RunAggregate>): {
@@ -33,7 +36,7 @@ function expectedVerificationActivations(aggregate: Readonly<RunAggregate>): {
 }
 
 export function assertSuccessEligible(aggregate: Readonly<RunAggregate>): void {
-  if (!requiresCoreVerification(aggregate)) return;
+  requiresCoreVerification(aggregate);
   if (!aggregate.context.approvedPlan || !aggregate.context.selectedPlanChoiceId) {
     throw new SuccessEligibilityError("SUCCESS requires an approved plan and selected plan choice.");
   }

@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 
-const crypto = require("node:crypto");
 const fs = require("node:fs");
 const path = require("node:path");
+const { artifactDigest, isPortableArtifactPath, summarizePortableDirectory } = require("./portable-artifact.js");
 
 const root = path.resolve(__dirname, "..");
 function option(name) {
@@ -29,21 +29,24 @@ const bundleInput = positional[0]
   ? path.resolve(positional[0])
   : path.join(root, "artifacts");
 
-function sha256File(filePath) {
-  return crypto.createHash("sha256").update(fs.readFileSync(filePath)).digest("hex");
+function sha256Artifact(filePath) {
+  return artifactDigest(filePath);
 }
 
-function walk(directory) {
-  const files = [];
+function collectArtifacts(directory) {
+  const artifacts = [];
   for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
     const entryPath = path.join(directory, entry.name);
-    if (
-      entry.isDirectory() &&
-      !["node_modules", ".git", "out", "core"].includes(entry.name)
-    ) files.push(...walk(entryPath));
-    else if (entry.isFile()) files.push(entryPath);
+    if (entry.isDirectory()) {
+      if (isPortableArtifactPath(entryPath)) artifacts.push(entryPath);
+      else if (!["node_modules", ".git", "out", "core"].includes(entry.name)) {
+        artifacts.push(...collectArtifacts(entryPath));
+      }
+    } else if (entry.isFile() && (entry.name.endsWith(".tgz") || entry.name.endsWith(".exe") || entry.name.endsWith(".zip"))) {
+      artifacts.push(entryPath);
+    }
   }
-  return files;
+  return artifacts;
 }
 
 function propertyValue(sbom, name) {
@@ -82,8 +85,7 @@ if (!fs.existsSync(bundleInput)) {
   throw new Error(`Release bundle input does not exist: ${bundleInput}`);
 }
 const bundleRoot = fs.statSync(bundleInput).isDirectory() ? bundleInput : path.dirname(bundleInput);
-const files = fs.statSync(bundleInput).isDirectory() ? walk(bundleInput) : [bundleInput];
-const artifacts = files.filter((file) => file.endsWith(".tgz") || file.endsWith(".exe"));
+const artifacts = fs.statSync(bundleInput).isDirectory() ? collectArtifacts(bundleInput) : [bundleInput];
 if (artifacts.length === 0) throw new Error(`No npm or desktop artifacts found at ${bundleInput}.`);
 if (expectedCount !== null && artifacts.length !== expectedCount) {
   throw new Error(`Expected ${expectedCount} release artifacts, found ${artifacts.length}.`);
@@ -91,7 +93,7 @@ if (expectedCount !== null && artifacts.length !== expectedCount) {
 const observedDesktopTargets = new Set();
 
 for (const artifact of artifacts) {
-  const digest = sha256File(artifact);
+  const digest = sha256Artifact(artifact);
   const checksumPath = `${artifact}.sha256`;
   const sbomPath = `${artifact}.cdx.json`;
   const manifestPath = `${artifact}.manifest.json`;
@@ -101,15 +103,18 @@ for (const artifact of artifacts) {
     }
   }
   const checksum = fs.readFileSync(checksumPath, "utf8").trim();
-  if (checksum !== `${digest}  ${path.basename(artifact)}`) {
+  const isDirectoryArtifact = fs.statSync(artifact).isDirectory();
+  const expectedChecksum = `${digest}  ${path.basename(artifact)}${isDirectoryArtifact ? "/" : ""}`;
+  if (checksum !== expectedChecksum) {
     throw new Error(`Checksum mismatch for ${artifact}.`);
   }
   const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+  const artifactBytes = isDirectoryArtifact ? summarizePortableDirectory(artifact).bytes : fs.statSync(artifact).size;
   if (
     manifest.schemaVersion !== 1 ||
     manifest.artifactFile !== path.basename(artifact) ||
     manifest.sha256 !== digest ||
-    manifest.bytes !== fs.statSync(artifact).size
+    manifest.bytes !== artifactBytes
   ) {
     throw new Error(`Manifest mismatch for ${artifact}.`);
   }
@@ -118,7 +123,7 @@ for (const artifact of artifacts) {
       `Artifact ${path.basename(artifact)} was built from ${manifest.sourceCommit}, not ${expectedCommit}.`
     );
   }
-  if (artifact.endsWith(".exe")) observedDesktopTargets.add(manifest.targetPlatform);
+  if (manifest.targetPlatform) observedDesktopTargets.add(manifest.targetPlatform);
   const sbom = JSON.parse(fs.readFileSync(sbomPath, "utf8"));
   if (sbom.bomFormat !== "CycloneDX") throw new Error(`Invalid CycloneDX SBOM for ${artifact}.`);
   const hashes = sbom.metadata?.component?.hashes || [];

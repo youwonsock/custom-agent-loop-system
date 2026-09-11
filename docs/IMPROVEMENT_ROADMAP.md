@@ -1,8 +1,7 @@
 # v7 AI Agent 하네스 신뢰성 현황
 
 이 문서는 제품 소유 TypeScript 코어와 Windows Electron 운영 콘솔, 코어 검증 증거를 포함한
-7.0.0 구현 결과를 기록합니다. 구 세션과 VS Code 전역 데이터는 변환하지 않으며
-`upgrade --reset-sessions`로 등록 세션을 초기화합니다. 설정·인증정보·프로젝트 작업 트리는 보존합니다.
+7.0.0 구현 결과를 기록합니다. 구 세션과 VS Code 전역 데이터는 변환하지 않으며 현재 계약과 맞지 않는 프로필은 자동 복구하지 않습니다. 설정·인증정보·프로젝트 작업 트리는 보존합니다.
 
 ## 완료된 구조
 
@@ -19,11 +18,11 @@
 - provider-discovery-v2 및 bounded `models --json`
 - Electron 44 utility process, sandboxed renderer, task-scoped preload bridge, tray lifecycle
 - `%APPDATA%` 설정/%LOCALAPPDATA% 세션 분리와 safeStorage 비밀값 저장
-- Squirrel Windows Setup.exe, Fuses, native-module unpack, checksum/SBOM/provenance 검증
+- Windows x64 portable desktop executable, Fuses, native-module unpack, checksum/SBOM/provenance 검증
 - 계획과 함께 승인되는 `VerificationContract`, 코어 순차 검증 명령, `verification_result.v1` 증거
 - 검증 실패 피드백·QA/최종 승인 proof 바인딩·수렴 평가 및 재승인 후보 해시
 - fingerprint와 보수적 `fs.watch`, 프로젝트 공용 lease, Windows Job Object 보조 실행기
-- tools-none 형식 복구, 설치 배포물의 검증 실행 경로, journal 기반 `upgrade --reset-sessions`
+- tools-none 형식 복구와 설치 배포물의 검증 실행 경로
 
 ## 확정된 비범위
 

@@ -34,6 +34,7 @@ test("provider discovery merges only catalog fields under the v4 index lock", as
       modelsDiscoveredCli: "old",
       manualModelsOverride: null,
       modelVariants: { openai: ["high"] },
+      providerCatalog: {},
     }), "utf8");
     const merged = await discoverAndMergeSessionIndex(indexPath, lockPath, [{
       schemaVersion: 2,
@@ -53,7 +54,7 @@ test("provider discovery merges only catalog fields under the v4 index lock", as
     assert.equal(merged.sessionMetas[0]?.goal, "keep");
     assert.deepEqual(merged.availableModels, ["new"]);
     assert.deepEqual(merged.modelVariants, { openai: ["high"] });
-    assert.equal((merged.providerCatalog?.test as { models?: string[] } | undefined)?.models?.[0], "new");
+    assert.equal(merged.providerCatalog.test.models[0], "new");
   } finally {
     await fs.rm(root, { recursive: true, force: true });
   }

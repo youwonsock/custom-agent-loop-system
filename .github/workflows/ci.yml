@@ -211,7 +211,7 @@ jobs:
       - run: npm run verify:release-bundle -- artifacts/npm --expected-commit ${{ github.sha }}
 
   desktop-candidate:
-    name: Exact Windows Setup.exe / win32-x64 / Node 22.20
+    name: Exact Windows portable desktop / win32-x64 / Node 22.20
     needs:
       - source-validation
       - verification-helper
@@ -240,7 +240,7 @@ jobs:
       - name: Assert native candidate target
         run: node -e "const actual=process.platform+'-'+process.arch;if(actual!=='win32-x64')throw new Error(actual+' != win32-x64')"
       - name: Build the one Windows candidate
-        run: npm run make
+        run: npm run package:portable
         working-directory: desktop-app
       - name: Verify release Electron fuse wire
         run: npm run verify:fuses
@@ -258,20 +258,17 @@ jobs:
       - if: github.event_name == 'push'
         uses: actions/attest-build-provenance@43d14bc2b83dec42d39ecae14e916627a18bb661 # v3
         with:
-          subject-path: artifacts/desktop/*.exe
+          subject-path: artifacts/desktop/**/agent-loop-orchestrator.exe
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: release-desktop-win32-x64
           path: |
-            artifacts/desktop/*.exe
-            artifacts/desktop/*.exe.sha256
-            artifacts/desktop/*.exe.cdx.json
-            artifacts/desktop/*.exe.manifest.json
+            artifacts/desktop/AgentLoopOrchestrator-*
           if-no-files-found: error
           retention-days: 30
 
-  # The release candidate is created once on Windows and the exact Setup.exe
-  # is promoted; no other OS/native candidate is produced for v7.
+  # The release candidate is created once on Windows and the exact portable
+  # directory is promoted; no other OS/native candidate is produced for v7.
   desktop-packaged-smoke:
     name: Packaged desktop smoke
     needs: desktop-candidate
@@ -282,23 +279,27 @@ jobs:
         with:
           node-version: 22.20
           cache: npm
-          cache-dependency-path: desktop-app/package-lock.json
+          cache-dependency-path: |
+            package-lock.json
+            desktop-app/package-lock.json
+      - name: Install root verification tools
+        run: npm ci --ignore-scripts
       - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
           name: release-desktop-win32-x64
           path: artifacts/desktop
       - run: npm run verify:desktop
-      - name: Install, launch, and uninstall the exact Setup.exe
+      - name: Launch the exact portable executable
         shell: pwsh
         run: |
-          $setup = (Get-ChildItem artifacts/desktop -Filter '*win32-x64-Setup.exe' | Select-Object -First 1).FullName
-          if (-not $setup) { throw 'Setup.exe candidate is missing.' }
-          node desktop-app/scripts/packaged-smoke.cjs $setup
+          $portable = (Get-ChildItem artifacts/desktop -Directory -Filter 'AgentLoopOrchestrator-*-win32-x64' | Select-Object -First 1).FullName
+          if (-not $portable) { throw 'Portable desktop candidate is missing.' }
+          node desktop-app/scripts/packaged-smoke.cjs $portable
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: desktop-smoke-evidence
           path: |
-            artifacts/desktop/*.exe.manifest.json
+            artifacts/desktop/*.manifest.json
           if-no-files-found: error
           retention-days: 30
 

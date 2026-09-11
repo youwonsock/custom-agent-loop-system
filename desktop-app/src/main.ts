@@ -1,6 +1,5 @@
 import * as path from "node:path";
 import * as fs from "node:fs";
-import { spawn } from "node:child_process";
 import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, shell, Tray } from "electron";
 import { DesktopController } from "./controller";
 import { PRODUCT_FOLDER, resolveDesktopRoots } from "./paths";
@@ -82,23 +81,11 @@ function registerIpc(): void {
     });
   };
   handle("desktop:getStartupStatus", (raw) => { assertNoPayload(raw); return getController().getStartupStatus(); });
-  handle("desktop:runMaintenance", async (raw) => {
+  handle("desktop:openProfileFolder", (raw) => {
     const payload = payloadObject(raw);
-    assertPayloadKeys(payload, ["dryRun"]);
-    if (typeof payload.dryRun !== "boolean") throw new Error("dryRun must be a boolean.");
-    if (!payload.dryRun) {
-      const confirmation = await dialog.showMessageBox(dialogParent(), {
-        type: "warning",
-        buttons: ["Reset sessions", "Cancel"],
-        defaultId: 1,
-        cancelId: 1,
-        title: "Reset Agent Loop profile",
-        message: "Reset registered sessions and install the packaged definitions?",
-        detail: "Project source files, working-tree changes, settings, and secure credentials are preserved. The desktop app must be restarted afterward.",
-      });
-      if (confirmation.response !== 0) throw new Error("Profile maintenance was cancelled.");
-    }
-    return getController().runMaintenance(payload.dryRun === true);
+    assertPayloadKeys(payload, ["kind"]);
+    if (payload.kind !== "config" && payload.kind !== "data") throw new Error("kind must be config or data.");
+    return getController().openProfileFolder(payload.kind);
   });
   handle<DesktopSnapshot>("desktop:getSnapshot", async (raw) => {
     if (raw === undefined) return getController().getSnapshot();
@@ -233,7 +220,9 @@ function createWindow(): void {
     minHeight: 640,
     show: false,
     webPreferences: {
-      preload: typeof MAIN_WINDOW_PRELOAD_WEBPACK_ENTRY === "string"
+      preload: app.isPackaged
+        ? path.join(process.resourcesPath, "renderer", "main_window", "preload.js")
+        : typeof MAIN_WINDOW_PRELOAD_WEBPACK_ENTRY === "string"
         ? MAIN_WINDOW_PRELOAD_WEBPACK_ENTRY
         : path.join(__dirname, "preload.js"),
       contextIsolation: true,
@@ -242,10 +231,40 @@ function createWindow(): void {
       webSecurity: true,
     },
   });
-  const rendererEntry = typeof MAIN_WINDOW_WEBPACK_ENTRY === "string" ? MAIN_WINDOW_WEBPACK_ENTRY : null;
-  const load = rendererEntry ? mainWindow.loadURL(rendererEntry) : mainWindow.loadFile(path.join(__dirname, "..", "renderer", "index.html"));
+  // Forge's renderer entry is a file URL during development.  In a packaged
+  // ASAR, loadFile keeps the path in the native Windows form so Electron's
+  // ASAR resolver can address the renderer entry even when the archive header
+  // uses platform separators.
+  const rendererEntry = !app.isPackaged && typeof MAIN_WINDOW_WEBPACK_ENTRY === "string"
+    ? MAIN_WINDOW_WEBPACK_ENTRY
+    : null;
+  const smokeNonce = app.isPackaged && /^[0-9a-f]{16,128}$/iu.test(process.env.AGENT_LOOP_PACKAGED_SMOKE_NONCE ?? "")
+    ? process.env.AGENT_LOOP_PACKAGED_SMOKE_NONCE as string
+    : null;
+  let rendererLoaded = false;
+  let windowReady = false;
+  let markerWritten = false;
+  const writeSmokeMarker = (): void => {
+    if (!smokeNonce || markerWritten || !rendererLoaded || !windowReady) return;
+    const markerPath = path.join(app.getPath("temp"), `agent-loop-orchestrator-ready-${smokeNonce}.json`);
+    try {
+      fs.writeFileSync(markerPath, `${JSON.stringify({ nonce: smokeNonce, pid: process.pid, version: app.getVersion(), startupReady: controller?.getStartupStatus().ready === true })}\n`, { encoding: "utf8", flag: "wx" });
+      markerWritten = true;
+    } catch (error) {
+      console.error(`[desktop-smoke] unable to write readiness marker: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  };
+  const packagedRenderer = path.join(process.resourcesPath, "renderer", "main_window", "index.html");
+  const developmentRenderer = path.join(__dirname, "..", "renderer", "index.html");
+  const load = rendererEntry
+    ? mainWindow.loadURL(rendererEntry)
+    : mainWindow.loadFile(app.isPackaged ? packagedRenderer : developmentRenderer);
   load.catch((error) => dialog.showErrorBox("Agent Loop Orchestrator", String(error)));
-  mainWindow.once("ready-to-show", () => mainWindow?.show());
+  mainWindow.webContents.once("did-finish-load", () => { rendererLoaded = true; writeSmokeMarker(); });
+  mainWindow.webContents.once("did-fail-load", (_event, errorCode, errorDescription) => {
+    console.error(`[desktop-bootstrap] renderer load failed (${errorCode}): ${errorDescription}`);
+  });
+  mainWindow.once("ready-to-show", () => { windowReady = true; mainWindow?.show(); writeSmokeMarker(); });
   mainWindow.on("close", (event) => {
     if (quitting) return;
     event.preventDefault();
@@ -294,14 +313,16 @@ export async function initDesktopApplication(): Promise<void> {
   // Electron's default user-data directory is the generic `Electron` folder;
   // isolate this app so another Electron product cannot steal our instance
   // lock or profile during development and packaged execution.
-  const configuredAppData = !app.isPackaged && process.env.AGENT_LOOP_APP_DATA_ROOT
+  const smokeOverride = app.isPackaged && /^[0-9a-f]{16,128}$/iu.test(process.env.AGENT_LOOP_PACKAGED_SMOKE_NONCE ?? "");
+  const allowRootOverrides = !app.isPackaged || smokeOverride;
+  const configuredAppData = allowRootOverrides && process.env.AGENT_LOOP_APP_DATA_ROOT
     ? path.resolve(process.env.AGENT_LOOP_APP_DATA_ROOT)
     : app.getPath("appData");
   app.setPath("userData", path.join(configuredAppData, PRODUCT_FOLDER, "user-data"));
   if (!app.requestSingleInstanceLock()) { app.quit(); return; }
   app.on("second-instance", () => { mainWindow?.show(); mainWindow?.focus(); });
   await app.whenReady();
-  const localAppData = !app.isPackaged && process.env.AGENT_LOOP_LOCAL_DATA_ROOT
+  const localAppData = allowRootOverrides && process.env.AGENT_LOOP_LOCAL_DATA_ROOT
     ? path.resolve(process.env.AGENT_LOOP_LOCAL_DATA_ROOT)
     : process.env.LOCALAPPDATA ?? app.getPath("appData");
   const developmentAppRoot = !app.isPackaged && process.env.AGENT_LOOP_APP_ROOT
@@ -313,18 +334,14 @@ export async function initDesktopApplication(): Promise<void> {
   try {
     await controller.init();
   } catch (error) {
-    // Keep the operator console available when the profile has an old
-    // manifest or an interrupted maintenance journal. The maintenance IPC
-    // is deliberately registered below even though normal session APIs stay
-    // fenced behind the controller's failed lifecycle.
+    // Keep the operator console available so the renderer can show the exact
+    // current-contract failure and expose read-only profile-folder actions.
     initializationError = error instanceof Error ? error : new Error(String(error));
   }
   registerIpc();
   createWindow();
   // Register shutdown handling before the failed-initialization early return
-  // so the maintenance screen can still be closed cleanly. The controller's
-  // failed lifecycle makes release a no-op while a version transition is
-  // waiting for operator repair.
+  // so the validation-error screen can still be closed cleanly.
   app.on("before-quit", (event) => {
     if (quitting || !controller) return;
     event.preventDefault();
@@ -342,9 +359,9 @@ export async function initDesktopApplication(): Promise<void> {
   });
   app.on("window-all-closed", () => undefined);
   if (initializationError) {
-    // Renderer bootstrap reads getStartupStatus and presents the repair
-    // controls. No session listeners or tray are attached because the core
-    // has not passed its version/manifest checks.
+    // Renderer bootstrap reads getStartupStatus and presents the read-only
+    // validation error. No session listeners or tray are attached because
+    // the core has not passed its version/manifest checks.
     return;
   }
   detachState = controller.on("state", (snapshot) => { mainWindow?.webContents.send("desktop:state-invalidated", snapshot); refreshTray(); });
@@ -359,38 +376,7 @@ export async function initDesktopApplication(): Promise<void> {
   void controller.recoverPersistedSessions();
 }
 
-function handleSquirrelStartupEvent(): boolean {
-  if (process.platform !== "win32") return false;
-  const event = process.argv.find((argument) => argument.startsWith("--squirrel-"));
-  if (!event) return false;
-  // Squirrel invokes the executable for install/update/uninstall lifecycle
-  // events. Handle them before creating windows, tray state, or core roots.
-  // Creating/removing the shortcut here keeps Setup.exe useful even though
-  // the app does not depend on electron-squirrel-startup at runtime.
-  const updateExe = path.resolve(path.dirname(process.execPath), "..", "Update.exe");
-  const executableName = path.basename(process.execPath);
-  const runUpdate = (args: string[]): void => {
-    if (!fs.existsSync(updateExe)) return;
-    try {
-      const child = spawn(updateExe, args, { detached: true, stdio: "ignore", windowsHide: true });
-      child.unref();
-    } catch {
-      // Setup remains installed; a missing shortcut is preferable to
-      // starting the operator console during a Squirrel lifecycle callback.
-    }
-  };
-  if (event === "--squirrel-install" || event === "--squirrel-updated") {
-    runUpdate(["--createShortcut", executableName]);
-  } else if (event === "--squirrel-uninstall") {
-    runUpdate(["--removeShortcut", executableName]);
-  }
-  // Give the detached Update.exe a moment to create/remove shortcuts before
-  // the lifecycle process exits. No app bootstrap or secure-root access runs.
-  setTimeout(() => app.quit(), 1_000);
-  return true;
-}
-
-if (!handleSquirrelStartupEvent()) void initDesktopApplication().catch((error) => {
+void initDesktopApplication().catch((error) => {
   const message = error instanceof Error ? error.message : String(error);
   console.error(`[desktop-bootstrap] ${message}`);
   if (process.env.AGENT_LOOP_E2E === "1") { app.exit(1); return; }

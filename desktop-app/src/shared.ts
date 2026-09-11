@@ -55,7 +55,7 @@ export interface RunProjectionV2 {
   interruptBriefing: string | null;
   requirements: Array<Record<string, unknown>>;
   requirementEvidence: Array<Record<string, unknown>>;
-  verification?: {
+  verification: {
     contract: {
       revision: number;
       contractHash: string;
@@ -115,7 +115,7 @@ export interface SessionIndexProjectionV4 {
   modelsDiscoveredCli: string | null;
   manualModelsOverride: null;
   modelVariants: Record<string, string[]> | null;
-  providerCatalog?: Record<string, unknown>;
+  providerCatalog: Record<string, ProviderDiscoveryResultV2>;
 }
 
 export interface SessionBundle {
@@ -388,26 +388,24 @@ export function validateRunProjectionV2(value: unknown): RunProjectionV2 {
     }
     if (field === "cycles" && (!Number.isSafeInteger(budget.completed) || Number(budget.completed) < 0)) throw new Error("projection.budgets.cycles.completed is invalid.");
   }
-  if (candidate.verification !== undefined) {
-    const verification = recordValue(candidate.verification, "projection.verification");
-    if (verification.contract === undefined || verification.elapsedMs === undefined) {
-      throw new Error("Desktop v2 verification projection is missing contract progress fields.");
-    }
-    const commands = verification.commands;
-    if (!Array.isArray(commands)) throw new Error("projection.verification.commands is invalid.");
-    commands.forEach((command, commandIndex) => {
-      const item = recordValue(command, `projection.verification.commands[${commandIndex}]`);
-      stringValue(item.executable, `projection.verification.commands[${commandIndex}].executable`);
-      if (!Array.isArray(item.args) || item.args.some((arg) => typeof arg !== "string")) throw new Error(`projection.verification.commands[${commandIndex}].args is invalid.`);
-      stringValue(item.cwd, `projection.verification.commands[${commandIndex}].cwd`);
-    });
+  const verification = recordValue(candidate.verification, "projection.verification");
+  if (verification.contract === undefined || verification.elapsedMs === undefined) {
+    throw new Error("Desktop v2 verification projection is missing contract progress fields.");
   }
+  const commands = verification.commands;
+  if (!Array.isArray(commands)) throw new Error("projection.verification.commands is invalid.");
+  commands.forEach((command, commandIndex) => {
+    const item = recordValue(command, `projection.verification.commands[${commandIndex}]`);
+    stringValue(item.executable, `projection.verification.commands[${commandIndex}].executable`);
+    if (!Array.isArray(item.args) || item.args.some((arg) => typeof arg !== "string")) throw new Error(`projection.verification.commands[${commandIndex}].args is invalid.`);
+    stringValue(item.cwd, `projection.verification.commands[${commandIndex}].cwd`);
+  });
   return value as RunProjectionV2;
 }
 
 export function validateSessionIndexProjectionV4(value: unknown): SessionIndexProjectionV4 {
   const index = recordValue(value, "session index");
-  if (index.version !== 4 || !Array.isArray(index.activeSessionIds) || !Array.isArray(index.sessionMetas) || !Array.isArray(index.availableModels) || index.manualModelsOverride !== null || (index.modelVariants !== null && (typeof index.modelVariants !== "object" || Array.isArray(index.modelVariants)))) throw new Error("Desktop session index must use version 4.");
+  if (index.version !== 4 || !Array.isArray(index.activeSessionIds) || !Array.isArray(index.sessionMetas) || !Array.isArray(index.availableModels) || index.manualModelsOverride !== null || (index.modelVariants !== null && (typeof index.modelVariants !== "object" || Array.isArray(index.modelVariants))) || !index.providerCatalog || typeof index.providerCatalog !== "object" || Array.isArray(index.providerCatalog)) throw new Error("Desktop session index must use the strict version 4 contract.");
   if (index.activeSessionIds.some((entry) => typeof entry !== "string" || !SAFE_ID.test(String(entry))) || new Set(index.activeSessionIds).size !== index.activeSessionIds.length || index.availableModels.some((entry) => typeof entry !== "string" || !String(entry).trim())) throw new Error("Desktop session index contains invalid identifiers.");
   if (index.modelsDiscoveredAt !== null && (typeof index.modelsDiscoveredAt !== "string" || !Number.isFinite(Date.parse(index.modelsDiscoveredAt)))) throw new Error("Desktop session index modelsDiscoveredAt is invalid.");
   if (index.modelsDiscoveredCli !== null && (typeof index.modelsDiscoveredCli !== "string" || !index.modelsDiscoveredCli.trim())) throw new Error("Desktop session index modelsDiscoveredCli is invalid.");
@@ -423,6 +421,10 @@ export function validateSessionIndexProjectionV4(value: unknown): SessionIndexPr
     for (const [provider, models] of Object.entries(index.modelVariants as Record<string, unknown>)) {
       if (!Array.isArray(models) || models.some((entry) => typeof entry !== "string" || !entry.trim())) throw new Error(`Desktop session index modelVariants.${provider} is invalid.`);
     }
+  }
+  for (const [providerId, discovery] of Object.entries(index.providerCatalog as Record<string, unknown>)) {
+    validateProviderDiscoveryResultV2(discovery);
+    if ((discovery as ProviderDiscoveryResultV2).providerId !== providerId) throw new Error(`Desktop session index providerCatalog key mismatch: ${providerId}.`);
   }
   return value as SessionIndexProjectionV4;
 }
@@ -528,8 +530,8 @@ export interface ReleaseResult {
 }
 
 export interface DesktopBridge {
-  getStartupStatus(): Promise<BridgeResult<{ ready: boolean; lifecycle: "new" | "initializing" | "initialized" | "releasing" | "released" | "failed"; error: string | null }>>;
-  runMaintenance(dryRun: boolean): Promise<BridgeResult<{ operationId: string; configRoot: string; dataRoot: string; sessionIds: string[]; preserved: string[]; restartRequired: boolean }>>;
+  getStartupStatus(): Promise<BridgeResult<{ ready: boolean; lifecycle: "new" | "initializing" | "initialized" | "releasing" | "released" | "failed"; error: string | null; configRoot: string; dataRoot: string }>>;
+  openProfileFolder(kind: "config" | "data"): Promise<BridgeResult<void>>;
   getSnapshot(sessionId?: string): Promise<BridgeResult<DesktopSnapshot>>;
   getSessionBundle(sessionId: string): Promise<BridgeResult<SessionBundle>>;
   getSettings(): Promise<BridgeResult<DesktopSettings>>;

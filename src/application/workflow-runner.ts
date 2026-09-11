@@ -189,7 +189,6 @@ export class WorkflowRunner {
           const input = await this.inputAssembler.assemble(context);
           const waiting = this.reducer.requestHumanInput(
             aggregate,
-            this.ids.request(activationId),
             input.value,
             this.clock.now()
           );
@@ -308,15 +307,15 @@ export class WorkflowRunner {
             if (this.verificationContracts) {
               let preparedCandidate;
               try {
-                preparedCandidate = await this.verificationContracts.candidate(
-                  activeContract,
-                  aggregate.context.targetProjectPath,
-                  aggregate.context.additionalAllowedPaths,
-                  activeContract.baselinePaths,
-                  activeContract.baselineFileHashes,
-                  activeContract.baselineFileModes,
-                  policyChanged ? desiredDraft : undefined
-                );
+                preparedCandidate = await this.verificationContracts.candidate({
+                  contract: activeContract,
+                  projectRoot: aggregate.context.targetProjectPath,
+                  additionalRoots: aggregate.context.additionalAllowedPaths,
+                  baselinePaths: activeContract.baselinePaths,
+                  baselineFileHashes: activeContract.baselineFileHashes,
+                  baselineFileModes: activeContract.baselineFileModes,
+                  proposedDraft: policyChanged ? desiredDraft : undefined,
+                });
               } catch (error) {
                 aggregate = await this.commitVerificationPreflightFailure(
                   aggregate,

@@ -29,23 +29,17 @@ function parseLease(value: unknown, filePath: string): LeaseRecord {
     !Array.isArray(record.roots) || record.roots.length === 0 ||
     record.roots.some((root) => typeof root !== "string" || !path.isAbsolute(root)) ||
     !Number.isFinite(record.expiresAt) ||
-    (record.generation !== undefined && (typeof record.generation !== "string" || !record.generation)) ||
-    (record.updatedAt !== undefined && (!Number.isFinite(record.updatedAt) || Number(record.updatedAt) < 0))
+    typeof record.generation !== "string" || !record.generation ||
+    !Number.isFinite(record.updatedAt) || Number(record.updatedAt) < 0
   ) throw new Error(`Project lease record is invalid: ${filePath}`);
-  // A lease written by an older core has no generation/heartbeat fields. Use
-  // its immutable lease id as the legacy generation so it can be observed and
-  // upgraded by the next heartbeat without allowing an owner swap to be
-  // overwritten.
-  const generation = record.generation ?? record.leaseId;
-  const updatedAt = record.updatedAt ?? Number(record.expiresAt);
   return {
     leaseId: record.leaseId,
     ownerId: record.ownerId,
     pid: Number(record.pid),
     roots: record.roots.map((root) => normalized(root)),
     expiresAt: Number(record.expiresAt),
-    generation,
-    updatedAt,
+    generation: record.generation,
+    updatedAt: Number(record.updatedAt),
   };
 }
 

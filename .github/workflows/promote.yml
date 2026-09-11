@@ -145,7 +145,23 @@ jobs:
           set -euo pipefail
           while IFS= read -r artifact; do
             gh attestation verify "$artifact" --repo "$GITHUB_REPOSITORY"
-          done < <(find release-bundle -maxdepth 1 -type f \( -name '*.tgz' -o -name '*.exe' \) -print | sort)
+          done < <(find release-bundle -type f \( -name '*.tgz' -o -name 'agent-loop-orchestrator.exe' \) -print | sort)
+
+      - name: Archive the portable desktop directory for release upload
+        shell: bash
+        run: |
+          set -euo pipefail
+          portable="$(find release-bundle -maxdepth 1 -type d -name 'AgentLoopOrchestrator-*-win32-x64' -print -quit)"
+          [[ -n "$portable" ]] || { echo "Portable desktop directory missing." >&2; exit 1; }
+          node scripts/archive-portable-artifact.js "$portable"
+          rm -rf "$portable" "$portable.sha256" "$portable.manifest.json" "$portable.cdx.json"
+
+      - name: Reverify the release file set after portable archiving
+        run: >-
+          node scripts/verify-release-bundle.js release-bundle
+          --expected-commit ${{ steps.candidate.outputs.expected_commit }}
+          --expected-count 2
+          --expected-desktop-targets win32-x64
 
       - name: Create recoverable draft release before publication
         shell: bash

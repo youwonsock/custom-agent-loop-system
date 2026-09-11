@@ -10,6 +10,9 @@ const forbiddenPaths = [
   "scripts/bundle-core-for-vsix.js",
   "scripts/package-vsix.js",
   "scripts/verify-vsix-package.js",
+  "src/application/maintenance-service.ts",
+  "src/application/maintenance-service.test.ts",
+  "docs/MIGRATION.md",
 ];
 const forbiddenTokens = [
   "RunProjectionV1",
@@ -18,6 +21,28 @@ const forbiddenTokens = [
   "validateOperatorSnapshotV2",
   "normalizeSessionIndexProjectionV4",
   "legacyVerificationBinding",
+  "@electron-forge/maker-squirrel",
+  "desktop-installer",
+  "Setup.exe",
+  "--squirrel-",
+  "MaintenanceService",
+  "cmdUpgrade",
+  "readLoopConfigForUpgrade",
+  "loadLoopPathsForMaintenance",
+  "runMaintenance",
+  "importLegacyControlFiles",
+  "upgrade --reset-sessions",
+  "ignore: () => false",
+  ".webpack/main/main.js",
+  "desktop:runMaintenance",
+  "runMaintenance:",
+  "baselineFingerprint?:",
+  "baselinePaths?:",
+  "baselineFileHashes?:",
+  "baselineFileModes?:",
+  "approvedExecutable?:",
+  "approvedArgs?:",
+  "approvedCwd?:",
 ];
 const forbiddenPatterns = [/\bcompletionNodeId\b/u];
 const scanRoots = [

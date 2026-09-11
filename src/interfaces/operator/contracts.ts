@@ -93,9 +93,10 @@ export function validateRunProjectionV2(value: unknown): RunProjectionV2 {
   if (typeof candidate.awaitingPlanApproval !== "boolean" || typeof candidate.planApproved !== "boolean") throw new Error("Run projection plan flags must be boolean.");
   objectOrNull(candidate.pendingInput, "pendingInput");
   objectOrNull(candidate.latestEvent, "latestEvent");
-  if (candidate.verification !== undefined) {
+  {
     const verification = objectValue(candidate.verification);
-    if (verification.contract !== undefined && verification.contract !== null) {
+    if (!Object.prototype.hasOwnProperty.call(verification, "contract")) throw new Error("v2 verification projection must include the current contract field.");
+    if (verification.contract !== null) {
       const contract = objectValue(verification.contract);
       if (!Number.isSafeInteger(contract.revision) || Number(contract.revision) < 1) {
         throw new Error("verification.contract.revision is invalid.");
@@ -121,9 +122,7 @@ export function validateRunProjectionV2(value: unknown): RunProjectionV2 {
         generatedOutputPaths: contract.generatedOutputPaths,
       } as VerificationContractDraft, requirementIds);
     }
-    if (verification.elapsedMs !== undefined) {
-      nonNegativeInteger(verification.elapsedMs, "verification.elapsedMs");
-    }
+    nonNegativeInteger(verification.elapsedMs, "verification.elapsedMs");
     if (verification.contractRevision !== null && !Number.isSafeInteger(verification.contractRevision)) {
       throw new Error("verification.contractRevision is invalid.");
     }
@@ -146,9 +145,12 @@ export function validateRunProjectionV2(value: unknown): RunProjectionV2 {
       const item = objectValue(command);
       stringValue(item.commandId, "verification.commands.commandId");
       stringValue(item.status, "verification.commands.status");
-      if (item.executable !== undefined) stringValue(item.executable, "verification.commands.executable");
-      if (item.args !== undefined && (!Array.isArray(item.args) || item.args.some((arg) => typeof arg !== "string"))) throw new Error("verification.commands.args is invalid.");
-      if (item.cwd !== undefined) stringValue(item.cwd, "verification.commands.cwd");
+      stringValue(item.executable, "verification.commands.executable");
+      if (!Array.isArray(item.args) || item.args.some((arg) => typeof arg !== "string")) throw new Error("verification.commands.args is invalid.");
+      stringValue(item.cwd, "verification.commands.cwd");
+      stringValue(item.approvedExecutable, "verification.commands.approvedExecutable");
+      if (!Array.isArray(item.approvedArgs) || item.approvedArgs.some((arg) => typeof arg !== "string")) throw new Error("verification.commands.approvedArgs is invalid.");
+      stringValue(item.approvedCwd, "verification.commands.approvedCwd");
       if (item.exitCode !== null && !Number.isSafeInteger(item.exitCode)) throw new Error("verification.commands.exitCode is invalid.");
       nullableString(item.signal, "verification.commands.signal");
       if (typeof item.timedOut !== "boolean" || (item.processTreeClean !== null && typeof item.processTreeClean !== "boolean")) throw new Error("verification.commands process state is invalid.");
@@ -190,23 +192,6 @@ export function validateRunProjectionV2(value: unknown): RunProjectionV2 {
     throw new Error("Run projection timestamps are invalid.");
   }
   
-  const verification = candidate.verification;
-  if (verification !== undefined) {
-    const verificationObject = objectValue(verification);
-    if (verificationObject.contract === undefined) {
-      throw new Error("v2 verification projection must include the current contract field.");
-    }
-    if (verificationObject.elapsedMs === undefined) {
-      throw new Error("v2 verification projection must include elapsedMs.");
-    }
-    const commands = arrayValue(objectValue(verification).commands, "verification.commands");
-    for (const command of commands) {
-      const item = objectValue(command);
-      stringValue(item.executable, "verification.commands.executable");
-      if (!Array.isArray(item.args) || item.args.some((arg) => typeof arg !== "string")) throw new Error("verification.commands.args is invalid.");
-      stringValue(item.cwd, "verification.commands.cwd");
-    }
-  }
   return value as RunProjectionV2;
 }
 
@@ -244,6 +229,11 @@ export function validateSessionIndexProjectionV4(value: unknown): SessionIndexPr
       for (const [index, model] of values.entries()) stringValue(model, `modelVariants.${provider}[${index}]`);
       if (values.some((model) => !String(model).trim())) throw new Error(`modelVariants.${provider} contains an empty model id.`);
     }
+  }
+  const catalog = objectValue(candidate.providerCatalog);
+  for (const [providerId, discovery] of Object.entries(catalog)) {
+    const validated = validateProviderDiscoveryResultV2(discovery);
+    if (validated.providerId !== providerId) throw new Error(`providerCatalog key mismatch: ${providerId}`);
   }
   return value as SessionIndexProjectionV4;
 }
@@ -330,6 +320,7 @@ export function createEmptySessionIndexProjection(): SessionIndexProjectionV4 {
     modelsDiscoveredCli: null,
     manualModelsOverride: null,
     modelVariants: null,
+    providerCatalog: {},
   };
 }
 
