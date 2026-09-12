@@ -1,12 +1,12 @@
 import { execFile } from "node:child_process";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { resolveBinaryForSpawn } from "../../binary_resolution";
+import { resolveBinaryForSpawn } from "./binary-resolution";
 import {
   resolveProviderCapability,
   type ProviderAdapter,
   type ProviderCapabilityMode,
-} from "../../provider_capabilities";
+} from "./providers/provider-capabilities";
 import type {
   ProviderCapabilityDecision,
   ProviderCapabilityRuntimePort,

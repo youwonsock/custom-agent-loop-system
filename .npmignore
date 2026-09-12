@@ -2,3 +2,13 @@
 experiments/
 .spike-dist/
 desktop-app/
+src/
+tests/
+.build/
+coverage/
+scripts/build/
+scripts/package/
+scripts/verify/
+scripts/test-support/
+!scripts/runtime/
+!scripts/runtime/fix-pty-permissions.js

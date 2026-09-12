@@ -62,7 +62,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Build helper
         shell: pwsh
-        run: .\scripts\build-verification-helper.ps1
+        run: .\scripts\build\build-verification-helper.ps1
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: verification-helper-win32-x64
@@ -251,7 +251,7 @@ jobs:
       - name: Smoke the Electron utility-process core
         run: npm run test:utility
         working-directory: desktop-app
-      - run: node scripts/package-desktop-artifact.js
+      - run: node scripts/package/package-desktop-artifact.js
       - run: npm run verify:desktop
       - run: npm run checksum:artifacts
       - run: npm run verify:release-bundle -- artifacts/desktop --expected-commit ${{ github.sha }} --expected-count 1 --expected-desktop-targets win32-x64
@@ -268,7 +268,7 @@ jobs:
           retention-days: 30
 
   # The release candidate is created once on Windows and the exact portable
-  # directory is promoted; no other OS/native candidate is produced for v7.
+  # directory is promoted; no other OS/native candidate is produced for v8.
   desktop-packaged-smoke:
     name: Packaged desktop smoke
     needs: desktop-candidate

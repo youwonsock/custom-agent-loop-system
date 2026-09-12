@@ -80,9 +80,9 @@ function verificationHelperPath(): string {
     : null;
   const candidates = [
     configured,
-    // TypeScript emits this module under dist/src/runtime. Both the npm
-    // package (package/dist/src/runtime) and the staged desktop core
-    // (core/dist/src/runtime) keep native beside dist at the same level.
+    // The npm layout is dist/core/runtime while the staged desktop layout is
+    // core/dist/runtime; support both explicit native siblings.
+    path.resolve(__dirname, "../../native/bin/win32-x64/verification-host.exe"),
     path.resolve(__dirname, "../../../native/bin/win32-x64/verification-host.exe"),
     // Forge places core/native outside ASAR. Use resourcesPath explicitly for
     // the unpacked candidate; deriving it from __dirname would insert the

@@ -2,7 +2,7 @@ import type {
   ProviderAdapter,
   ProviderCapabilityMode,
   ProviderCapabilityStatus,
-} from "../../../provider_capabilities";
+} from "../../runtime/providers/provider-capabilities";
 
 /** Runtime-owned evidence for an adapter/CLI/OS capability lookup. */
 export interface ProviderCapabilityDecision extends ProviderCapabilityStatus {

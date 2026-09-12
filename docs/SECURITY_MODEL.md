@@ -11,7 +11,7 @@
 
 ## Workflow authority
 
-Only the v7 core can advance a workflow. The final assistant response must be one JSON object matching
+Only the v8 core can advance a workflow. The final assistant response must be one JSON object matching
 `TaskResultEnvelopeV1`; the task payload schema, allowed signal, and guardrails are validated before an
 effect mapper runs. Provider text, prompt echoes, tool events, and completion markers cannot directly
 select transitions.
@@ -20,7 +20,7 @@ Effect mappers return a closed `DomainEffect` union and cannot import repositori
 `RunReducer` is the sole aggregate mutation boundary. Results, effects, transition, activation
 completion, and events are committed together under revision CAS and fencing checks.
 
-For v7 definitions, a successful terminal additionally requires a core-owned verification proof,
+For v8 definitions, a successful terminal additionally requires a core-owned verification proof,
 the approved contract and baseline hashes, a clean process tree, and QA/master approvals that refer
 to the same proof revision. Model output can report findings or feedback, but cannot create a proof
 or mark convergence. A changed protected file, command, test, or execution policy creates a hashed

@@ -4,8 +4,8 @@ import * as path from "node:path";
 import * as fsp from "node:fs/promises";
 import type { RunRepositoryPort } from "../application/ports/run-repository";
 import type { RunAggregate } from "../domain/run-aggregate";
-import { atomicWriteJson } from "../../json_file_store";
-import { withShortFileLock } from "../../resilience";
+import { atomicWriteJson } from "./json-file-store";
+import { withShortFileLock } from "./resilience";
 
 const SAFE_RUN_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/u;
 const WINDOWS_RESERVED_NAME = /^(?:CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\..*)?$/iu;
@@ -85,51 +85,141 @@ function recordValue(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
-function hasStrictCurrentAggregateShape(aggregate: RunAggregate): boolean {
+function nonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function stringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((item) => typeof item === "string");
+}
+
+function nullableString(value: unknown): value is string | null {
+  return value === null || typeof value === "string";
+}
+
+function nonNegativeInteger(value: unknown): value is number {
+  return Number.isSafeInteger(value) && Number(value) >= 0;
+}
+
+function stringRecord(value: unknown): value is Record<string, string> {
+  return recordValue(value) !== null && Object.values(value as Record<string, unknown>).every((item) => typeof item === "string");
+}
+
+function numberRecord(value: unknown): value is Record<string, number> {
+  return recordValue(value) !== null && Object.values(value as Record<string, unknown>).every((item) => Number.isSafeInteger(item));
+}
+
+function validateVerificationCommand(value: unknown): boolean {
+  const command = recordValue(value);
+  return command !== null &&
+    nonEmptyString(command.id) &&
+    nonEmptyString(command.label) &&
+    nonEmptyString(command.executable) &&
+    stringArray(command.args) &&
+    typeof command.cwd === "string" &&
+    nonNegativeInteger(command.timeoutMs) && command.timeoutMs > 0 &&
+    stringArray(command.requirementIds) && command.requirementIds.length > 0;
+}
+
+function validateVerificationContract(value: unknown): boolean {
+  const contract = recordValue(value);
+  return contract !== null &&
+    nonNegativeInteger(contract.revision) &&
+    nonEmptyString(contract.contractHash) &&
+    nonEmptyString(contract.approvedRequestId) &&
+    nonEmptyString(contract.approvedAt) &&
+    nonEmptyString(contract.baselineArtifactId) &&
+    nonEmptyString(contract.baselineFingerprint) &&
+    stringArray(contract.baselinePaths) &&
+    stringRecord(contract.baselineFileHashes) &&
+    numberRecord(contract.baselineFileModes) &&
+    Array.isArray(contract.commands) && contract.commands.length > 0 &&
+    contract.commands.every(validateVerificationCommand) &&
+    nonNegativeInteger(contract.totalTimeoutMs) && contract.totalTimeoutMs > 0 &&
+    stringArray(contract.protectedPaths) &&
+    stringArray(contract.testRoots) &&
+    stringArray(contract.allowedNewTestRoots) &&
+    stringArray(contract.generatedOutputPaths);
+}
+
+function validateVerificationCommandRecord(value: unknown): boolean {
+  const record = recordValue(value);
+  if (!record) return false;
+  const status = record.status;
+  return nonEmptyString(record.verificationId) &&
+    nonEmptyString(record.commandId) &&
+    (status === "reserved" || status === "running" || status === "completed" || status === "not_run") &&
+    nonEmptyString(record.executable) && stringArray(record.args) && typeof record.cwd === "string" &&
+    nonEmptyString(record.approvedExecutable) && stringArray(record.approvedArgs) && typeof record.approvedCwd === "string" &&
+    nullableString(record.startedAt) && nullableString(record.completedAt) &&
+    (record.exitCode === null || Number.isSafeInteger(record.exitCode)) && nullableString(record.signal) &&
+    typeof record.timedOut === "boolean" && (record.processTreeClean === null || typeof record.processTreeClean === "boolean") &&
+    nullableString(record.logArtifactId) && typeof record.summary === "string";
+}
+
+function validateReviewApproval(value: unknown): boolean {
+  const approval = recordValue(value);
+  return approval !== null &&
+    (approval.stage === "qa" || approval.stage === "master") &&
+    nonEmptyString(approval.activationId) && nonEmptyString(approval.proofId) &&
+    nonNegativeInteger(approval.contractRevision) && stringArray(approval.requirementIds) &&
+    stringArray(approval.resolvedFindingIds) && typeof approval.rationale === "string" &&
+    nonEmptyString(approval.recordedAt);
+}
+
+function validateVerificationProof(value: unknown): boolean {
+  if (value === null) return true;
+  const proof = recordValue(value);
+  return proof !== null && nonEmptyString(proof.proofId) && nonEmptyString(proof.verificationId) &&
+    nonNegativeInteger(proof.contractRevision) && nonEmptyString(proof.contractHash) &&
+    nonEmptyString(proof.baselineFingerprint) && nonEmptyString(proof.beforeFingerprint) &&
+    nonEmptyString(proof.afterFingerprint) && Array.isArray(proof.commands) &&
+    proof.commands.every(validateVerificationCommandRecord) &&
+    typeof proof.passed === "boolean" && nonEmptyString(proof.verifiedAt) &&
+    typeof proof.watcherReliable === "boolean";
+}
+
+function validateVerificationCandidate(value: unknown): boolean {
+  if (value === null) return true;
+  const candidate = recordValue(value);
+  return candidate !== null && nonEmptyString(candidate.candidateHash) && nonNegativeInteger(candidate.baseRevision) &&
+    Array.isArray(candidate.commands) && candidate.commands.every(validateVerificationCommand) &&
+    nonEmptyString(candidate.baselineFingerprint) && stringArray(candidate.changedPaths) &&
+    stringArray(candidate.addedPaths) && stringArray(candidate.modifiedPaths) && stringArray(candidate.deletedPaths) &&
+    nullableString(candidate.diffArtifactId) && nullableString(candidate.baselineArtifactId) &&
+    stringArray(candidate.baselinePaths) && stringRecord(candidate.baselineFileHashes) && numberRecord(candidate.baselineFileModes) &&
+    nonNegativeInteger(candidate.totalTimeoutMs) && stringArray(candidate.protectedPaths) &&
+    stringArray(candidate.testRoots) && stringArray(candidate.allowedNewTestRoots) && stringArray(candidate.generatedOutputPaths);
+}
+
+/** Validate the complete current RunAggregate schema before checksum use. */
+export function validateRunAggregateV2(value: unknown): value is RunAggregate {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const aggregate = value as Partial<RunAggregate>;
   const definition = recordValue(aggregate.definition);
   const policy = definition ? recordValue(definition.applicationPolicy) : null;
-  if (!definition || !policy || [
-    "implementationNodeId", "testNodeId", "verificationNodeId", "qaNodeId", "completionApprovalNodeId",
-  ].some((key) => typeof policy[key] !== "string" || !(policy[key] as string).trim())) return false;
+  if (aggregate.schemaVersion !== 2 || definition?.schemaVersion !== 2 || !nonEmptyString(aggregate.runId) || !SAFE_RUN_ID.test(aggregate.runId) ||
+      !definition || !policy || [
+        "implementationNodeId", "testNodeId", "verificationNodeId", "qaNodeId", "completionApprovalNodeId",
+      ].some((key) => !nonEmptyString(policy[key]))) return false;
   const context = recordValue(aggregate.context);
-  if (!context || !Number.isSafeInteger(context.requestSequence) || Number(context.requestSequence) < 0) return false;
-  const contract = context.verificationContract;
-  if (contract !== null) {
-    const item = recordValue(contract);
-    if (!item || !Array.isArray(item.baselinePaths) || !recordValue(item.baselineFileHashes) || !recordValue(item.baselineFileModes) || typeof item.baselineFingerprint !== "string" || typeof item.baselineArtifactId !== "string" || !Array.isArray(item.commands)) return false;
-    for (const command of item.commands) {
-      const value = recordValue(command);
-      if (!value || typeof value.id !== "string" || typeof value.executable !== "string" || !Array.isArray(value.args) || typeof value.cwd !== "string") return false;
-    }
-  }
-  if (!Array.isArray(context.verificationRecords) || !Array.isArray(context.verificationCriteriaChanges) || !Array.isArray(context.reviewApprovals) || !Array.isArray(context.findings) || !Array.isArray(context.verificationFeedback)) return false;
-  for (const record of context.verificationRecords) {
-    const value = recordValue(record);
-    if (!value || typeof value.approvedExecutable !== "string" || !Array.isArray(value.approvedArgs) || value.approvedArgs.some((arg) => typeof arg !== "string") || typeof value.approvedCwd !== "string") return false;
-  }
-  const candidate = context.verificationCandidate;
-  if (candidate !== null) {
-    const value = recordValue(candidate);
-    if (!value || typeof value.baselineFingerprint !== "string" || !Array.isArray(value.baselinePaths) || !recordValue(value.baselineFileHashes) || !recordValue(value.baselineFileModes) || typeof value.totalTimeoutMs !== "number" || !Array.isArray(value.protectedPaths) || !Array.isArray(value.testRoots) || !Array.isArray(value.allowedNewTestRoots) || !Array.isArray(value.generatedOutputPaths)) return false;
-  }
-  return true;
+  if (!context || !nonNegativeInteger(context.requestSequence) ||
+      !Array.isArray(context.planChoices) || !Array.isArray(context.requirementEvidence) ||
+      (context.selectedVerificationDraft !== null && recordValue(context.selectedVerificationDraft) === null) ||
+      (context.verificationContract !== null && !validateVerificationContract(context.verificationContract)) ||
+      !Array.isArray(context.verificationRecords) || !context.verificationRecords.every(validateVerificationCommandRecord) ||
+      !validateVerificationProof(context.verificationProof) || !validateVerificationCandidate(context.verificationCandidate) ||
+      !nullableString(context.verificationInvalidationReason) || !Array.isArray(context.reviewApprovals) ||
+      !context.reviewApprovals.every(validateReviewApproval) || !Array.isArray(context.findings) ||
+      !Array.isArray(context.verificationFeedback) || !nullableString(context.latestWorkspaceFingerprint) ||
+      !Array.isArray(context.verificationCriteriaChanges) || !nonNegativeInteger(context.verificationElapsedMs) ||
+      !nullableString(context.resumeNodeId)) return false;
+  return nonNegativeInteger(aggregate.revision) && nonNegativeInteger(aggregate.fencingEpoch) &&
+    nonEmptyString(aggregate.checksum) && aggregate.checksum.length === 64;
 }
 
 function isValid(value: unknown): value is RunAggregate {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const aggregate = value as Partial<RunAggregate>;
-  return (
-    aggregate.schemaVersion === 2 &&
-    typeof aggregate.runId === "string" &&
-    Number.isSafeInteger(aggregate.revision) &&
-    Number(aggregate.revision) >= 0 &&
-    Number.isSafeInteger(aggregate.fencingEpoch) &&
-    Number(aggregate.fencingEpoch) >= 0 &&
-    typeof aggregate.checksum === "string" &&
-    aggregate.checksum.length === 64 &&
-    runChecksum(aggregate as RunAggregate) === aggregate.checksum &&
-    hasStrictCurrentAggregateShape(aggregate as RunAggregate)
-  );
+  return validateRunAggregateV2(value) && runChecksum(value) === value.checksum;
 }
 
 export interface FileRunRepositoryOptions {

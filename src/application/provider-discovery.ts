@@ -2,10 +2,10 @@ import * as path from "node:path";
 import * as fs from "node:fs";
 import * as fsp from "node:fs/promises";
 import { spawn } from "node:child_process";
-import type { ProviderConfig } from "../../provider_runtime";
-import { resolveBinaryForSpawn } from "../../binary_resolution";
-import { atomicWriteJson } from "../../json_file_store";
-import { withShortFileLock } from "../../resilience";
+import type { ProviderConfig } from "../runtime/providers/provider-runtime";
+import { resolveBinaryForSpawn } from "../runtime/binary-resolution";
+import { atomicWriteJson } from "../infrastructure/json-file-store";
+import { withShortFileLock } from "../infrastructure/resilience";
 import {
   type ProviderDiscoveryResultV2,
   type SessionIndexProjectionV4,

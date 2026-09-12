@@ -1,7 +1,7 @@
 import * as path from "node:path";
 import * as fsp from "node:fs/promises";
-import type { LoopConfig } from "../../runtime_config";
-import { assertSafeSessionId, getControlQueuePaths, initControlQueue } from "../../resilience";
+import type { LoopConfig } from "../config/runtime-config";
+import { assertSafeSessionId, getControlQueuePaths, initControlQueue } from "./resilience";
 
 /**
  * Initialize the non-authoritative directory layout owned by one run.

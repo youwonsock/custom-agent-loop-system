@@ -2,6 +2,14 @@
 
 All notable changes to this project are documented here. Published versions are immutable; fixes are released under a new version.
 
+## 8.0.0 - 2026-09-12
+
+### Layout and packaging
+
+- Consolidate production source under `src/`, immutable definitions under `config/`, compiled core under `dist/core/`, and tests under `tests/`.
+- Add the `packaged-core-layout-v2` handshake capability and update npm/desktop entrypoints to the v8 layout.
+- Move build, packaging, verification, and test-support scripts into explicit subdirectories and keep the desktop core staged at `core/dist` with `core/config`.
+
 ## 7.0.0 - 2026-09-11
 
 ### Migration and contract boundary

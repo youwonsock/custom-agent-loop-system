@@ -1,5 +1,6 @@
 import * as path from "node:path";
 import * as fsp from "node:fs/promises";
+import { resolvePackagedConfigRoot } from "../config/package-config-root";
 import type {
   AgentDefinitionsDocument,
   DefinitionSourceBundle,
@@ -20,7 +21,15 @@ async function readJson<T>(filePath: string): Promise<T> {
 export async function loadDefinitionSource(
   configRoot: string
 ): Promise<DefinitionSourceBundle> {
-  const root = path.resolve(configRoot);
+  let root = path.resolve(configRoot);
+  // Callers may provide the immutable code root (for example a packaged CLI)
+  // rather than its explicit definition directory. Resolve only the declared
+  // codeRoot/config layout; never fall back to legacy root-level definitions.
+  try {
+    await fsp.access(path.join(root, "agents.json"));
+  } catch {
+    root = resolvePackagedConfigRoot(root);
+  }
   const [agents, tasks, workflow] = await Promise.all([
     readJson<AgentDefinitionsDocument>(path.join(root, "agents.json")),
     readJson<TaskDefinitionsDocument>(path.join(root, "tasks.json")),

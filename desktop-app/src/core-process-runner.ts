@@ -46,7 +46,7 @@ export class CoreProcessRunner {
   private readonly entryPoint: string;
 
   constructor(private readonly roots: DesktopRoots, private readonly maxOutputBytes = 512 * 1024) {
-    this.entryPoint = path.join(roots.codeRoot, "dist", "loop_orchestrator.js");
+    this.entryPoint = path.join(roots.codeRoot, "dist", "entrypoints", "loop-orchestrator.js");
   }
 
   run(

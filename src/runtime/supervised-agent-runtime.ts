@@ -14,7 +14,7 @@ import type {
   RunControlCommand,
   RunControlCommandPort,
 } from "../application/ports/control-command";
-import { SUPERVISED_AGENT_RUNTIME } from "../../agent_runtime";
+import { SUPERVISED_AGENT_RUNTIME } from "./agent-runtime";
 import {
   buildProviderInvocation,
   claudeMcpDocument,
@@ -24,10 +24,10 @@ import {
   resolveMcpServerSecrets,
   type ProviderConfig,
   type ToolAccessConfig,
-} from "../../provider_runtime";
-import type { LoopDefaultsConfig } from "../../runtime_config";
-import { assertSafeSessionId, type FailureKind } from "../../resilience";
-import { initAttemptLog } from "../../process_supervisor";
+} from "./providers/provider-runtime";
+import type { LoopDefaultsConfig } from "../config/runtime-config";
+import { assertSafeSessionId, type FailureKind } from "../infrastructure/resilience";
+import { initAttemptLog } from "./process-supervisor";
 import { ProviderCapabilityRuntime } from "./provider-capability-runtime";
 
 const RETRYABLE_FAILURES = new Set<FailureKind>([

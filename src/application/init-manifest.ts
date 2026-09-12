@@ -1,9 +1,10 @@
 import { createHash } from "node:crypto";
 import * as path from "node:path";
 import * as fsp from "node:fs/promises";
-import type { RootSet } from "../../root_set";
+import type { RootSet } from "../interfaces/cli/root-set";
 import type { JsonSchema } from "../definitions/json-schema";
 import { createEmptySessionIndexProjection, validateSessionIndexProjectionV4, type SessionIndexProjectionV4 } from "../interfaces/operator/contracts";
+import { resolvePackagedConfigRoot } from "../config/package-config-root";
 
 /** Files copied by the explicit `agent-loop init` transaction. */
 export const INIT_DEFINITION_FILES = [
@@ -197,7 +198,7 @@ export async function validateInitializedRoots(
   if (manifest.productVersion !== productVersion) {
     throw new Error(`Initialization manifest product version ${manifest.productVersion} does not match ${productVersion}.`);
   }
-  const packagedHash = await hashDefinitionFiles(roots.codeRoot);
+  const packagedHash = await hashDefinitionFiles(resolvePackagedConfigRoot(roots.codeRoot));
   if (manifest.definitionSha256 !== packagedHash) {
     throw new Error("Initialization manifest does not match the packaged definitions.");
   }

@@ -17,7 +17,7 @@ import { FileWorkspaceIntegrity } from "../infrastructure/workspace-integrity";
 import { FileRunProjection } from "../interfaces/operator/run-projection";
 import { SupervisedAgentRuntime } from "../runtime/supervised-agent-runtime";
 import { VerificationProcessRuntime } from "../runtime/verification-process-runtime";
-import type { LoopConfig } from "../../runtime_config";
+import type { LoopConfig } from "../config/runtime-config";
 
 export interface ApplicationCompositionOptions {
   dataRoot: string;

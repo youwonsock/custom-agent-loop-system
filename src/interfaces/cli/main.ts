@@ -2,14 +2,14 @@
 import { randomBytes } from "node:crypto";
 import * as path from "node:path";
 import * as fsp from "node:fs/promises";
-import { parseCliArgs, type CliOptions } from "../../../cli_application";
-import { canonicalizeRootSet, resolveRootSet, type RootSet } from "../../../root_set";
-import { loadLoopConfig, type LoopConfig } from "../../../runtime_config";
-import { SessionOwnership } from "../../../resilience";
+import { parseCliArgs, type CliOptions } from "./application";
+import { canonicalizeRootSet, resolveRootSet, type RootSet } from "./root-set";
+import { loadLoopConfig, type LoopConfig } from "../../config/runtime-config";
+import { SessionOwnership } from "../../infrastructure/resilience";
 import { initRunStorage } from "../../infrastructure/run-storage";
 import { FileProjectLease } from "../../infrastructure/file-project-lease";
 import { FileRunRepository } from "../../infrastructure/file-run-repository";
-import { atomicWriteJson, renameWithRetry } from "../../../json_file_store";
+import { atomicWriteJson, renameWithRetry } from "../../infrastructure/json-file-store";
 import {
   INIT_DEFINITION_FILES,
   createInitManifest,
@@ -31,13 +31,14 @@ import { compileWorkflow } from "../../definitions/workflow-compiler";
 import type { AgentRuntimeOverride } from "../../domain/agent";
 import type { DefinitionSourceBundle, HumanGateResponse } from "../../domain/workflow";
 import { discoverAndMergeSessionIndex, discoverProviders } from "../../application/provider-discovery";
+import { resolvePackagedConfigRoot } from "../../config/package-config-root";
 import {
   CORE_CAPABILITIES,
   CORE_PROTOCOL_VERSION,
   CORE_STATE_SCHEMA_VERSION,
-} from "../../../protocol_contract";
+} from "../../protocol/protocol-contract";
 
-const IMPLEMENTATION_VERSION = "7.0.0";
+const IMPLEMENTATION_VERSION = "8.0.0";
 const SECRET_VALUES_ENV = "AGENT_LOOP_SECRET_VALUES";
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/u;
 const UTILITY_PROCESS_ENV = "AGENT_LOOP_UTILITY_PROCESS";
@@ -841,10 +842,11 @@ async function cmdInit(roots: RootSet): Promise<void> {
   // Validate every packaged document before changing user-owned state. Both
   // the schema documents and the definition payloads are held in memory for
   // this pass; no destination file is touched until every check succeeds.
-  const packagedSource = await loadDefinitionSource(roots.codeRoot);
+  const packagedConfigRoot = resolvePackagedConfigRoot(roots.codeRoot);
+  const packagedSource = await loadDefinitionSource(packagedConfigRoot);
   const packagedDocuments = new Map<string, unknown>();
   for (const fileName of INIT_DEFINITION_FILES) {
-    const source = path.join(roots.codeRoot, fileName);
+    const source = path.join(packagedConfigRoot, fileName);
     const stat = await fsp.stat(source);
     if (!stat.isFile()) throw new Error(`Packaged definition is not a file: ${source}`);
     let parsed: unknown;
@@ -864,8 +866,8 @@ async function cmdInit(roots: RootSet): Promise<void> {
   assertJsonSchema(packagedSource.workflow as unknown as JsonValue, schemaFiles.get("workflow.schema.json")!, "workflow.json");
   assertJsonSchema(packagedDocuments.get("loop_config.json") as JsonValue, schemaFiles.get("loop_config.schema.json")!, "loop_config.json");
   compileWorkflow(packagedSource, createDefaultDefinitionRegistries());
-  const packagedHash = await hashDefinitionFiles(roots.codeRoot);
-  const packagedConfig = await loadLoopConfig(roots.codeRoot);
+  const packagedHash = await hashDefinitionFiles(packagedConfigRoot);
+  const packagedConfig = await loadLoopConfig(packagedConfigRoot);
   const indexPath = path.join(roots.dataRoot, packagedConfig.paths.sessionsIndexFileName);
 
   await fsp.mkdir(roots.configRoot, { recursive: true });
@@ -896,7 +898,7 @@ async function cmdInit(roots: RootSet): Promise<void> {
   };
   try {
     for (const fileName of INIT_DEFINITION_FILES) {
-      const source = path.join(roots.codeRoot, fileName);
+      const source = path.join(packagedConfigRoot, fileName);
       const destination = path.join(roots.configRoot, fileName);
       const temporary = `${destination}.tmp.${process.pid}.${Date.now()}.${randomBytes(4).toString("hex")}`;
       temporaryFiles.push(temporary);

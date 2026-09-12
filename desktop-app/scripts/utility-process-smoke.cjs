@@ -20,7 +20,7 @@ async function main() {
   delete environment.NODE_OPTIONS;
   delete environment.ELECTRON_RUN_AS_NODE;
   const child = utilityProcess.fork(
-    path.join(coreRoot, "dist", "loop_orchestrator.js"),
+    path.join(coreRoot, "dist", "entrypoints", "loop-orchestrator.js"),
     ["capabilities", "--code-root", coreRoot, "--config-root", configRoot, "--data-root", dataRoot],
     { stdio: "pipe", env: environment, serviceName: "agent-loop-utility-smoke" }
   );
@@ -50,7 +50,7 @@ async function main() {
         reject(new Error(`Utility process emitted invalid JSON: ${stdout}`));
         return;
       }
-      const required = ["compiled-workflow-bundle-v2", "read-only-projection-v2", "verification-proof-v1", "verification-reapproval-v1", "strict-current-contracts-v1"];
+      const required = ["compiled-workflow-bundle-v2", "read-only-projection-v2", "verification-proof-v1", "verification-reapproval-v1", "strict-current-contracts-v1", "packaged-core-layout-v2"];
       if (payload.protocolVersion !== 3 || payload.stateSchemaVersion !== 2 ||
           required.some((capability) => !payload.capabilities?.includes(capability))) {
         reject(new Error("Utility process capability handshake is incomplete."));

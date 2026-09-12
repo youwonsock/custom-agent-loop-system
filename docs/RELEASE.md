@@ -1,4 +1,4 @@
-# Release and artifact promotion (7.0.0)
+# Release and artifact promotion (8.0.0)
 
 The release pipeline promotes only artifacts that a successful push CI run already built and
 tested. Promotion never runs a build, install, or package command.
@@ -65,7 +65,7 @@ npm run verify:release-bundle -- artifacts/npm
 npm run bundle:desktop-core
 npm --prefix desktop-app ci
 npm --prefix desktop-app run package:portable
-node scripts/package-desktop-artifact.js
+node scripts/package/package-desktop-artifact.js
 npm run verify:desktop
 npm run verify:release-bundle -- artifacts
 ```

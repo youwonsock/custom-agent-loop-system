@@ -4,8 +4,8 @@ import type { RunAggregate } from "../../domain/run-aggregate";
 import type { VerificationContract, VerificationContractDraft } from "../../domain/verification";
 import type { ArtifactStorePort } from "../../application/ports/artifact-store";
 import type { ProjectionPort } from "../../application/ports/projection";
-import { atomicWriteJson, atomicWriteText } from "../../../json_file_store";
-import { withShortFileLock } from "../../../resilience";
+import { atomicWriteJson, atomicWriteText } from "../../infrastructure/json-file-store";
+import { withShortFileLock } from "../../infrastructure/resilience";
 import { validateSessionIndexProjectionV4, type ProviderDiscoveryResultV2 } from "./contracts";
 
 const WINDOWS_RESERVED_NAME = /^(?:CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\..*)?$/iu;

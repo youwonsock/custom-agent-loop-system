@@ -2,7 +2,7 @@ import * as fsp from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { randomBytes } from "node:crypto";
-import { atomicWriteJsonFile } from "../../resilience";
+import { atomicWriteJsonFile } from "./resilience";
 import type { ProjectLease, ProjectLeasePort } from "../application/ports/project-lease-port";
 
 interface LeaseRecord {

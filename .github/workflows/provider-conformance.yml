@@ -80,7 +80,7 @@ jobs:
           PROVIDER_MODEL: ${{ matrix.provider.model }}
           REPORT_PATH: artifacts/conformance/${{ matrix.provider.id }}-${{ runner.os }}-write.json
         run: |
-          node dist/provider_conformance.js \
+          node dist/core/tools/provider-conformance.js \
             --provider "$PROVIDER_ID" \
             --model "$PROVIDER_MODEL" \
             --mode write \
@@ -95,7 +95,7 @@ jobs:
           PROVIDER_MODEL: ${{ matrix.provider.model }}
           REPORT_PATH: artifacts/conformance/${{ matrix.provider.id }}-${{ runner.os }}-read-only.json
         run: |
-          node dist/provider_conformance.js \
+          node dist/core/tools/provider-conformance.js \
             --provider "$PROVIDER_ID" \
             --model "$PROVIDER_MODEL" \
             --mode read-only \
@@ -110,7 +110,7 @@ jobs:
           PROVIDER_MODEL: ${{ matrix.provider.model }}
           REPORT_PATH: artifacts/conformance/${{ matrix.provider.id }}-${{ runner.os }}-tools-none.json
         run: |
-          node dist/provider_conformance.js \
+          node dist/core/tools/provider-conformance.js \
             --provider "$PROVIDER_ID" \
             --model "$PROVIDER_MODEL" \
             --mode tools-none \

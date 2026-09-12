@@ -279,7 +279,7 @@ export function createDefaultSchemaRegistry(): SchemaRegistry {
 
   // v2 task contracts carry the verification draft and feedback explicitly.
   // The v1 registrations above remain available for the stable envelope parser;
-  // the shipped v7 task definitions reference only these v2 contracts, and a
+  // the shipped v8 task definitions reference only these v2 contracts, and a
   // model still cannot manufacture a verification proof.
   registry.register("task_input.produce_plan.v2", inputSchema(["goal", "requirements", "target_project_path"]));
   registry.register("task_input.implement_changes.v2", inputSchema([

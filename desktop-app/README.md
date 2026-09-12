@@ -1,6 +1,6 @@
 # Agent Loop Orchestrator desktop
 
-This package is the Windows 10/11 x64 operator console for Agent Loop Orchestrator 7.0.0.
+This package is the Windows 10/11 x64 operator console for Agent Loop Orchestrator 8.0.0.
 
 The root build stages compiled core JavaScript and definition JSON into `core/`; no root
 `node_modules` are copied. Forge rebuilds `node-pty` for Electron 44 and unpacks its native binary

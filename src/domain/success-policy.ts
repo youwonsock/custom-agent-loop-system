@@ -8,7 +8,7 @@ export class SuccessEligibilityError extends Error {
   }
 }
 
-/** All compiled v7 workflows require the core-owned verification path. */
+/** All compiled v8 workflows require the core-owned verification path. */
 export function requiresCoreVerification(aggregate: Readonly<RunAggregate>): boolean {
   if (typeof aggregate.definition.applicationPolicy.verificationNodeId !== "string" || !aggregate.definition.applicationPolicy.verificationNodeId) {
     throw new SuccessEligibilityError("Compiled workflow is missing the required verification node policy.");

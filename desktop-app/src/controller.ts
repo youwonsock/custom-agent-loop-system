@@ -25,6 +25,7 @@ const HASHED_DEFINITION_FILES = [
   "agents.json", "agents.schema.json", "tasks.json", "tasks.schema.json",
   "workflow.json", "workflow.schema.json", "loop_config.schema.json",
 ] as const;
+const PACKAGED_CONFIG_ROOT = "config";
 
 export interface ControllerEvents {
   state: (snapshot: DesktopSnapshot) => void;
@@ -126,11 +127,11 @@ async function verifyInitManifest(roots: DesktopRoots): Promise<boolean> {
   const parsed = parseObject(raw, INIT_MANIFEST_FILE_NAME);
   if (
     parsed.schemaVersion !== 1 || typeof parsed.productVersion !== "string" ||
-     parsed.productVersion !== "7.0.0" || typeof parsed.definitionSha256 !== "string" ||
+     parsed.productVersion !== "8.0.0" || typeof parsed.definitionSha256 !== "string" ||
      !/^[a-f0-9]{64}$/u.test(parsed.definitionSha256) || parsed.sessionIndexVersion !== 4 ||
      typeof parsed.initAt !== "string" || !Number.isFinite(Date.parse(parsed.initAt))
   ) throw new Error(`Initialization manifest is invalid: ${filePath}`);
-  const packagedHash = await hashDefinitionFiles(roots.codeRoot);
+  const packagedHash = await hashDefinitionFiles(path.join(roots.codeRoot, PACKAGED_CONFIG_ROOT));
   if (parsed.definitionSha256 !== packagedHash) throw new Error("Initialization manifest does not match packaged definitions.");
   const configuredHash = await hashDefinitionFiles(roots.configRoot);
   if (parsed.definitionSha256 !== configuredHash) throw new Error("Initialized definition files do not match the commit manifest.");
@@ -206,6 +207,7 @@ export class DesktopController {
       "verification-proof-v1",
       "verification-reapproval-v1",
       "strict-current-contracts-v1",
+      "packaged-core-layout-v2",
     ];
     const capabilityNames = Array.isArray(handshake.capabilities)
       ? handshake.capabilities.filter((value): value is string => typeof value === "string")
@@ -214,7 +216,7 @@ export class DesktopController {
         !Array.isArray(handshake.capabilities) ||
         capabilityNames.length !== handshake.capabilities.length ||
         requiredCapabilities.some((capability) => !capabilityNames.includes(capability))) {
-      throw new Error("The packaged core does not satisfy protocol v3/state 2 and the strict v7 verification capabilities.");
+      throw new Error("The packaged core does not satisfy protocol v3/state 2 and the strict v8 packaged-core capabilities.");
     }
     const manifestPresent = await verifyInitManifest(this.roots);
     if (!manifestPresent) {

@@ -12,7 +12,7 @@ import {
   recoverClaimedControlRequests,
   type ClaimedControlRequest,
   type ControlRequest,
-} from "../../resilience";
+} from "./resilience";
 
 const SAFE_RUN_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/u;
 

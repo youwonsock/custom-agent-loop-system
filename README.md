@@ -1,7 +1,7 @@
 # Agent Loop Orchestrator
 
 CrewAI의 Agent/Task 분리와 LangGraph의 State/Node/Edge/Reducer/Checkpoint 개념을 참고해,
-외부 프레임워크 없이 구현한 TypeScript 작업 오케스트레이터입니다. v7부터 GUI는 독립 Windows
+외부 프레임워크 없이 구현한 TypeScript 작업 오케스트레이터입니다. v8부터 GUI는 독립 Windows
 Electron 운영 콘솔이며 CLI도 계속 제공합니다. 모든 모델 작업은 하나의
 `AgentTaskRunner`를 통과하고, 코어가 검증한 구조화 결과만 워크플로를 전진시킵니다.
 
@@ -62,14 +62,14 @@ npm run run:desktop
 `agent-loop-orchestrator.exe`를 실행합니다.
 
 앱은 `%APPDATA%\AgentLoopOrchestrator`에 설정을, `%LOCALAPPDATA%\AgentLoopOrchestrator`에
-세션·projection·lease·로그를 저장합니다. v7은 이전 세션을 변환하지 않으며 현재 계약과 맞지 않는 프로필을 자동 수정하거나 삭제하지 않습니다. 설정·인증정보·프로젝트 작업 트리는 보존합니다. 프로필 검증 오류가 발생하면 표시된 config/data 폴더를 직접 확인한 뒤 다시 시작해야 합니다.
+세션·projection·lease·로그를 저장합니다. v8은 이전 세션을 변환하지 않으며 현재 계약과 맞지 않는 프로필을 자동 수정하거나 삭제하지 않습니다. 설정·인증정보·프로젝트 작업 트리는 보존합니다. 프로필 검증 오류가 발생하면 표시된 config/data 폴더를 직접 확인한 뒤 다시 시작해야 합니다.
 
 ```powershell
 npm install
 npm run build
-node dist/loop_orchestrator.js init
+node dist/core/entrypoints/loop-orchestrator.js init
 
-node dist/loop_orchestrator.js run `
+node dist/core/entrypoints/loop-orchestrator.js run `
   --goal "구현 목표" `
   --target "C:\repo\project"
 ```
@@ -77,20 +77,20 @@ node dist/loop_orchestrator.js run `
 주요 명령은 다음과 같습니다.
 
 ```powershell
-node dist/loop_orchestrator.js status --session <run-id> --json
-node dist/loop_orchestrator.js approve-plan --session <run-id> --choice-id <choice-id>
-node dist/loop_orchestrator.js revise-plan --session <run-id> --message "수정 요청"
-node dist/loop_orchestrator.js cancel-plan --session <run-id>
-node dist/loop_orchestrator.js approve-verification --session <run-id> --request-id <request-id> --candidate-hash <sha256>
-node dist/loop_orchestrator.js reject-verification --session <run-id> --request-id <request-id> --candidate-hash <sha256> --message "변경 사유"
-node dist/loop_orchestrator.js resume --session <run-id>
-node dist/loop_orchestrator.js resume --session <run-id> --approve-access
-node dist/loop_orchestrator.js resume --session <run-id> --full-access
-node dist/loop_orchestrator.js set-access --session <run-id> --mode ask
-node dist/loop_orchestrator.js interrupt --session <run-id> --message "중단 사유"
-node dist/loop_orchestrator.js stop --session <run-id>
-node dist/loop_orchestrator.js models --json
-node dist/loop_orchestrator.js capabilities
+node dist/core/entrypoints/loop-orchestrator.js status --session <run-id> --json
+node dist/core/entrypoints/loop-orchestrator.js approve-plan --session <run-id> --choice-id <choice-id>
+node dist/core/entrypoints/loop-orchestrator.js revise-plan --session <run-id> --message "수정 요청"
+node dist/core/entrypoints/loop-orchestrator.js cancel-plan --session <run-id>
+node dist/core/entrypoints/loop-orchestrator.js approve-verification --session <run-id> --request-id <request-id> --candidate-hash <sha256>
+node dist/core/entrypoints/loop-orchestrator.js reject-verification --session <run-id> --request-id <request-id> --candidate-hash <sha256> --message "변경 사유"
+node dist/core/entrypoints/loop-orchestrator.js resume --session <run-id>
+node dist/core/entrypoints/loop-orchestrator.js resume --session <run-id> --approve-access
+node dist/core/entrypoints/loop-orchestrator.js resume --session <run-id> --full-access
+node dist/core/entrypoints/loop-orchestrator.js set-access --session <run-id> --mode ask
+node dist/core/entrypoints/loop-orchestrator.js interrupt --session <run-id> --message "중단 사유"
+node dist/core/entrypoints/loop-orchestrator.js stop --session <run-id>
+node dist/core/entrypoints/loop-orchestrator.js models --json
+node dist/core/entrypoints/loop-orchestrator.js capabilities
 ```
 
 `--full-access`는 현재 OS 사용자 권한으로 provider를 실행하는 명시적 비격리 모드입니다.

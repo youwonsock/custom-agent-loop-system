@@ -5,6 +5,7 @@ node_modules/
 # Compiled output
 dist/
 **/dist/
+.build/
 *.js.map
 *.d.ts
 !desktop-app/src/renderer.d.ts
