@@ -615,7 +615,7 @@ test("model generation timeout keeps its failure kind and reconnects the persist
         "--phase-timeout", "2000",
         "--idle-timeout", "1000",
         "--tool-timeout", "1000",
-        "--transport-timeout", "200",
+        "--transport-timeout", "1000",
         "--phase-recovery-budget", "10000",
         "--max-agent-attempts", "3",
         "--retry-backoff", "10,20",
@@ -683,7 +683,7 @@ test("token-free transient exhaustion schedules recovery without spending interr
         "--phase-timeout", "2000",
         "--idle-timeout", "1000",
         "--tool-timeout", "1000",
-        "--transport-timeout", "200",
+        "--transport-timeout", "1000",
         "--phase-recovery-budget", "10000",
         "--max-agent-attempts", "1",
         "--automatic-recovery-backoff", "10",
@@ -972,6 +972,56 @@ test("STOP cancels a persisted retry backoff before another attempt starts", asy
     assert.equal(state.totalAgentAttempts, 1);
     assert.equal(ack.result, "completed");
     assert.ok(ack.completedAt);
+  } finally {
+    await fsp.rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a non-iteration review cycle pauses at the persisted stage budget and uses explicit role mappings", async () => {
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), "agent-loop-stage-budget-"));
+  try {
+    const pipeline = minimalImplementationPipeline();
+    pipeline.roles.push({ id: "reviewer", modelRole: "qa_lead", description: "Review", instructions: "", provider: "claude", model: "file-default", variant: "high" });
+    pipeline.stages[0].onSuccess = "REVIEW";
+    pipeline.stages.push({ id: "REVIEW", name: "Review", role: "reviewer", kind: "review", instructions: "", onSuccess: "REVIEW", onFailure: "INTERRUPT", countsIteration: false, requiresPlanApproval: false, planOptionsCount: 0 });
+    const pipelinePath = path.join(root, "pipeline.json");
+    await fsp.writeFile(pipelinePath, JSON.stringify(pipeline));
+    const evidence = "[REQUIREMENT_EVIDENCE]\nREQ_ID: REQ-001\nSTATUS: SATISFIED\nEVIDENCE: inspected expected artifact\n[/REQUIREMENT_EVIDENCE]\nAPPROVED: complete\n[PHASE_DONE]";
+    await fsp.writeFile(path.join(root, "run"), [
+      "const fs = require('node:fs'); const path = require('node:path');",
+      "fs.appendFileSync(path.join(__dirname, 'invocations.jsonl'), JSON.stringify({role:process.env.AGENT_LOOP_AGENT_ROLE,args:process.argv.slice(2)})+'\\n');",
+      `console.log(JSON.stringify({type:'text',id:'evidence',part:{id:'result',text:${JSON.stringify(evidence)}}}));`,
+    ].join("\n"));
+    const cli = path.join(__dirname, "loop_orchestrator.js");
+    await execFileAsync(process.execPath, [cli, "run", "--goal", "exercise stage budget", "--root", root, "--target", root, "--session", "cycle", "--binary", process.execPath, "--profile", "opencode", "--pipeline", pipelinePath, "--max-iterations", "1", "--model-mapping", JSON.stringify({ reviewer: "session-model", qa_lead: "inherited-model" }), "--variant-mapping", JSON.stringify({ reviewer: "low" }), "--provider-mapping", JSON.stringify({ reviewer: "opencode" })], root);
+    const statePath = path.join(root, ".goal", "sessions", "cycle", "loop_state.json");
+    const state = JSON.parse(await fsp.readFile(statePath, "utf8"));
+    assert.equal(state.status, "PAUSED");
+    assert.match(state.statusReason, /Total stage execution budget/);
+    assert.equal(state.stageExecutions, 6);
+    assert.equal(state.completedIterations, 1);
+    const historyDir = path.join(root, ".goal", "sessions", "cycle", "loop_history");
+    for (const file of await fsp.readdir(historyDir)) {
+      if (!file.endsWith(".json")) continue;
+      const entry = JSON.parse(await fsp.readFile(path.join(historyDir, file), "utf8"));
+      if (entry.agentRole === "reviewer") assert.equal(entry.model, "opencode:session-model");
+    }
+    const invocations = (await fsp.readFile(path.join(root, "invocations.jsonl"), "utf8")).trim().split("\n").map((line) => JSON.parse(line));
+    const review = invocations.filter((entry) => entry.role === "reviewer");
+    assert.equal(review.length, 5);
+    for (const invocation of review) {
+      assert.equal(invocation.args[invocation.args.indexOf("--model") + 1], "session-model");
+      assert.equal(invocation.args[invocation.args.indexOf("--variant") + 1], "low");
+    }
+    await execFileAsync(process.execPath, [cli, "resume", "--root", root, "--session", "cycle", "--recovery"], root);
+    const automatic = JSON.parse(await fsp.readFile(statePath, "utf8"));
+    assert.equal(automatic.stageExecutionLimit, 6);
+    assert.equal(automatic.stageExecutions, 6);
+    await execFileAsync(process.execPath, [cli, "resume", "--root", root, "--session", "cycle"], root);
+    const manual = JSON.parse(await fsp.readFile(statePath, "utf8"));
+    assert.equal(manual.stageExecutionLimit, 12);
+    assert.equal(manual.stageExecutions, 12);
+    assert.equal(manual.status, "PAUSED");
   } finally {
     await fsp.rm(root, { recursive: true, force: true });
   }

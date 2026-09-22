@@ -845,3 +845,21 @@ test("only manual resume starts a new recovery cycle after an interrupter briefi
   state.interruptBriefing = null;
   assert.equal(shouldStartManualRecoveryCycle(state, false), false);
 });
+
+test("POSIX access checks preserve case, reject sibling roots and ignore web URLs", () => {
+  assert.deepEqual(normalizeAdditionalAllowedPaths(["/tmp/Assets", "/tmp/assets"]), ["/tmp/Assets", "/tmp/assets"]);
+  assert.deepEqual(findAbsolutePathsOutsideAllowedRoots("Read https://example.org/docs then write /tmp/outside/game", "/tmp/project", []), ["/tmp/outside/game"]);
+  assert.deepEqual(findAbsolutePathsOutsideAllowedRoots("Write /tmp/project/file and /tmp/project-extra/file", "/tmp/project", []), ["/tmp/project-extra/file"]);
+});
+
+test("a zero exit code during supervisor termination preserves timeout classification", () => {
+  const timedOut = result("starting remote model stream");
+  timedOut.exitCode = 0;
+  timedOut.timedOut = true;
+  timedOut.outcome = "idle_timeout";
+  timedOut.failureKind = "idle_timeout";
+  timedOut.failureMessage = "No model generation progress";
+  const failure = classifyAgentFailure(timedOut, timedOut.failureMessage);
+  assert.equal(failure.kind, "idle_timeout");
+  assert.equal(failure.retryable, true);
+});

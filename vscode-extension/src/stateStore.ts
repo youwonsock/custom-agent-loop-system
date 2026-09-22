@@ -38,6 +38,7 @@ import {
   evaluateOwnership,
   processLiveness,
 } from "./resilience";
+import { validatePipeline } from "./generated_pipeline";
 import generatedAgentRoles from "./generated_agent_roles.json";
 import generatedAgentLoop from "./generated_agent_loop.json";
 
@@ -48,9 +49,6 @@ export const CORE_SECRET_VALUES_ENV = "AGENT_LOOP_SECRET_VALUES";
 
 const STAGE_EXECUTORS: PipelineStageExecutor[] = [
   "planning", "implementation", "test", "review", "approval", "interrupt",
-];
-const COMPLETION_CONTRACTS: PipelineCompletionContract[] = [
-  "phase_done", "plan_options", "verdict", "approval",
 ];
 
 function completionContractForExecutor(executor: PipelineStageExecutor): PipelineCompletionContract {
@@ -346,27 +344,20 @@ export class StateStore {
 
   async readSystemSettings(): Promise<SystemSettings> {
     const root = await this.getRootDir();
+    return this.withFileLock(path.join(root, "settings_write.lock"), () => this.readSystemSettingsLocked(root));
+  }
+
+  private async readSystemSettingsLocked(root: string): Promise<SystemSettings> {
     const loopConfigPath = path.join(root, "loop_config.json");
     const rolesPath = path.join(root, "agent_roles.json");
     const agentLoopPath = path.join(root, "agent_loop.json");
-    let loopConfig = await this.readJsonAtomic<{
+    const loopConfig = await this.readJsonAtomic<{
       providers?: Record<string, ProviderConfig>;
       toolAccess?: ToolAccessConfig;
     }>(loopConfigPath) ?? {};
-    if (globalContext && hasLiteralMcpCredentials(loopConfig.toolAccess)) {
-      const lockPath = path.join(root, "settings_write.lock");
-      await this.withFileLock(lockPath, async () => {
-        const latest = await this.readJsonAtomic<{
-          providers?: Record<string, ProviderConfig>;
-          toolAccess?: ToolAccessConfig;
-          [key: string]: unknown;
-        }>(loopConfigPath) ?? {};
-        if (latest.toolAccess && hasLiteralMcpCredentials(latest.toolAccess)) {
-          latest.toolAccess = await this.protectMcpCredentials(latest.toolAccess);
-          await this.writeJsonAtomic(loopConfigPath, latest);
-        }
-        loopConfig = latest;
-      });
+    if (globalContext && loopConfig.toolAccess && hasLiteralMcpCredentials(loopConfig.toolAccess)) {
+      loopConfig.toolAccess = await this.protectMcpCredentials(loopConfig.toolAccess);
+      await this.writeJsonAtomic(loopConfigPath, loopConfig);
     }
     const fallbackProviders: Record<string, ProviderConfig> = {
       opencode: { label: "OpenCode", adapter: "opencode", binary: "opencode", enabled: true, modelsArgs: ["models"], fallbackModels: ["opencode/big-pickle"] },
@@ -403,6 +394,7 @@ export class StateStore {
     this.validateSystemSettings(settings);
     const root = await this.getRootDir();
     const rolesPath = path.join(root, "agent_roles.json");
+    const agentLoopPath = path.join(root, "agent_loop.json");
     const loopConfigPath = path.join(root, "loop_config.json");
     const lockPath = path.join(root, "settings_write.lock");
     let removedSecrets = new Set<string>();
@@ -421,6 +413,8 @@ export class StateStore {
         version: 1,
         roles: settings.pipeline.roles,
       });
+      const { roles: _roles, ...loop } = settings.pipeline;
+      await this.writeJsonAtomic(agentLoopPath, { $schema: "./agent_loop.schema.json", ...loop });
     });
     if (globalContext) {
       await Promise.allSettled([...removedSecrets].map((key) => globalContext!.secrets.delete(key)));
@@ -501,6 +495,13 @@ export class StateStore {
       if (!safeId.test(server.id)) throw new Error(`Unsafe MCP server id: ${server.id}`);
       if (mcpIds.has(server.id)) throw new Error(`Duplicate MCP server id: ${server.id}`);
       mcpIds.add(server.id);
+      if (!["local", "remote"].includes(server.type)) throw new Error(`Invalid MCP transport: ${server.type}`);
+      for (const field of ["headers", "environment"] as const) {
+        const values = server[field];
+        if (values !== undefined && (!values || typeof values !== "object" || Array.isArray(values) || Object.values(values).some((value) => typeof value !== "string"))) {
+          throw new Error(`MCP server ${server.id} ${field} must be a JSON object with string values.`);
+        }
+      }
       if (server.type === "local" && !server.command?.trim()) {
         throw new Error(`Local MCP server ${server.id} needs a command.`);
       }
@@ -511,60 +512,10 @@ export class StateStore {
         throw new Error(`MCP server ${server.id} timeout must be positive.`);
       }
     }
-    const pipeline = settings.pipeline;
-    if (pipeline.version !== 1 || pipeline.roles.length === 0 || pipeline.stages.length === 0) {
-      throw new Error("Pipeline version 1 requires at least one role and stage.");
-    }
-    const roleIds = new Set<string>();
-    for (const role of pipeline.roles) {
-      if (!safeId.test(role.id) || roleIds.has(role.id)) throw new Error(`Invalid or duplicate role id: ${role.id}`);
-      roleIds.add(role.id);
-      if (!["planner", "implementer", "tester", "qa_lead", "master", "interrupter"].includes(role.modelRole)) {
-        throw new Error(`Role ${role.id} has an invalid template.`);
-      }
-      if (role.provider && !settings.providers[role.provider]) throw new Error(`Role ${role.id} references unknown provider ${role.provider}.`);
-    }
-    const stageTypeIds = new Set<string>();
-    for (const stageType of pipeline.stageTypes ?? []) {
-      if (!safeId.test(stageType.id) || stageTypeIds.has(stageType.id)) {
-        throw new Error(`Invalid or duplicate stage type id: ${stageType.id}`);
-      }
-      if (!STAGE_EXECUTORS.includes(stageType.executor)) {
-        throw new Error(`Stage type ${stageType.id} has an invalid executor.`);
-      }
-      if (!COMPLETION_CONTRACTS.includes(stageType.completionContract)) {
-        throw new Error(`Stage type ${stageType.id} has an invalid completion contract.`);
-      }
-      const expectedContract = completionContractForExecutor(stageType.executor);
-      if (stageType.completionContract !== expectedContract) {
-        throw new Error(`Stage type ${stageType.id} executor ${stageType.executor} requires ${expectedContract}.`);
-      }
-      if (!stageType.label?.trim()) throw new Error(`Stage type ${stageType.id} needs a label.`);
-      stageTypeIds.add(stageType.id);
-    }
-    const stageIds = new Set<string>();
-    for (const stage of pipeline.stages) {
-      if (!safeId.test(stage.id) || stageIds.has(stage.id)) throw new Error(`Invalid or duplicate stage id: ${stage.id}`);
-      if (!roleIds.has(stage.role)) throw new Error(`Stage ${stage.id} references unknown role ${stage.role}.`);
-      if (!stageTypeIds.has(stage.kind)) throw new Error(`Stage ${stage.id} references unknown stage type ${stage.kind}.`);
-      stageIds.add(stage.id);
-    }
-    for (const required of [pipeline.startStageId, pipeline.interruptStageId, pipeline.reentryStageId, pipeline.iterationCompletionStageId]) {
-      if (!stageIds.has(required)) throw new Error(`Pipeline references unknown required stage ${required}.`);
-    }
-    const interruptStage = pipeline.stages.find((stage) => stage.id === pipeline.interruptStageId);
-    const interruptType = pipeline.stageTypes?.find((stageType) => stageType.id === interruptStage?.kind);
-    if (interruptType?.executor !== "interrupt") {
-      throw new Error("The interrupt stage must use the interrupt kind.");
-    }
-    if (!pipeline.stages.some((stage) => stage.countsIteration)) {
-      throw new Error("At least one stage must count an iteration.");
-    }
-    for (const stage of pipeline.stages) {
-      for (const target of [stage.onSuccess, stage.onFailure]) {
-        if (!stageIds.has(target) && target !== "SUCCESS" && target !== "PAUSED") {
-          throw new Error(`Stage ${stage.id} references unknown transition ${target}.`);
-        }
+    validatePipeline(settings.pipeline);
+    for (const role of settings.pipeline.roles) {
+      if (role.provider && !settings.providers[role.provider]?.enabled) {
+        throw new Error(`Role ${role.id} references a missing or disabled provider ${role.provider}.`);
       }
     }
   }

@@ -282,6 +282,8 @@ export interface LoopState {
   phase: Phase;
   loopCount: number;
   completedIterations: number;
+  stageExecutions?: number;
+  stageExecutionLimit?: number;
   goal: string;
   targetProjectPath: string;
   additionalAllowedPaths: string[];
@@ -407,7 +409,8 @@ export interface SessionBundle {
 
 export type WebviewMessage =
   | { command: "requestState" }
-  | { command: "newSession"; goal: string; targetProjectPath: string; accessMode: AccessMode; modelMapping: Partial<ModelMapping>; providerMapping?: Partial<ProviderMapping>; variantMapping?: Partial<VariantMapping> }
+  | { command: "newSession"; requestId: string; goal: string; targetProjectPath: string; accessMode: AccessMode; modelMapping: Partial<ModelMapping>; providerMapping?: Partial<ProviderMapping>; variantMapping?: Partial<VariantMapping> }
+  | { command: "openPlanReview"; sessionId: string }
   | { command: "resumeSession"; sessionId: string }
   | { command: "resolveAccessRequest"; sessionId: string; decision: "allow_requested" | "full_access" }
   | { command: "setAccessMode"; sessionId: string; accessMode: AccessMode }
@@ -469,6 +472,7 @@ export interface WebviewStatePayload {
   cliProfiles: Record<string, { defaultBinary: string }>;
   systemSettings: SystemSettings;
   runtimeLeaseStatus: string | null;
+  sessionLog: string;
 }
 
 export interface ExtensionConfig {

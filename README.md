@@ -81,10 +81,10 @@ node dist/loop_orchestrator.js models
 
 ## 모델과 도구 설정
 
-확장 Settings는 `Models`, `Stages`, `Tools` 화면으로 나뉩니다.
+확장 Settings는 `Models`, `Roles & Stages`, `Tools` 화면으로 나뉩니다.
 
 - Models: 설치되어 실행 가능한 에이전트 CLI만 공급자로 표시하고, 선택한 CLI가 발견한 모델만 해당 역할의 모델 목록에 표시합니다.
-- Stages: 현재 파일 기반 역할과 단계 구성을 읽기 전용으로 설명합니다.
+- Roles & Stages: 역할 지침, 단계 담당자, 성공·실패 전이와 시작·재진입 지점을 편집합니다. 역할/단계 ID를 바꾸면 연결된 참조도 함께 갱신됩니다.
 - Tools: 모든 역할에 공통으로 적용되는 Web Search와 MCP 연결을 설정합니다.
 
 Codex 모델은 인증된 `codex app-server`의 `model/list`를 페이지 끝까지 조회합니다. 동적 조회가 실패하거나 비어 있을 때만 설정된 fallback 모델을 표시합니다.
@@ -136,3 +136,15 @@ npm run package
 ```
 
 CI는 Windows, Linux, macOS에서 코어 build/typecheck/test, 확장 typecheck/test, 플랫폼별 VSIX 생성과 번들 코어 smoke test를 수행합니다. 별도 Windows coverage job은 line 80%, branch 60%, function 70% 하한을 적용합니다.
+
+### 실행 설정과 한도
+
+- 새 세션의 역할별 모델·공급자·variant 선택은 설정 파일의 역할 기본값보다 우선합니다. 커스텀 역할도 `--model-mapping`, `--provider-mapping`, `--variant-mapping` JSON 옵션으로 지정할 수 있습니다. 빈 모델 값은 해당 공급자의 자동 선택, 빈 variant 값은 공급자 기본값입니다.
+- 실행에 사용하는 최종 매핑과 파이프라인은 세션에 저장됩니다. 기존 세션의 **Session model assignments**는 읽기 전용이며 Resume은 저장된 설정을 사용합니다. 설정 변경은 새 세션에 적용됩니다.
+- 원본 목표의 모든 요구사항과 전체 문장을 보존합니다. 증거 기록을 정리할 때도 각 요구사항의 최신 상태를 유지합니다. 기존의 잘린 요구사항은 재개 시 복원하고, 내용이 달라진 항목의 증거는 다시 검증합니다.
+- 완료된 반복 횟수 외에도 전체 단계 실행을 `maxIterations × 단계 수 × 2`로 제한합니다. 단계 진입 전에 사용량을 저장하므로 검증 단계만 반복하거나 프로세스를 재시작해도 한도를 우회하지 못합니다. 한도 소진 시 `PAUSED`로 멈추며, 수동 Resume은 동일한 크기의 추가 예산을 부여합니다. 자동 복구는 이 예산을 늘리지 않습니다.
+- 모든 단계는 `SUCCESS` 또는 `PAUSED`로 나갈 수 있는 경로가 있어야 합니다. 특정 결과만 반복되어 실제 종료 경로를 타지 않는 경우에는 전체 단계 한도가 작동합니다.
+
+### 화면 동작
+
+처음 열거나 세션이 없을 때 목표 입력 화면을 표시합니다. **New Session**으로 새 작업을 만들 수 있으며, 시작 요청이 실패하면 목표를 보존하고 오류를 표시합니다. 로그는 세션별로 분리하고, 이전 로그를 읽는 동안 자동으로 아래로 스크롤하지 않습니다. 계획 승인이 필요하면 **Review & Approve Plan**에서 해당 세션의 검토 화면을 엽니다. MCP의 환경 변수와 헤더는 문자열 값을 가진 JSON 객체만 저장할 수 있습니다.

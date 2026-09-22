@@ -75,13 +75,13 @@ switch (mode) {
     setTimeout(() => {
       assistant("Long model generation completed.\n[PHASE_DONE]", "delayed-model-text");
       process.exit(0);
-    }, 220);
+    }, 1100);
     break;
   case "continuous-progress": {
     let progress = 0;
     emit({ type: "step_start", id: `continuous-${progress++}`, sessionID: "continuous-session" });
     const timer = setInterval(() => {
-      if (progress >= 5) {
+      if (progress >= 15) {
         clearInterval(timer);
         assistant("Progressive work completed.\n[PHASE_DONE]", "continuous-complete");
         process.exit(0);

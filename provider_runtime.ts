@@ -1,3 +1,4 @@
+import { resolveFileSystemPath } from "./path_utils";
 import * as path from "node:path";
 import { createHash } from "node:crypto";
 
@@ -312,7 +313,7 @@ function opencodeMcpDocument(servers: McpServerConfig[], enabledKey: "enabled" |
 
 function externalDirectoryPermission(paths: readonly string[]): Record<string, "allow"> {
   return Object.fromEntries(paths.map((entry) => {
-    const normalized = path.resolve(entry).replace(/\\/g, "/").replace(/\/+$/, "");
+    const normalized = resolveFileSystemPath(entry).replace(/\\/g, "/").replace(/\/+$/, "");
     return [`${normalized}/**`, "allow" as const];
   }));
 }
@@ -432,7 +433,7 @@ export function buildProviderInvocation(
         opts.readOnly ? "read-only" : opts.fullAccess ? "danger-full-access" : "workspace-write"
       );
       for (const allowedPath of opts.additionalAllowedPaths ?? []) {
-        args.push("--add-dir", path.resolve(allowedPath));
+        args.push("--add-dir", resolveFileSystemPath(allowedPath));
       }
       if (opts.webSearch) {
         if (opts.webSearchMode !== "live") args.push("-c", `web_search=${tomlString("cached")}`);
@@ -449,7 +450,7 @@ export function buildProviderInvocation(
       args = ["-p", opts.prompt, "--output-format", "stream-json", "--verbose", "--model", opts.model];
       if (opts.fullAccess && !opts.readOnly) args.push("--dangerously-skip-permissions");
       for (const allowedPath of opts.additionalAllowedPaths ?? []) {
-        args.push("--add-dir", path.resolve(allowedPath));
+        args.push("--add-dir", resolveFileSystemPath(allowedPath));
       }
       if (opts.readOnly) args.push("--disallowedTools", "Edit,Write,NotebookEdit");
       if (opts.resumeSessionId) args.push("--resume", opts.resumeSessionId);

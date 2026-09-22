@@ -7,7 +7,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/custom-agent-loop/agent-loop-vscode"
+    "url": "https://github.com/youwonsock/custom-agent-loop-system"
   },
   "engines": {
     "vscode": "^1.85.0"
@@ -156,7 +156,7 @@
         "agentLoop.maxIterations": {
           "type": "number",
           "default": 20,
-          "description": "Maximum loop iterations before the session is marked FAILED."
+          "description": "Maximum completed implementation-to-verification cycles before the session pauses for review."
         },
         "agentLoop.phaseTimeoutMs": {
           "type": "number",
@@ -277,14 +277,15 @@
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
     "typecheck": "tsc -p ./ --noEmit",
-    "test": "npm run compile && node --test out/*.test.js",
+    "test": "npm run compile && node --test out/*.test.js test/*.test.cjs",
     "prepack": "npm --prefix .. run build && node ../scripts/bundle-core-for-vsix.js && npm run compile",
     "package": "node ../scripts/package-vsix.js"
   },
   "devDependencies": {
     "@types/node": "^26.6.1",
-    "@types/vscode": "^1.138.0",
+    "@types/vscode": "1.85.0",
     "@vscode/vsce": "^4.0.0",
+    "jsdom": "^26.1.0",
     "typescript": "^7.0.2"
   }
 }

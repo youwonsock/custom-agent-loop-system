@@ -141,3 +141,31 @@ test("invalid transitions are rejected", () => {
   pipeline.stages[0].onSuccess = "MISSING";
   assert.throws(() => validatePipeline(pipeline), /unknown transition target/i);
 });
+
+test("closed stage cycles fail validation while cycles with an exit are allowed", () => {
+  const pipeline = defaultPipelineDefinition();
+  const stage = stageById(pipeline, "VERIFICATION");
+  stage.onSuccess = stage.id;
+  stage.onFailure = stage.id;
+  assert.throws(() => validatePipeline(pipeline), /no path to SUCCESS or PAUSED/);
+  stage.onFailure = "IMPLEMENTATION";
+  assert.doesNotThrow(() => validatePipeline(pipeline));
+});
+
+test("custom role mappings override inherited models and file defaults consistently", async () => {
+  const { resolveRoleExecutionSettings } = await import("./pipeline.js");
+  const role = { id: "security", modelRole: "qa_lead" as const, description: "", instructions: "", provider: "claude", model: "file-model", variant: "high" };
+  const settings = { cliProfile: "opencode", providerMapping: { security: "codex", qa_lead: "opencode" }, modelMapping: { security: "chosen-model", qa_lead: "inherited-model" }, variantMapping: { security: "" } };
+  assert.deepEqual(resolveRoleExecutionSettings(role, settings), { providerId: "codex", model: "chosen-model", variant: "" });
+  assert.equal(resolveRoleExecutionSettings({ ...role, model: undefined }, { ...settings, modelMapping: { qa_lead: "fallback" } }).model, "fallback");
+});
+
+test("stage execution budget persists and bounds a cycle without iteration stages", async () => {
+  const { consumeStageExecutionBudget, stageExecutionBudget } = await import("./pipeline.js");
+  const pipeline = defaultPipelineDefinition();
+  const state = { pipeline, maxIterations: 1, stageExecutions: 0, stageExecutionLimit: stageExecutionBudget(pipeline, 1) };
+  for (let i = 0; i < state.stageExecutionLimit; i++) assert.equal(consumeStageExecutionBudget(state), true);
+  const restored = JSON.parse(JSON.stringify(state));
+  assert.equal(consumeStageExecutionBudget(restored), false);
+  assert.equal(restored.stageExecutions, state.stageExecutionLimit);
+});

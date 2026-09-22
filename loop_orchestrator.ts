@@ -5,6 +5,7 @@ import * as path from "node:path";
 import * as crypto from "node:crypto";
 import { ChildProcessWithoutNullStreams, execFile, spawn } from "node:child_process";
 import * as fse from "fs-extra";
+import { isWindowsAbsolutePath, resolveFileSystemPath } from "./path_utils";
 import {
   AgentAttemptState,
   AttemptFailure,
@@ -49,6 +50,9 @@ import {
   stageById,
   stageTypeForStage,
   validatePipeline,
+  resolveRoleExecutionSettings,
+  stageExecutionBudget,
+  consumeStageExecutionBudget,
 } from "./pipeline";
 import { AgentAttemptRunner } from "./agent_attempt_runner";
 import {
@@ -70,6 +74,7 @@ import {
   evaluateRequirementCoverage,
   latestRequirementStatuses,
   parseRequirementEvidence,
+  retainRequirementEvidence,
 } from "./requirement_ledger";
 import {
   LoopConfig,
@@ -260,6 +265,9 @@ interface LoopState {
   lastFailure: AttemptFailure | null;
   recoveryCount: number;
   totalAgentAttempts: number;
+  executionSettingsVersion?: 1;
+  stageExecutions?: number;
+  stageExecutionLimit?: number;
   statusReason: string | null;
   automaticRecovery: AutomaticRecoveryState | null;
   resilience: ResilienceSettings;
@@ -1198,6 +1206,24 @@ export function normalizeLoopState(raw: LoopState): { state: LoopState; migrated
     state.stageResults = {};
     migrated = true;
   }
+  if (state.executionSettingsVersion !== 1) {
+    // Preserve explicit file defaults from existing session snapshots on migration.
+    for (const role of state.pipeline.roles) {
+      if (role.provider) state.providerMapping[role.id] = role.provider;
+      if (role.model) state.modelMapping[role.id] = role.model;
+      if (role.variant) state.variantMapping[role.id] = role.variant;
+    }
+    state.executionSettingsVersion = 1;
+    migrated = true;
+  }
+  if (!Number.isSafeInteger(state.stageExecutions) || state.stageExecutions! < 0) {
+    state.stageExecutions = 0;
+    migrated = true;
+  }
+  if (!Number.isSafeInteger(state.stageExecutionLimit) || state.stageExecutionLimit! < 1) {
+    state.stageExecutionLimit = stageExecutionBudget(state.pipeline, state.maxIterations);
+    migrated = true;
+  }
   if (
     !state.requirements ||
     state.requirements.version !== 1 ||
@@ -1208,6 +1234,16 @@ export function normalizeLoopState(raw: LoopState): { state: LoopState; migrated
     migrated = true;
   } else if (!Array.isArray(state.requirements.evidence)) {
     state.requirements.evidence = [];
+    migrated = true;
+  }
+  const fullLedger = deriveRequirementLedger(state.goal, state.requirements.derivedAt);
+  if (JSON.stringify(fullLedger.items) !== JSON.stringify(state.requirements.items)) {
+    const unchangedIds = new Set(fullLedger.items.filter((item) =>
+      state.requirements.items.some((old) => old.id === item.id && old.text === item.text)
+    ).map((item) => item.id));
+    state.requirements.items = fullLedger.items;
+    state.requirements.evidence = state.requirements.evidence.filter((record) => unchangedIds.has(record.requirementId));
+    state.convergence = { stagnantCycles: 0, history: [] };
     migrated = true;
   }
   if (
@@ -2043,14 +2079,15 @@ function reusableProviderCatalog(
   return catalog;
 }
 
-function parseJsonRecord(value: string | undefined, option: string): Record<string, string> {
+function parseJsonRecord(value: string | undefined, option: string, allowEmpty = false): Record<string, string> {
   if (!value || value === "true") return {};
   try {
     const parsed = JSON.parse(value) as unknown;
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("expected object");
+    if (Object.values(parsed).some((item) => typeof item !== "string")) throw new Error("expected string values");
     return Object.fromEntries(
       Object.entries(parsed as Record<string, unknown>)
-        .filter(([, item]) => typeof item === "string" && item.trim().length > 0)
+        .filter(([, item]) => typeof item === "string" && (allowEmpty || item.trim().length > 0))
         .map(([key, item]) => [key, String(item)])
     );
   } catch (error) {
@@ -2482,7 +2519,7 @@ function countCompletedWebSearch(result: PtyRunResult): number {
 }
 
 function isAbsoluteFileSystemPath(value: string): boolean {
-  return path.win32.isAbsolute(value) || path.posix.isAbsolute(value);
+  return isWindowsAbsolutePath(value) || path.posix.isAbsolute(value);
 }
 
 function canonicalizeAbsolutePath(value: string): string {
@@ -2490,8 +2527,7 @@ function canonicalizeAbsolutePath(value: string): string {
   if (!trimmed || trimmed.includes("\0") || !isAbsoluteFileSystemPath(trimmed)) {
     throw new Error(`Allowed path must be an absolute filesystem path: ${JSON.stringify(value)}`);
   }
-  const pathApi = path.win32.isAbsolute(trimmed) ? path.win32 : path.posix;
-  return pathApi.resolve(trimmed);
+  return resolveFileSystemPath(trimmed);
 }
 
 export function normalizeAdditionalAllowedPaths(
@@ -2503,14 +2539,14 @@ export function normalizeAdditionalAllowedPaths(
   for (const value of values) {
     const normalized = canonicalizeAbsolutePath(value);
     if (target && pathIsContained(target, normalized)) continue;
-    const key = path.win32.isAbsolute(normalized) ? normalized.toLowerCase() : normalized;
+    const key = isWindowsAbsolutePath(normalized) ? normalized.toLowerCase() : normalized;
     if (!unique.has(key)) unique.set(key, normalized);
   }
   return [...unique.values()];
 }
 
 function pathIsContained(targetProjectPath: string, candidatePath: string): boolean {
-  const useWindowsPaths = path.win32.isAbsolute(targetProjectPath) || path.win32.isAbsolute(candidatePath);
+  const useWindowsPaths = isWindowsAbsolutePath(targetProjectPath) || isWindowsAbsolutePath(candidatePath);
   const pathApi = useWindowsPaths ? path.win32 : path.posix;
   const target = pathApi.resolve(targetProjectPath);
   const candidate = pathApi.resolve(candidatePath);
@@ -2534,14 +2570,14 @@ export function findAbsolutePathsOutsideAllowedRoots(
     canonicalizeAbsolutePath(targetProjectPath),
     ...normalizeAdditionalAllowedPaths(additionalAllowedPaths, targetProjectPath),
   ];
-  const candidates = path.win32.isAbsolute(targetProjectPath)
+  const candidates = isWindowsAbsolutePath(targetProjectPath)
     ? markdown.match(/(?<![A-Za-z])[A-Za-z]:[\\/][^\s`"'<>|*?]+/g) ?? []
-    : markdown.match(/\/(?:[^\s`"'<>|]+\/?)+/g) ?? [];
+    : markdown.match(/(?<![\w:/\\])\/(?!\/)[^\s`"'<>|]+/g) ?? [];
   const unique = new Map<string, string>();
   for (const rawCandidate of candidates) {
     const candidate = rawCandidate.replace(/[\]),.;:]+$/g, "");
     if (!candidate || !allowedRoots.some((root) => pathIsContained(root, candidate))) {
-      const key = path.win32.isAbsolute(candidate) ? candidate.toLowerCase() : candidate;
+      const key = isWindowsAbsolutePath(candidate) ? candidate.toLowerCase() : candidate;
       if (candidate) unique.set(key, candidate);
     }
   }
@@ -2614,6 +2650,10 @@ export function classifyAgentFailure(result: PtyRunResult, completionReason: str
   const combined = `${result.failureMessage ?? ""}\n${result.assistantText ?? ""}\n${result.output}`.toLowerCase();
   let kind: FailureKind = result.failureKind ?? "unknown";
   let retryable = true;
+  // Unix PTYs can report exitCode=0 after we terminate a timed-out process.
+  // Preserve the supervisor outcome so retries can reconnect the same CLI session.
+  const cleanExit = result.exitCode === 0 && !result.timedOut &&
+    (!result.outcome || result.outcome === "succeeded") && !result.failureKind;
   if (result.cancelled) {
     kind = "cancelled";
     retryable = false;
@@ -2625,11 +2665,11 @@ export function classifyAgentFailure(result: PtyRunResult, completionReason: str
     retryable = false;
   } else if (
     completionReason?.startsWith("This read-only role emitted a file mutation event") &&
-    result.exitCode === 0
+    cleanExit
   ) {
     kind = "role_violation";
     retryable = false;
-  } else if (completionReason && result.exitCode === 0) {
+  } else if (completionReason && cleanExit) {
     kind = "incomplete_response";
   } else if (kind === "unknown" || kind === "process_exit") {
     if (
@@ -3337,6 +3377,7 @@ Options for 'run':
   --master-model <m>         Model for master agent
   --interrupter-model <m>    Model for interrupter agent
   --model-mapping <json>     Arbitrary pipeline role-to-model mapping
+  --variant-mapping <json>   Arbitrary pipeline role-to-variant mapping (empty = default)
   --provider-mapping <json>  Arbitrary pipeline role-to-provider mapping
   --roles <path>             Agent role definition file (default: <root>/agent_roles.json)
   --loop <path>              Loop graph definition file (default: <root>/agent_loop.json)
@@ -3511,6 +3552,16 @@ class LoopOrchestrator {
         return;
       }
 
+      if (!consumeStageExecutionBudget(this.state)) {
+        this.state.status = LoopStatus.PAUSED;
+        this.state.statusReason = `Total stage execution budget (${this.state.stageExecutionLimit}) exhausted. Review the pipeline transitions before manually resuming.`;
+        await this.appendProgressNote(`[Loop ${this.state.loopCount}] PAUSED: ${this.state.statusReason}`);
+        await this.saveState();
+        await this.saveRegistry();
+        return;
+      }
+      // Persist before invoking the stage so restarting cannot bypass this budget.
+      await this.saveState();
       try {
         const currentStageType = stageTypeForStage(this.state.pipeline, currentStage);
         switch (currentStageType.executor) {
@@ -4414,24 +4465,12 @@ class LoopOrchestrator {
   ): Promise<PtyRunResult> {
     const pipelineRole = this.state.pipeline.roles.find((candidate) => candidate.id === role);
     const readOnlyRole = isReadOnlyModelRole(modelRole);
-    const providerId =
-      pipelineRole?.provider ??
-      this.state.providerMapping?.[role] ??
-      this.state.providerMapping?.[modelRole] ??
-      this.state.cliProfile;
+    const { providerId, model, variant } = resolveRoleExecutionSettings(
+      pipelineRole ?? { id: role, modelRole, description: "", instructions: "" }, this.state
+    );
     const provider = this.state.providerConfigs?.[providerId] ?? loopConfig.providers[providerId];
     if (!provider) throw new Error(`No provider configured for role ${role}: ${providerId}`);
     if (!provider.enabled) throw new Error(`Provider ${providerId} configured for role ${role} is disabled.`);
-    const model =
-      pipelineRole?.model ??
-      this.state.modelMapping[modelRole] ??
-      this.state.modelMapping[role];
-    if (!model) throw new Error(`No model configured for role ${role} (modelRole=${modelRole}).`);
-    const variant =
-      pipelineRole?.variant ||
-      this.state.variantMapping?.[role] ||
-      this.state.variantMapping?.[modelRole] ||
-      undefined;
     const maxAttempts =
       maxAttemptsOverride ??
       (stageType.executor === "interrupt" ? 1 : this.state.resilience.maxAgentAttempts);
@@ -4916,12 +4955,11 @@ class LoopOrchestrator {
       agentRole: role,
       model: (() => {
         const pipelineRole = this.state.pipeline.roles.find((candidate) => candidate.id === role);
-        const providerId = pipelineRole?.provider
-          ?? this.state.providerMapping?.[role]
-          ?? this.state.providerMapping?.[pipelineRole?.modelRole ?? role]
-          ?? this.state.cliProfile;
-        const model = pipelineRole?.model ?? this.state.modelMapping[pipelineRole?.modelRole ?? role] ?? "unknown";
-        return `${providerId}:${model}`;
+        if (pipelineRole) {
+          const { providerId, model } = resolveRoleExecutionSettings(pipelineRole, this.state);
+          return `${providerId}:${model}`;
+        }
+        return `${this.state.providerMapping?.[role] ?? this.state.cliProfile}:${this.state.modelMapping[role] ?? "unknown"}`;
       })(),
       exitCode: result.exitCode,
       startedAt: startedAt.toISOString(),
@@ -5024,10 +5062,10 @@ class LoopOrchestrator {
         recordedAt: new Date().toISOString(),
       }));
     if (requirementEvidence.length > 0) {
-      this.state.requirements.evidence = [
+      this.state.requirements.evidence = retainRequirementEvidence([
         ...this.state.requirements.evidence,
         ...requirementEvidence,
-      ].slice(-200);
+      ]);
     }
     if (stage.id === this.state.pipeline.iterationCompletionStageId) {
       this.state.completedIterations++;
@@ -5184,6 +5222,9 @@ function createDefaultLoopState(
     lastFailure: null,
     recoveryCount: 0,
     totalAgentAttempts: 0,
+    executionSettingsVersion: 1,
+    stageExecutions: 0,
+    stageExecutionLimit: stageExecutionBudget(pipeline, maxIterations),
     statusReason: null,
     automaticRecovery: null,
     resilience: resilienceSettingsFromConfig(),
@@ -5272,7 +5313,7 @@ function alignAutomaticModelsWithProviders(
 }
 
 function resolveVariantMapping(parsed: Record<string, string>): VariantMapping {
-  const mapping: VariantMapping = {};
+  const mapping: VariantMapping = parseJsonRecord(parsed["variant-mapping"], "--variant-mapping", true);
   const roleToFlag: Record<string, AgentRole> = {
     "planner-variant": "planner",
     "implementer-variant": "implementer",
@@ -5481,12 +5522,6 @@ async function cmdRun(parsed: Record<string, string>, rootDir: string): Promise<
   alignAutomaticModelsWithProviders(parsed, modelMapping, providerMapping, providerCatalog);
   const variantMapping = resolveVariantMapping(parsed);
 
-  console.log(`[orchestrator] Model mapping:`);
-  for (const [role, model] of Object.entries(modelMapping)) {
-    const vrnt = variantMapping[role as AgentRole] || "(default)";
-    console.log(`  ${role}: ${providerMapping[role] ?? defaultProviderId}/${model} (variant: ${vrnt})`);
-  }
-
   const modelVariantsConfig = await loadModelVariantsConfig(rootDir);
   if (modelVariantsConfig) {
     reg = await mergeAndWriteRegistryFields(registryPath, reg, {
@@ -5536,17 +5571,29 @@ async function cmdRun(parsed: Record<string, string>, rootDir: string): Promise<
   const loopGraphConfigPath = explicitLoopPath ?? path.join(rootDir, "agent_loop.json");
   const pipeline = pipelineConfigPath
     ? await loadPipelineDefinition(pipelineConfigPath)
-    : await loadSeparatedPipelineDefinition(rolesConfigPath, loopGraphConfigPath);
+    : await withShortFileLock(path.join(rootDir, "settings_write.lock"), () => loadSeparatedPipelineDefinition(rolesConfigPath, loopGraphConfigPath));
+  const explicitModels = parseJsonRecord(parsed["model-mapping"], "--model-mapping", true);
+  const explicitProviders = parseJsonRecord(parsed["provider-mapping"], "--provider-mapping");
   for (const role of pipeline.roles) {
-    providerMapping[role.id] = role.provider
-      ?? providerMapping[role.id]
-      ?? providerMapping[role.modelRole]
-      ?? defaultProviderId;
-    if (!modelMapping[role.id]) {
-      modelMapping[role.id] = role.model
-        ?? providerCatalog[providerMapping[role.id]]?.models[0]
-        ?? modelMapping[role.modelRole];
-    }
+    const flagRole = role.id === "qa_lead" ? "qa" : role.id;
+    const inheritedFlagRole = role.modelRole === "qa_lead" ? "qa" : role.modelRole;
+    const providerId = explicitProviders[role.id] || parsed[`${flagRole}-provider`]
+      || role.provider || providerMapping[role.modelRole] || defaultProviderId;
+    if (!providers[providerId]?.enabled) throw new Error(`Provider '${providerId}' for role '${role.id}' is missing or disabled.`);
+    const hasSessionModel = Object.prototype.hasOwnProperty.call(explicitModels, role.id);
+    const inheritedModel = !hasSessionModel && providerId === providerMapping[role.modelRole]
+      ? explicitModels[role.modelRole] || parsed[`${inheritedFlagRole}-model`]
+      : undefined;
+    const fileModel = !hasSessionModel && (!role.provider || role.provider === providerId) ? role.model : undefined;
+    const model = explicitModels[role.id] || parsed[`${flagRole}-model`] || fileModel
+      || inheritedModel || providerCatalog[providerId]?.models[0]
+      || (providerId === providerMapping[role.modelRole] ? modelMapping[role.modelRole] : undefined);
+    if (!model) throw new Error(`No model available for provider '${providerId}' on role '${role.id}'. Specify --model-mapping explicitly.`);
+    const variant = variantMapping[role.id] ?? role.variant ?? variantMapping[role.modelRole];
+    providerMapping[role.id] = providerId;
+    modelMapping[role.id] = model;
+    if (variant !== undefined) variantMapping[role.id] = variant;
+    console.log(`[orchestrator] ${role.id}: ${providerId} / ${model} / ${variant || "(default)"}`);
   }
   console.log(
     `[orchestrator] Pipeline '${pipeline.name}' with ${pipeline.stages.length} stages and ${pipeline.roles.length} roles.`
@@ -5772,6 +5819,9 @@ async function cmdResume(parsed: Record<string, string>, rootDir: string): Promi
       LoopStatus.BLOCKED,
     ]);
     if (resumableStatuses.has(state.status)) {
+      if (!recoveryResume && state.stageExecutions! >= state.stageExecutionLimit!) {
+        state.stageExecutionLimit = state.stageExecutions! + stageExecutionBudget(state.pipeline, state.maxIterations);
+      }
       const scheduledAutomaticRecovery =
         recoveryResume && state.status === LoopStatus.RECOVERING;
       state.status = LoopStatus.RUNNING;
@@ -5929,10 +5979,7 @@ Output the full revised plan as markdown only. Do not include the original promp
     state.pipeline.stages.find((stage) => executorForStage(state.pipeline, stage) === "planning") ??
     stageById(state.pipeline, state.pipeline.startStageId);
   const planningRole = roleForStage(state.pipeline, planningStage);
-  const providerId = planningRole.provider
-    ?? state.providerMapping?.[planningRole.id]
-    ?? state.providerMapping?.[planningRole.modelRole]
-    ?? state.cliProfile;
+  const { providerId, model, variant } = resolveRoleExecutionSettings(planningRole, state);
   const provider = state.providerConfigs?.[providerId] ?? loopConfig.providers[providerId];
   if (!provider?.enabled) throw new Error(`Planner provider '${providerId}' is missing or disabled.`);
   const mcpServers = enabledMcpServers(state.toolAccess);
@@ -5945,11 +5992,11 @@ Output the full revised plan as markdown only. Do not include the original promp
     await atomicWriteSensitiveJson(claudeMcpConfigPath, claudeMcpDocument(runtimeMcpServers));
   }
   const invocation = buildProviderInvocation(provider, {
-    model: planningRole.model ?? state.modelMapping[planningRole.modelRole],
+    model,
     targetProjectPath: state.targetProjectPath,
     additionalAllowedPaths: state.additionalAllowedPaths,
     prompt,
-    variant: planningRole.variant ?? state.variantMapping?.[planningRole.modelRole],
+    variant,
     fullAccess: state.accessMode === "full_access",
     readOnly: true,
     webSearch: state.toolAccess.webSearch.enabled,

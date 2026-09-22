@@ -19,7 +19,16 @@
     runtimeLeaseStatus: null,
   };
 
-  let logBuffer = "";
+  const sessionLogs = new Map();
+  const logScroll = new Map();
+  let renderedSessionId = null;
+  let logVersion = 0;
+  let pendingStart = null;
+  let composerError = "";
+  let settingsError = "";
+  let settingsSaving = false;
+  let settingsNotice = "";
+  const invalidMcpFields = new Map();
   const maxLogSize = 100000;
 
   let agentRoles = ["planner", "implementer", "tester", "qa_lead", "master", "interrupter"];
@@ -65,7 +74,6 @@
   let deferredRenderTimer = null;
   let lastStateSig = "";
 
-  let prevSelectedSessionId = null;
 
   function stateSignature() {
     const st = state.state;
@@ -128,6 +136,7 @@
       modelVariants: state.modelVariants,
       variantDefaults: state.variantDefaults,
       runtimeLeaseStatus: state.runtimeLeaseStatus,
+      logVersion,
       cliProfiles: state.cliProfiles,
       systemSettings: state.systemSettings,
       modelSelections,
@@ -140,14 +149,15 @@
     const root = document.getElementById("root");
     if (!root) return;
 
-    const hasRegistry = !!state.registry;
     const hasSession = !!state.selectedSessionId || (state.registry?.sessionMetas?.length ?? 0) > 0;
 
     if (settingsOpen) {
       renderSettings(root);
       return;
     }
-    if (composingNew || (!hasRegistry && !hasSession)) {
+    const roles = (!composingNew && state.state?.pipeline?.roles) || state.systemSettings?.pipeline?.roles || [];
+    if (roles.length) agentRoles = roles.map((role) => role.id);
+    if (composingNew || !hasSession) {
       renderEmpty(root);
       return;
     }
@@ -249,11 +259,11 @@
   function buildVariantSelect(role, currentModel) {
     const variants = getModelVariants(currentModel);
     if (variants.length === 0) return "";
-    const current = variantSelections[role] || state.state?.variantMapping?.[role] || "";
+    const current = variantSelections[role] ?? state.systemSettings?.pipeline?.roles?.find((item) => item.id === role)?.variant ?? "";
     const options = variants.map(function (v) {
       return "<option value=\"" + escapeHtml(v) + "\"" + (v === current ? " selected" : "") + ">" + escapeHtml(v) + "</option>";
     }).join("");
-    return "<select data-role=\"" + escapeHtml(role) + "\" data-field=\"variant\" class=\"model-select variant-select\">" +
+    return "<select data-role=\"" + escapeHtml(role) + "\" data-field=\"variant\" class=\"model-select variant-select\" aria-label=\"Variant for " + escapeHtml(role) + "\">" +
       "<option value=\"\">(default)</option>" +
       options +
       "</select>";
@@ -262,7 +272,14 @@
   function buildModelGrid(st) {
     return agentRoles
       .map((role) => {
-        const roleConfig = state.systemSettings?.pipeline?.roles?.find((item) => item.id === role);
+        const roleConfig = (st?.pipeline?.roles || state.systemSettings?.pipeline?.roles)?.find((item) => item.id === role);
+        const label = agentRoleLabels[role] || role;
+        if (st) {
+          const provider = st.providerMapping?.[role] ?? roleConfig?.provider ?? st.providerMapping?.[roleConfig?.modelRole] ?? st.cliProfile;
+          const model = st.modelMapping?.[role] ?? roleConfig?.model ?? st.modelMapping?.[roleConfig?.modelRole] ?? "(unset)";
+          const variant = st.variantMapping?.[role] ?? roleConfig?.variant ?? st.variantMapping?.[roleConfig?.modelRole] ?? "(default)";
+          return `<div class="model-row model-readonly"><span class="model-role" title="${escapeHtml(roleConfig?.description)}">${escapeHtml(label)}</span><span>${escapeHtml(provider)}</span><span>${escapeHtml(model)}</span><span>${escapeHtml(variant || "(default)")}</span></div>`;
+        }
         const requestedProvider = Object.prototype.hasOwnProperty.call(providerSelections, role)
           ? providerSelections[role]
           : st?.providerMapping?.[role] || roleConfig?.provider || defaultProviderId();
@@ -274,10 +291,9 @@
         const current = requestedProvider === provider && providerModels.includes(configuredModel)
           ? configuredModel
           : "";
-        const label = agentRoleLabels[role] || role;
         return `
           <div class="model-row">
-            <label class="model-role">${escapeHtml(label)}</label>
+            <label class="model-role" title="${escapeHtml(roleConfig?.description)}">${escapeHtml(label)}</label>
             <select data-role="${escapeHtml(role)}" data-field="provider" class="model-select provider-select" aria-label="${escapeHtml(label)} provider" title="Installed agent CLI / model provider">
               ${buildProviderOptions(provider)}
             </select>
@@ -328,19 +344,20 @@
     const wrapClass = compact ? "composer composer-bar" : "composer composer-large";
     const textareaClass = compact ? "composer-goal" : "composer-goal composer-goal-large";
     const rows = compact ? 2 : 4;
-    const cancelBtn = composingNew ? `<button class="btn secondary" id="composer-cancel">Cancel</button>` : "";
+    const cancelBtn = composingNew && !pendingStart ? `<button class="btn secondary" id="composer-cancel">Cancel</button>` : "";
     const targetPlaceholder = composerTargetDefault() ? "" : "Target project path (current workspace)";
     const hasInstalledProvider = availableProviders().length > 0;
     return `
       <div class="${wrapClass}" id="composer">
-        <textarea id="composer-goal" class="${textareaClass}" rows="${rows}" placeholder="Describe the goal for the agent loop to achieve... (Ctrl+Enter to start)">${goalVal}</textarea>
+        ${composerError ? `<p class="form-error" role="alert">${escapeHtml(composerError)}</p>` : ""}
+        <textarea ${pendingStart ? "disabled" : ""} id="composer-goal" class="${textareaClass}" rows="${rows}" placeholder="Describe the goal for the agent loop to achieve... (Ctrl+Enter to start)">${goalVal}</textarea>
         <div class="composer-meta">
-          <input type="text" id="composer-target" class="composer-input" placeholder="${targetPlaceholder}" value="${targetVal}" title="Target project path where agents will modify and test code. Defaults to the current workspace folder." />
-          <select id="composer-access-mode" class="composer-input composer-input-sm" title="Filesystem access mode">
+          <input ${pendingStart ? "disabled" : ""} type="text" id="composer-target" class="composer-input" placeholder="${targetPlaceholder}" value="${targetVal}" title="Target project path where agents will modify and test code. Defaults to the current workspace folder." />
+          <select ${pendingStart ? "disabled" : ""} id="composer-access-mode" class="composer-input composer-input-sm" title="Filesystem access mode">
             <option value="ask"${composerAccessMode === "ask" ? " selected" : ""}>Ask when needed</option>
             <option value="full_access"${composerAccessMode === "full_access" ? " selected" : ""}>Full access</option>
           </select>
-          <button class="btn" id="composer-start" ${hasInstalledProvider ? "" : "disabled"} title="${hasInstalledProvider ? "Start the agent loop" : "Discover and install at least one supported provider first"}">Start Session</button>
+          <button class="btn" id="composer-start" ${hasInstalledProvider && !pendingStart ? "" : "disabled"} title="${hasInstalledProvider ? "Start the agent loop" : "Discover and install at least one supported provider first"}">${pendingStart ? "Starting…" : "Start Session"}</button>
           ${cancelBtn}
         </div>
       </div>`;
@@ -367,7 +384,7 @@
           <div class="model-grid">${modelGrid}</div>
           <div class="composer-actions">
             <button class="btn secondary" id="btn-discover">Discover Models</button>
-            <button class="btn secondary" id="btn-settings">Models & Tools</button>
+            <button class="btn secondary" id="btn-settings">Settings</button>
             <span class="composer-hint">${state.registry?.modelsDiscoveredAt ? "Last discovered: " + escapeHtml(formatDate(state.registry.modelsDiscoveredAt)) : "No models discovered yet."}</span>
           </div>
         </div>
@@ -435,6 +452,7 @@
         <div class="status-row"><span class="label">Lease</span><span class="value">${escapeHtml(state.runtimeLeaseStatus || "none")}</span></div>
         <div class="status-row"><span class="label">Phase</span><span class="value">${escapeHtml(st.phase)}</span></div>
         <div class="status-row"><span class="label">Role</span><span class="value">${escapeHtml(stageDefinition?.role || "unknown")}</span></div>
+        ${st.stageExecutionLimit ? `<div class="status-row"><span class="label">Stage budget</span><span class="value">${st.stageExecutions || 0} / ${st.stageExecutionLimit}</span></div>` : ""}
         <div class="status-row"><span class="label">Loop</span><span class="value">${st.loopCount} started · ${st.completedIterations ?? 0} completed / ${st.maxIterations}</span></div>
         ${requirementItems.length > 0 ? `<div class="status-row"><span class="label">Requirements</span><span class="value">${satisfiedRequirements} satisfied · ${unresolvedRequirements} unresolved / ${requirementItems.length}</span></div>` : ""}
         ${st.convergence?.stagnantCycles ? `<div class="status-row"><span class="label">Stagnation</span><span class="value">${st.convergence.stagnantCycles} non-improving cycle(s)</span></div>` : ""}
@@ -513,9 +531,7 @@
       ? escapeHtml(state.progressNotes)
       : '<span class="notes-empty">(no notes yet)</span>';
 
-    const logContent = logBuffer
-      ? `<div class="log-content">${escapeHtml(logBuffer)}</div>`
-      : '<div class="log-empty">(no log output yet)</div>';
+    const logContent = `<div class="log-content" role="log" aria-label="Session log">${escapeHtml(sessionLogs.get(state.selectedSessionId) || "")}</div>`;
 
     const canResume = st && ["PAUSED", "WAITING_USER", "RECOVERING", "STOPPED", "BLOCKED"].includes(st.status) &&
       !st.pendingAccessRequest && !(st.awaitingPlanApproval && !st.planApproved);
@@ -523,7 +539,8 @@
     root.innerHTML = `
       ${summaryBanner}
       <div class="toolbar">
-        <select id="session-select">${sessionOptions}</select>
+        <button class="btn" id="btn-new-session">New Session</button>
+        <select id="session-select" aria-label="Session">${sessionOptions}</select>
         <button class="btn secondary" id="btn-resume" ${canResume ? "" : "disabled"}>Resume</button>
         <button class="btn danger" id="btn-stop" ${(isStopping || !canStop) ? "disabled" : ""}>${isStopping ? "Terminating..." : st?.status === "RECOVERING" ? "Cancel Recovery" : "Stop"}</button>
         <button class="btn danger" id="btn-delete" ${!state.selectedSessionId ? "disabled" : ""} title="Delete this session and all its data">Delete</button>
@@ -537,12 +554,13 @@
           <h3>Status</h3>
           ${statusRows}
           ${accessEditor}
+          ${st?.awaitingPlanApproval ? `<button class="btn" id="btn-plan-review">Review &amp; Approve Plan</button>` : ""}
         </div>
-        <div class="card model-card">
-          <h3>Model Mapping (${(state.registry?.availableModels || []).length} models${state.registry?.modelsDiscoveredCli ? ` from <span class="model-source">${escapeHtml(state.registry.modelsDiscoveredCli)}</span>` : " — not yet discovered"})</h3>
-          ${buildApplyAllHtml()}
+        <details class="card model-card">
+          <summary>Session model assignments</summary>
+          <p class="composer-hint">Saved for this session. Choose different models when starting a new session.</p>
           <div class="model-grid">${modelGrid}</div>
-        </div>
+        </details>
         <div class="card notes-card">
           <h3>Progress Notes (Rolling Summary)${isStopping ? '<span class="pending-indicator"> \u2014 terminating agent now\u2026</span>' : ""}</h3>
           <div class="notes-content">${notesContent}</div>
@@ -560,10 +578,17 @@
 
     bindToolbar();
     bindModelSelects();
-    scrollLogToBottom();
+    const logEl = document.querySelector(".log-content");
+    const previousScroll = logScroll.get(state.selectedSessionId);
+    if (logEl) logEl.scrollTop = previousScroll?.follow === false ? previousScroll.top : logEl.scrollHeight;
+    renderedSessionId = state.selectedSessionId;
   }
 
   function bindToolbar() {
+    const newSession = document.getElementById("btn-new-session");
+    if (newSession) newSession.onclick = () => { composingNew = true; modelSelections = {}; providerSelections = {}; variantSelections = {}; lastStateSig = ""; render(); focusComposer(); };
+    const planReview = document.getElementById("btn-plan-review");
+    if (planReview) planReview.onclick = () => vscode.postMessage({ command: "openPlanReview", sessionId: state.selectedSessionId });
     const sessionSelect = document.getElementById("session-select");
     const btnResume = document.getElementById("btn-resume");
     const btnStop = document.getElementById("btn-stop");
@@ -645,7 +670,7 @@
           providerSelections[role] = e.target.value;
           modelSelections[role] = "";
           variantSelections[role] = "";
-          requestRender();
+          tryRender();
         } else if (e.target.dataset.field === "variant") {
           if (role === "apply-all") {
             const val = e.target.value;
@@ -658,7 +683,7 @@
           } else {
             variantSelections[role] = e.target.value;
           }
-          requestRender();
+          tryRender();
         } else if (e.target.dataset.field === "model") {
           var oldModel = modelSelections[role] || "";
           var newModel = e.target.value;
@@ -666,7 +691,7 @@
           var newVariants = getModelVariants(newModel);
           modelSelections[role] = newModel;
           variantSelections[role] = mapVariantByIndex(variantSelections[role], oldVariants, newVariants);
-          requestRender();
+          tryRender();
         }
       };
     });
@@ -677,7 +702,7 @@
         modelSelections[role] = "";
         variantSelections[role] = "";
       }
-      requestRender();
+      tryRender();
     };
     const applyAll = document.getElementById("apply-all-model");
     if (applyAll) applyAll.onchange = (e) => {
@@ -696,7 +721,7 @@
       document.querySelectorAll("select[data-role][data-field='variant']").forEach((sel) => {
         sel.value = "";
       });
-      requestRender();
+      tryRender();
     };
   }
 
@@ -752,35 +777,26 @@
 
   function sendNewSession() {
     const goal = composerGoal;
-    if (!goal || goal.trim().length === 0) return;
-    const fallbackProvider = defaultProviderId();
-    if (!fallbackProvider) {
-      vscode.postMessage({ command: "discoverModels" });
-      return;
-    }
-    const mapping = {};
-    const providerMapping = {};
+    if (pendingStart || !goal || !goal.trim()) return;
+    if (!defaultProviderId()) { vscode.postMessage({ command: "discoverModels" }); return; }
+    const mapping = {}, providerMapping = {}, variantMapping = {};
+    // Read exactly the values displayed, including defaults from role settings.
     for (const role of agentRoles) {
-      if (modelSelections[role]) mapping[role] = modelSelections[role];
-      providerMapping[role] = resolveProviderId(providerSelections[role] || fallbackProvider);
+      const controls = [...document.querySelectorAll("select[data-role]")].filter((el) => el.dataset.role === role);
+      mapping[role] = controls.find((el) => el.dataset.field === "model")?.value || "";
+      providerMapping[role] = controls.find((el) => el.dataset.field === "provider")?.value || "";
+      variantMapping[role] = controls.find((el) => el.dataset.field === "variant")?.value || "";
     }
-    const variantMapping = {};
-    for (const role of agentRoles) {
-      if (variantSelections[role]) variantMapping[role] = variantSelections[role];
-    }
+    composingNew = true;
+    pendingStart = `start-${Date.now()}`;
+    composerError = "";
     vscode.postMessage({
-      command: "newSession",
-      goal: goal.trim(),
+      command: "newSession", requestId: pendingStart, goal: goal.trim(),
       targetProjectPath: (composerTarget || composerTargetDefault()).trim(),
       accessMode: composerAccessMode === "full_access" ? "full_access" : "ask",
-      modelMapping: mapping,
-      providerMapping: providerMapping,
-      variantMapping: variantMapping,
+      modelMapping: mapping, providerMapping, variantMapping,
     });
-    composingNew = false;
-    composerGoal = "";
-    const goalEl = document.getElementById("composer-goal");
-    if (goalEl) goalEl.value = "";
+    render();
   }
 
   function cloneSettings(value) {
@@ -789,6 +805,7 @@
 
   function openSettings() {
     settingsDraft = cloneSettings(state.systemSettings);
+    settingsError = ""; settingsNotice = ""; invalidMcpFields.clear();
     settingsOpen = true;
     settingsSection = "models";
     lastStateSig = "";
@@ -867,7 +884,7 @@
         </div>`;
     }).join("");
 
-    const settingsContent = settingsSection === "models"
+    const settingsContent = settingsSection === "stages" ? pipelineEditorHtml(pipeline) : settingsSection === "models"
       ? `<div class="card settings-section-card" data-settings-section="models">
           <h3>Model providers / agent CLIs</h3>
           <p class="composer-hint">Each provider is the installed agent CLI that discovers and runs its own models.</p>
@@ -886,12 +903,17 @@
 
     root.innerHTML = `
       <div class="settings-page">
-        <div class="toolbar sticky-toolbar"><button class="btn secondary" id="settings-back">Back</button><h2>Agent Loop Settings</h2><button class="btn" id="settings-save">Save Settings</button></div>
+        <div class="toolbar sticky-toolbar"><button class="btn secondary" id="settings-back" ${settingsSaving ? "disabled" : ""}>Back</button><h2>Agent Loop Settings</h2><button class="btn" id="settings-save" ${settingsSaving ? "disabled" : ""}>${settingsSaving ? "Saving…" : "Save Settings"}</button></div>
+        <p id="settings-error" class="form-error" role="alert">${escapeHtml(settingsError)}</p>
+        <p role="status" class="composer-hint">${escapeHtml(settingsNotice)}</p>
+        <fieldset class="settings-fields" ${settingsSaving ? "disabled" : ""}>
         <div class="settings-tabs" role="tablist" aria-label="Agent Loop settings sections">
           <button class="settings-tab${settingsSection === "models" ? " active" : ""}" data-settings-tab="models" role="tab" aria-selected="${settingsSection === "models"}">Models</button>
+          <button class="settings-tab${settingsSection === "stages" ? " active" : ""}" data-settings-tab="stages" role="tab" aria-selected="${settingsSection === "stages"}">Roles &amp; Stages</button>
           <button class="settings-tab${settingsSection === "tools" ? " active" : ""}" data-settings-tab="tools" role="tab" aria-selected="${settingsSection === "tools"}">Tools</button>
         </div>
         ${settingsContent}
+        </fieldset>
       </div>`;
     bindSettings();
   }
@@ -900,11 +922,64 @@
     return String(value || "").split(/\r?\n/).map((item) => item.trim()).filter(Boolean);
   }
 
+  function pipelineEditorHtml(pipeline) {
+    const stageIds = pipeline.stages.map((stage) => stage.id);
+    const targets = [...stageIds, "SUCCESS", "PAUSED"];
+    const roleIds = pipeline.roles.map((role) => role.id);
+    const roots = [["startStageId", "Start"], ["reentryStageId", "Reentry"], ["interruptStageId", "Interrupt"], ["iterationCompletionStageId", "Cycle completion"]];
+    const roles = pipeline.roles.map((role, index) => `
+      <details class="settings-item">
+        <summary>${escapeHtml(role.id)}</summary>
+        <div class="settings-grid">
+          <label>Role ID <input data-role-setting="${index}" data-setting-field="id" value="${escapeHtml(role.id)}" pattern="[A-Za-z0-9][A-Za-z0-9_-]{0,63}" required></label>
+          <label>Behavior template <select data-role-setting="${index}" data-setting-field="modelRole">${optionList(["planner", "implementer", "tester", "qa_lead", "master", "interrupter"], role.modelRole)}</select></label>
+          <label class="wide">Description <input data-role-setting="${index}" data-setting-field="description" value="${escapeHtml(role.description)}"></label>
+          <label class="wide">Role instructions <textarea rows="3" data-role-setting="${index}" data-setting-field="instructions">${escapeHtml(role.instructions)}</textarea></label>
+        </div>
+        <button class="btn danger compact-btn" data-remove-role="${index}">Remove role</button>
+      </details>`).join("");
+    const stages = pipeline.stages.map((stage, index) => `
+      <details class="settings-item">
+        <summary>${escapeHtml(stage.name || stage.id)} · ${escapeHtml(stage.id)}</summary>
+        <div class="settings-grid">
+          <label>Stage ID <input data-stage-setting="${index}" data-setting-field="id" value="${escapeHtml(stage.id)}" pattern="[A-Za-z0-9][A-Za-z0-9_-]{0,63}" required></label>
+          <label>Name <input data-stage-setting="${index}" data-setting-field="name" value="${escapeHtml(stage.name)}" required></label>
+          <label>Assigned role <select data-stage-setting="${index}" data-setting-field="role">${optionList(roleIds, stage.role)}</select></label>
+          <label>Stage type <select data-stage-setting="${index}" data-setting-field="kind">${optionList((pipeline.stageTypes || []).map((type) => type.id), stage.kind)}</select></label>
+          <label>On success <select data-stage-setting="${index}" data-setting-field="onSuccess">${optionList(targets, stage.onSuccess)}</select></label>
+          <label>On failure <select data-stage-setting="${index}" data-setting-field="onFailure">${optionList(targets, stage.onFailure)}</select></label>
+          <label>Starts an iteration <input type="checkbox" data-stage-setting="${index}" data-setting-field="countsIteration" ${stage.countsIteration ? "checked" : ""}></label>
+          <label>Require plan approval <input type="checkbox" data-stage-setting="${index}" data-setting-field="requiresPlanApproval" ${stage.requiresPlanApproval ? "checked" : ""}></label>
+          <label>Plan options <input type="number" min="0" max="20" data-stage-setting="${index}" data-setting-field="planOptionsCount" value="${stage.planOptionsCount || 0}"></label>
+          <label class="wide">Stage instructions <textarea rows="3" data-stage-setting="${index}" data-setting-field="instructions">${escapeHtml(stage.instructions)}</textarea></label>
+        </div>
+        <button class="btn danger compact-btn" data-remove-stage="${index}">Remove stage</button>
+      </details>`).join("");
+    return `<div class="card settings-section-card" data-settings-section="stages">
+      <h3>Roles &amp; handoffs</h3><p class="composer-hint">Define responsibilities and the next stage for each outcome. Changes apply to new sessions; running sessions keep their saved pipeline.</p>
+      <div class="settings-grid"><label class="wide">Pipeline name <input id="pipeline-name" value="${escapeHtml(pipeline.name)}" required></label>
+      ${roots.map(([field, label]) => `<label>${label} stage <select data-pipeline-root="${field}">${optionList(stageIds, pipeline[field])}</select></label>`).join("")}</div>
+      <div class="handoff-table-wrap"><table class="handoff-table"><caption>Current handoffs</caption><thead><tr><th>Stage</th><th>Role</th><th>Success</th><th>Failure</th></tr></thead><tbody>${pipeline.stages.map((stage) => `<tr><td>${escapeHtml(stage.id)}</td><td>${escapeHtml(stage.role)}</td><td>${escapeHtml(stage.onSuccess)}</td><td>${escapeHtml(stage.onFailure)}</td></tr>`).join("")}</tbody></table></div>
+      <h3>Agent roles</h3>${roles}<button class="btn secondary" id="add-role">Add role</button>
+      <h3>Stages</h3>${stages}<button class="btn secondary" id="add-stage">Add stage</button>
+    </div>`;
+  }
+
   function bindSettings() {
     const rerenderSettings = () => { lastStateSig = ""; render(); };
     document.getElementById("settings-back").onclick = () => { settingsOpen = false; settingsDraft = null; lastStateSig = ""; render(); };
     document.getElementById("settings-save").onclick = () => {
+      if (settingsSaving) return;
+      const invalid = [...document.querySelectorAll("input, textarea, select")].find((input) => !input.checkValidity());
+      if (invalidMcpFields.size || invalid) {
+        settingsError = invalidMcpFields.size ? "Fix the invalid MCP JSON in Tools before saving. Values must be strings." : "Check the highlighted setting before saving.";
+        document.getElementById("settings-error").textContent = settingsError;
+        if (invalid) invalid.reportValidity();
+        return;
+      }
+      settingsSaving = true; settingsError = ""; settingsNotice = "";
       vscode.postMessage({ command: "saveSystemSettings", settings: settingsDraft });
+      render();
     };
     document.querySelectorAll("[data-settings-tab]").forEach((button) => button.onclick = () => {
       settingsSection = button.dataset.settingsTab;
@@ -919,22 +994,31 @@
       const field = event.target.dataset.settingField;
       provider[field] = field === "enabled" ? event.target.checked : ["modelsArgs", "fallbackModels"].includes(field) ? listValue(event.target.value) : event.target.value;
     });
-    document.querySelectorAll("[data-mcp]").forEach((input) => input.oninput = input.onchange = (event) => {
+    document.querySelectorAll("[data-mcp]").forEach((input) => {
+      const server = settingsDraft.toolAccess.mcpServers[Number(input.dataset.mcp)];
+      const key = `${server.id}:${input.dataset.settingField}`;
+      if (invalidMcpFields.has(key)) { input.value = invalidMcpFields.get(key); input.setCustomValidity("Enter a JSON object with string values."); }
+      input.oninput = input.onchange = (event) => {
       const server = settingsDraft.toolAccess.mcpServers[Number(event.target.dataset.mcp)];
       const field = event.target.dataset.settingField;
       try {
-        server[field] = field === "enabled" ? event.target.checked
+        const value = field === "enabled" ? event.target.checked
           : ["args", "allowedTools"].includes(field) ? listValue(event.target.value)
           : ["environment", "headers"].includes(field) ? JSON.parse(event.target.value || "{}")
           : field === "timeoutMs" ? Number(event.target.value) : event.target.value;
+        if (["environment", "headers"].includes(field) && (!value || typeof value !== "object" || Array.isArray(value) || Object.values(value).some((entry) => typeof entry !== "string"))) throw new Error("Invalid JSON map");
+        server[field] = value;
+        invalidMcpFields.delete(key);
         event.target.setCustomValidity("");
       } catch {
-        event.target.setCustomValidity("Enter a valid JSON object.");
+        invalidMcpFields.set(key, event.target.value);
+        event.target.setCustomValidity("Enter a JSON object with string values.");
       }
-    });
+    }; });
     document.querySelectorAll("[data-role-setting]").forEach((input) => input.oninput = input.onchange = (event) => {
       const role = settingsDraft.pipeline.roles[Number(event.target.dataset.roleSetting)];
       const field = event.target.dataset.settingField;
+      if (field === "id") return;
       if (field === "provider") {
         if (event.target.value) role.provider = event.target.value;
         else delete role.provider;
@@ -947,8 +1031,13 @@
         delete role[field];
       } else role[field] = event.target.value;
     });
+    bindPipelineEditor(rerenderSettings);
     document.querySelectorAll("[data-remove-provider]").forEach((button) => button.onclick = () => { delete settingsDraft.providers[button.dataset.removeProvider]; rerenderSettings(); });
-    document.querySelectorAll("[data-remove-mcp]").forEach((button) => button.onclick = () => { settingsDraft.toolAccess.mcpServers.splice(Number(button.dataset.removeMcp), 1); rerenderSettings(); });
+    document.querySelectorAll("[data-remove-mcp]").forEach((button) => button.onclick = () => {
+      const [removed] = settingsDraft.toolAccess.mcpServers.splice(Number(button.dataset.removeMcp), 1);
+      for (const key of invalidMcpFields.keys()) if (key.startsWith(`${removed.id}:`)) invalidMcpFields.delete(key);
+      rerenderSettings();
+    });
     const addProvider = document.getElementById("add-provider");
     if (addProvider) addProvider.onclick = () => {
       const id = uniqueId("provider", Object.keys(settingsDraft.providers));
@@ -961,6 +1050,56 @@
       const id = uniqueId("mcp", ids);
       settingsDraft.toolAccess.mcpServers.push({ id, name: id, enabled: true, type: "local", command: "npx", args: [], environment: {}, headers: {}, allowedTools: [], timeoutMs: 60000 });
       rerenderSettings();
+    };
+  }
+
+  function bindPipelineEditor(rerender) {
+    const pipeline = settingsDraft.pipeline;
+    const rootFields = ["startStageId", "interruptStageId", "reentryStageId", "iterationCompletionStageId"];
+    const error = (message) => { settingsError = message; document.getElementById("settings-error").textContent = message; };
+    const rename = (input, collection) => {
+      const index = Number(input.dataset.roleSetting ?? input.dataset.stageSetting);
+      const item = collection[index], oldId = item.id, next = input.value.trim();
+      if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(next) || ["SUCCESS", "PAUSED"].includes(next) || collection.some((value, i) => i !== index && value.id === next)) {
+        error(`Could not rename ${oldId} to ${next}. Use a unique ID containing letters, numbers, underscores or hyphens.`);
+        input.value = oldId; input.setCustomValidity(""); return;
+      }
+      item.id = next;
+      if (collection === pipeline.roles) for (const stage of pipeline.stages) { if (stage.role === oldId) stage.role = next; }
+      else {
+        for (const field of rootFields) if (pipeline[field] === oldId) pipeline[field] = next;
+        for (const stage of pipeline.stages) for (const field of ["onSuccess", "onFailure"]) if (stage[field] === oldId) stage[field] = next;
+      }
+      input.setCustomValidity(""); rerender();
+    };
+    document.querySelectorAll('[data-role-setting][data-setting-field="id"]').forEach((input) => input.onchange = () => rename(input, pipeline.roles));
+    const name = document.getElementById("pipeline-name");
+    if (name) name.oninput = () => { pipeline.name = name.value; };
+    document.querySelectorAll("[data-pipeline-root]").forEach((input) => input.onchange = () => { pipeline[input.dataset.pipelineRoot] = input.value; });
+    document.querySelectorAll("[data-stage-setting]").forEach((input) => {
+      const field = input.dataset.settingField;
+      if (field === "id") { input.onchange = () => rename(input, pipeline.stages); return; }
+      input.oninput = input.onchange = () => {
+        const stage = pipeline.stages[Number(input.dataset.stageSetting)];
+        stage[field] = input.type === "checkbox" ? input.checked : field === "planOptionsCount" ? Number(input.value) : input.value;
+        if (["role", "kind", "onSuccess", "onFailure"].includes(field)) rerender();
+      };
+    });
+    document.querySelectorAll("[data-remove-role]").forEach((button) => button.onclick = () => {
+      const index = Number(button.dataset.removeRole), role = pipeline.roles[index];
+      if (pipeline.stages.some((stage) => stage.role === role.id)) return error(`Assign stages using ${role.id} to another role before removing it.`);
+      pipeline.roles.splice(index, 1); rerender();
+    });
+    document.querySelectorAll("[data-remove-stage]").forEach((button) => button.onclick = () => {
+      const index = Number(button.dataset.removeStage), stage = pipeline.stages[index];
+      if (rootFields.some((field) => pipeline[field] === stage.id) || pipeline.stages.some((other) => other !== stage && [other.onSuccess, other.onFailure].includes(stage.id))) return error(`Update references to ${stage.id} before removing it.`);
+      pipeline.stages.splice(index, 1); rerender();
+    });
+    const addRole = document.getElementById("add-role");
+    if (addRole) addRole.onclick = () => { pipeline.roles.push({ id: uniqueId("agent", pipeline.roles.map((role) => role.id)), modelRole: "implementer", description: "", instructions: "" }); rerender(); };
+    const addStage = document.getElementById("add-stage");
+    if (addStage) addStage.onclick = () => {
+      pipeline.stages.push({ id: uniqueId("STAGE", pipeline.stages.map((stage) => stage.id)), name: "New stage", role: pipeline.roles[0]?.id || "", kind: pipeline.stageTypes?.find((type) => type.executor === "implementation")?.id || pipeline.stageTypes?.[0]?.id, instructions: "", onSuccess: "SUCCESS", onFailure: pipeline.interruptStageId, countsIteration: false, requiresPlanApproval: false, planOptionsCount: 0 }); rerender();
     };
   }
 
@@ -999,16 +1138,13 @@
         isInteracting = true;
       }
     });
-    document.addEventListener("focusout", (e) => {
-      const t = e.target;
-      if (t && (t.tagName === "SELECT" || t.tagName === "INPUT" || t.tagName === "TEXTAREA")) {
-        isInteracting = false;
-        if (renderQueued) {
-          if (deferredRenderTimer) { clearTimeout(deferredRenderTimer); deferredRenderTimer = null; }
-          renderQueued = false;
-          tryRender();
-        }
-      }
+    document.addEventListener("focusout", () => {
+      if (deferredRenderTimer) clearTimeout(deferredRenderTimer);
+      deferredRenderTimer = setTimeout(() => {
+        deferredRenderTimer = null;
+        isInteracting = !!document.activeElement?.matches("input, select, textarea");
+        if (!isInteracting && renderQueued) { renderQueued = false; requestRender(); }
+      }, 0);
     });
   }
 
@@ -1016,23 +1152,17 @@
     const sig = stateSignature();
     if (sig === lastStateSig) return;
     lastStateSig = sig;
+    const focusedRole = document.activeElement?.dataset?.role;
+    const focusedField = document.activeElement?.dataset?.field;
+    const logEl = document.querySelector(".log-content");
+    if (logEl && renderedSessionId) logScroll.set(renderedSessionId, { top: logEl.scrollTop, follow: logEl.scrollHeight - logEl.scrollTop - logEl.clientHeight < 32 });
     render();
+    if (focusedRole && focusedField) [...document.querySelectorAll("select[data-role]")].find((input) => input.dataset.role === focusedRole && input.dataset.field === focusedField)?.focus();
   }
 
   function requestRender() {
-    if (isInteracting) {
-      renderQueued = true;
-      if (!deferredRenderTimer) {
-        deferredRenderTimer = setTimeout(() => {
-          deferredRenderTimer = null;
-          if (renderQueued) {
-            renderQueued = false;
-            tryRender();
-          }
-        }, 3000);
-      }
-      return;
-    }
+    isInteracting = !!document.activeElement?.matches("input, select, textarea");
+    if (isInteracting || settingsOpen) { renderQueued = true; return; }
     tryRender();
   }
 
@@ -1042,40 +1172,36 @@
 
     if (msg.command === "stateUpdate") {
       state = msg.payload;
-      const configuredRoles = state.systemSettings?.pipeline?.roles || [];
-      if (configuredRoles.length > 0) {
-        agentRoles = configuredRoles.map((role) => role.id);
-        for (const role of configuredRoles) agentRoleLabels[role.id] = role.description || role.id;
-      }
-      if (msg.payload.selectedSessionId !== prevSelectedSessionId) {
-        prevSelectedSessionId = msg.payload.selectedSessionId;
-        modelSelections = { ...(msg.payload.state?.modelMapping || modelSelections) };
-        providerSelections = { ...(msg.payload.state?.providerMapping || providerSelections) };
-        if (msg.payload.variantMapping) {
-          variantSelections = { ...msg.payload.variantMapping };
-        } else {
-          variantSelections = {};
-        }
-      }
+      if (state.selectedSessionId && typeof state.sessionLog === "string" && sessionLogs.get(state.selectedSessionId) !== state.sessionLog) { sessionLogs.set(state.selectedSessionId, state.sessionLog.slice(-maxLogSize)); logVersion++; }
       if (stoppingSessionId && (!msg.payload.isRunning || msg.payload.selectedSessionId !== stoppingSessionId)) {
         stoppingSessionId = null;
       }
       requestRender();
+    } else if (msg.command === "newSessionResult" && msg.requestId === pendingStart) {
+      pendingStart = null;
+      composerError = msg.error || "";
+      if (!msg.error) { composingNew = false; composerGoal = ""; composerInitialized = false; state.selectedSessionId = msg.sessionId; }
+      lastStateSig = ""; render();
+    } else if (msg.command === "settingsSaveResult") {
+      settingsSaving = false;
+      settingsError = msg.error || "";
+      settingsNotice = msg.error ? "" : "Settings saved. Changes apply to new sessions.";
+      if (msg.settings) { state.systemSettings = msg.settings; settingsDraft = cloneSettings(msg.settings); }
+      if (settingsOpen) render();
     } else if (msg.command === "logAppend") {
-      const text = msg.entry.text;
-      logBuffer += text;
-      if (logBuffer.length > maxLogSize) {
-        logBuffer = logBuffer.slice(-maxLogSize);
-      }
+      if (!msg.sessionId) return;
+      const buffer = ((sessionLogs.get(msg.sessionId) || "") + msg.entry.text).slice(-maxLogSize);
+      sessionLogs.set(msg.sessionId, buffer);
+      if (msg.sessionId !== state.selectedSessionId) return;
       const logEl = document.querySelector(".log-content");
       if (logEl) {
-        logEl.textContent = logBuffer;
-        scrollLogToBottom();
-      } else if (!isInteracting) {
-        tryRender();
+        const follow = logEl.scrollHeight - logEl.scrollTop - logEl.clientHeight < 32;
+        logEl.textContent = buffer;
+        if (follow) scrollLogToBottom();
       }
     } else if (msg.command === "focusComposer") {
       composingNew = true;
+      modelSelections = {}; providerSelections = {}; variantSelections = {};
       lastStateSig = "";
       tryRender();
       focusComposer();

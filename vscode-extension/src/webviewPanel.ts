@@ -24,8 +24,6 @@ export class LoopWebviewPanel {
   private static instance: LoopWebviewPanel | undefined;
   private panel: vscode.WebviewPanel | undefined;
   private selectedSessionId: string | null = null;
-  private logBuffers: Map<string, string> = new Map();
-  private readonly maxLogBuffer = 50000;
   private lastOpenedPlanDocument: string | null = null;
   private providerCatalogRefresh: Promise<void> | null = null;
 
@@ -115,6 +113,7 @@ export class LoopWebviewPanel {
     const modelMapping: Partial<ModelMapping> = {};
     this.handleMessage({
       command: "newSession",
+      requestId: `command-${Date.now()}`,
       goal: opts.goal,
       targetProjectPath: opts.targetProjectPath,
       accessMode: "ask",
@@ -139,6 +138,9 @@ export class LoopWebviewPanel {
         break;
       case "newSession":
         await this.handleNewSession(msg);
+        break;
+      case "openPlanReview":
+        await vscode.commands.executeCommand("agentLoop.openPlanReview", msg.sessionId);
         break;
       case "resumeSession":
         await this.handleResume(msg);
@@ -261,8 +263,9 @@ export class LoopWebviewPanel {
     this.postMessage({ command: "focusComposer" });
   }
 
-  private async handleNewSession(msg: { goal: string; targetProjectPath: string; accessMode: AccessMode; modelMapping: Partial<ModelMapping>; providerMapping?: Partial<ProviderMapping>; variantMapping?: Partial<VariantMapping> }): Promise<void> {
+  private async handleNewSession(msg: { requestId: string; goal: string; targetProjectPath: string; accessMode: AccessMode; modelMapping: Partial<ModelMapping>; providerMapping?: Partial<ProviderMapping>; variantMapping?: Partial<VariantMapping> }): Promise<void> {
     if (!msg.goal || msg.goal.trim().length === 0) {
+      this.postMessage({ command: "newSessionResult", requestId: msg.requestId, error: "Goal is required." });
       vscode.window.showErrorMessage("Goal is required.");
       return;
     }
@@ -281,9 +284,11 @@ export class LoopWebviewPanel {
       this.selectedSessionId = sessionId;
       this.attachLogListener(sessionId);
       vscode.window.showInformationMessage(`Agent Loop: Started session ${sessionId}`);
-      await this.refresh();
+      await this.refresh().catch(() => { /* The session was created; a refresh failure must not invite duplicate startup. */ });
+      this.postMessage({ command: "newSessionResult", requestId: msg.requestId, sessionId });
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err);
+      this.postMessage({ command: "newSessionResult", requestId: msg.requestId, error: errMsg });
       vscode.window.showErrorMessage(`Failed to start session: ${errMsg}`);
     }
   }
@@ -360,7 +365,7 @@ export class LoopWebviewPanel {
     if (this.selectedSessionId === sessionId) {
       this.selectedSessionId = null;
     }
-    this.logBuffers.delete(sessionId);
+    this.client.clearSessionLog(sessionId);
     this.client.removeLogListener(sessionId);
     this.client.removeExitListener(sessionId);
 
@@ -385,11 +390,7 @@ export class LoopWebviewPanel {
   }
 
   private attachLogListener(sessionId: string): void {
-    this.logBuffers.set(sessionId, "");
     this.client.onLog(sessionId, (entry: LogEntry) => {
-      const buf = this.logBuffers.get(sessionId) ?? "";
-      const newBuf = (buf + entry.text).slice(-this.maxLogBuffer);
-      this.logBuffers.set(sessionId, newBuf);
       this.postMessage({ command: "logAppend", sessionId, entry });
     });
     this.client.onExit(sessionId, async () => {
@@ -405,7 +406,6 @@ export class LoopWebviewPanel {
         );
       }
       setTimeout(() => {
-        this.logBuffers.delete(sessionId);
         this.client.removeLogListener(sessionId);
         this.client.removeExitListener(sessionId);
       }, 5000);
@@ -470,7 +470,7 @@ export class LoopWebviewPanel {
           await this.showMarkdownPreview(doc, true);
         } catch { /* plan document does not exist yet */ }
         try {
-          await vscode.commands.executeCommand("agentLoop.planReviewView.focus");
+          await vscode.commands.executeCommand("agentLoop.openPlanReview", this.selectedSessionId);
         } catch { /* view may not be registered yet */ }
       } else if (state?.status !== "WAITING_USER") {
         this.lastOpenedPlanDocument = null;
@@ -489,6 +489,7 @@ export class LoopWebviewPanel {
       runtime &&
       (runtime.disposition === "active" || runtime.disposition === "expired_owner_alive")
     ) {
+      this.attachLogListener(this.selectedSessionId);
       this.client.followExternalSession(this.selectedSessionId);
     }
 
@@ -516,6 +517,7 @@ export class LoopWebviewPanel {
       cliProfiles,
       systemSettings,
       runtimeLeaseStatus,
+      sessionLog: this.selectedSessionId ? this.client.getSessionLog(this.selectedSessionId) : "",
     };
 
     this.postMessage({ command: "stateUpdate", payload });
@@ -536,10 +538,12 @@ export class LoopWebviewPanel {
   private async handleSaveSystemSettings(settings: SystemSettings): Promise<void> {
     try {
       await this.store.saveSystemSettings(settings);
+      this.postMessage({ command: "settingsSaveResult", settings: await this.store.readSystemSettings() });
       vscode.window.showInformationMessage("Agent Loop: Provider, MCP/web, and pipeline settings saved.");
       await this.handleDiscoverModels();
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
+      this.postMessage({ command: "settingsSaveResult", error: message });
       vscode.window.showErrorMessage(`Failed to save Agent Loop settings: ${message}`);
     }
   }
