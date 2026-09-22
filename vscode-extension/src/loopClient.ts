@@ -28,6 +28,7 @@ function generateSessionId(): string {
 
 export class LoopClient {
   private activeProcesses: Map<string, ChildProcess> = new Map();
+  private sessionLogs = new Map<string, string>();
   private externalTails: Map<string, NodeJS.Timeout> = new Map();
   private logListeners: Map<string, (entry: LogEntry) => void> = new Map();
   private exitListeners: Map<string, (code: number | null, signal: NodeJS.Signals | null) => void> = new Map();
@@ -199,6 +200,7 @@ export class LoopClient {
 
     args.push("--model-mapping", JSON.stringify(opts.modelMapping));
     args.push("--provider-mapping", JSON.stringify(opts.providerMapping ?? {}));
+    args.push("--variant-mapping", JSON.stringify(opts.variantMapping ?? {}));
 
     if (opts.modelMapping.planner) args.push("--planner-model", opts.modelMapping.planner);
     if (opts.modelMapping.implementer) args.push("--implementer-model", opts.modelMapping.implementer);
@@ -215,8 +217,7 @@ export class LoopClient {
     if (opts.variantMapping?.interrupter) args.push("--interrupter-variant", opts.variantMapping.interrupter);
 
     const env = await this.coreProcessEnvironment();
-    this.spawnSession(args, root, sessionId, env);
-    void this.store.syncRegistrySessionStatus(sessionId, "RUNNING");
+    await this.spawnSession(args, root, sessionId, env, true);
     return sessionId;
   }
 
@@ -271,7 +272,7 @@ export class LoopClient {
     if (accessDecision === "full_access") args.push("--full-access");
 
     const env = await this.coreProcessEnvironment();
-    this.spawnSession(args, root, sessionId, env);
+    await this.spawnSession(args, root, sessionId, env);
     void this.store.syncRegistrySessionStatus(sessionId, "RUNNING");
     return sessionId;
   }
@@ -286,12 +287,13 @@ export class LoopClient {
     await this.resumeSession(sessionId, runtime.disposition === "recoverable");
   }
 
-  private spawnSession(
+  private async spawnSession(
     args: string[],
     cwd: string,
     sessionId: string,
-    env: NodeJS.ProcessEnv
-  ): string {
+    env: NodeJS.ProcessEnv,
+    waitForState = false
+  ): Promise<string> {
     const child = spawn(this.config.nodeBinary, args, {
       cwd,
       env,
@@ -310,6 +312,7 @@ export class LoopClient {
     });
 
     child.on("error", (err) => {
+      this.activeProcesses.delete(sessionId);
       vscode.window.showErrorMessage(`Agent loop process error: ${err.message}`);
     });
 
@@ -328,7 +331,50 @@ export class LoopClient {
       this.recoveryWakeup?.();
     });
 
+    await new Promise<void>((resolve, reject) => {
+      let finished = false;
+      let polling = false;
+      const finish = (error?: Error) => {
+        if (finished) return;
+        finished = true;
+        clearInterval(timer);
+        clearTimeout(deadline);
+        child.removeListener("error", failed);
+        child.removeListener("exit", exited);
+        error ? reject(error) : resolve();
+      };
+      const failed = (error: Error) => finish(error);
+      const exited = () => {
+        void this.store.readState(sessionId).then((state) => {
+          finish(state ? undefined : new Error(this.getSessionLog(sessionId).slice(-2000) || "Core exited before creating the session."));
+        }, (error: Error) => finish(error));
+      };
+      const check = async () => {
+        if (polling || finished || !waitForState) return;
+        polling = true;
+        try { if (await this.store.readState(sessionId)) finish(); }
+        catch (error) { finish(error instanceof Error ? error : new Error(String(error))); }
+        finally { polling = false; }
+      };
+      const timer = setInterval(() => { void check(); }, 100);
+      const deadline = setTimeout(() => {
+        if (!child.pid) { finish(new Error("Core process did not start.")); return; }
+        void this.forceTerminateProcessTree(child.pid, this.liveConfig().killTimeoutMs)
+          .then(() => finish(new Error("Session startup timed out. Check the provider and core configuration.")), (error: Error) => finish(error));
+      }, 120_000);
+      child.once("error", failed);
+      child.once("exit", exited);
+      child.once("spawn", () => { if (!waitForState) finish(); else void check(); });
+    });
     return sessionId;
+  }
+
+  clearSessionLog(sessionId: string): void {
+    this.sessionLogs.delete(sessionId);
+  }
+
+  getSessionLog(sessionId: string): string {
+    return this.sessionLogs.get(sessionId) ?? "";
   }
 
   async stopSession(sessionId: string): Promise<boolean> {
@@ -575,6 +621,7 @@ export class LoopClient {
   }
 
   private emitLog(sessionId: string, entry: LogEntry): void {
+    this.sessionLogs.set(sessionId, (this.getSessionLog(sessionId) + entry.text).slice(-100000));
     const listener = this.logListeners.get(sessionId);
     if (listener) {
       listener(entry);

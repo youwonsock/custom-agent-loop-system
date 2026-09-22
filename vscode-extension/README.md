@@ -15,7 +15,7 @@ code --install-extension agent-loop-vscode-win32-x64-3.4.0.vsix --force
 ## UI
 
 - Models: 설치된 에이전트 CLI와 그 CLI에서 발견된 모델만 역할별로 선택합니다.
-- Stages: 파일 기반 역할·단계 구조를 확인합니다.
+- Roles & Stages: 역할과 단계의 추가·삭제, 지침, 담당자 및 성공·실패 시 다음 단계를 편집합니다.
 - Tools: 모든 에이전트에 공통인 Web Search와 MCP 서버를 설정합니다.
 - Plan Review: 세 개의 전체 계획 문서를 중앙 Markdown 미리보기로 열고 승인·수정합니다.
 - Session dashboard: attempt 번호, 재연결, 최근 진행 경과, retry 시각, 실패 종류, lease/orphan 상태, 요구사항 충족도를 표시합니다.

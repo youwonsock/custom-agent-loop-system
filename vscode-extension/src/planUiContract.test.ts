@@ -102,7 +102,7 @@ test("locked reference identity is visible in session status", () => {
   assert.match(webview, /identityMatch/);
 });
 
-test("settings omit the graph editor while supporting split file-only loop configuration", () => {
+test("settings support role and stage editing with split configuration files", () => {
   const panel = source("webviewPanel.ts");
   const store = source("stateStore.ts");
   const client = source("loopClient.ts");
@@ -125,7 +125,9 @@ test("settings omit the graph editor while supporting split file-only loop confi
   assert.match(webview, /data-settings-tab="tools"/);
   assert.match(webview, /settingsSection === "models"/);
   assert.match(webview, /settingsSection === "tools"/);
-  assert.doesNotMatch(webview, /Add agent|Add stage|Stage types|data-settings-tab="stages"/);
+  assert.match(webview, /data-settings-tab="stages"/);
+  assert.match(extension, /agentLoopPlanReview\.focus/);
+  assert.doesNotMatch(panel, /agentLoop\.planReviewView\.focus/);
   assert.doesNotMatch(panel, /pipelineEditor\.js/);
   assert.match(webview, /data-field="provider"/);
   assert.match(webview, /provider\.available === true/);

@@ -63,15 +63,14 @@ export function deriveRequirementLedger(
       .map((clause) => clause.trim())
       .filter(Boolean);
   }
-  const unique = [...new Set(clauses.map((clause) => clause.replace(/\s+/g, " ")))]
-    .slice(0, 20);
+  const unique = [...new Set(clauses.map((clause) => clause.replace(/\s+/g, " ")))];
   if (unique.length === 0) unique.push("Complete the original user goal as written.");
   return {
     version: 1,
     derivedAt,
     items: unique.map((text, index) => ({
       id: `REQ-${String(index + 1).padStart(3, "0")}`,
-      text: text.slice(0, 1_000),
+      text,
       category: requirementCategory(text),
       mandatory: true,
       source: "original_goal",
@@ -95,7 +94,7 @@ export function parseRequirementEvidence(output: string): Array<{
   let match: RegExpExecArray | null;
   while ((match = blockPattern.exec(output)) !== null) {
     const block = match[1];
-    const id = block.match(/^\s*(?:REQ_ID|REQUIREMENT_ID):\s*(REQ-\d{3})\s*$/im)?.[1]?.toUpperCase();
+    const id = block.match(/^\s*(?:REQ_ID|REQUIREMENT_ID):\s*(REQ-\d{3,})\s*$/im)?.[1]?.toUpperCase();
     const status = block.match(
       /^\s*STATUS:\s*(SATISFIED|PARTIAL|FAILED|BLOCKED)\s*$/im
     )?.[1]?.toUpperCase() as RequirementEvidenceStatus | undefined;
@@ -134,6 +133,17 @@ export function latestRequirementStatuses(
   const statuses = new Map<string, RequirementEvidenceStatus>();
   for (const record of ledger.evidence) statuses.set(record.requirementId, record.status);
   return statuses;
+}
+
+/** Keep the latest evidence for every requirement, plus a bounded recent history. */
+export function retainRequirementEvidence(
+  records: RequirementEvidenceRecord[],
+  recentLimit = 200
+): RequirementEvidenceRecord[] {
+  const latest = new Map<string, number>();
+  records.forEach((record, index) => latest.set(record.requirementId, index));
+  const keep = new Set(latest.values());
+  return records.filter((_, index) => keep.has(index) || index >= records.length - recentLimit);
 }
 
 export function advanceConvergence(

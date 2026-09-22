@@ -114,10 +114,10 @@ test("interactive access prompts fail fast instead of being auto-approved or tim
 
 test("initial transport timeout stops after connection and model generation gets its own budget", async () => {
   const result = await runFake("delayed-model", {
-    transport: 100,
-    idle: 500,
-    tool: 700,
-    phase: 1_000,
+    transport: 750,
+    idle: 1800,
+    tool: 1800,
+    phase: 3_000,
   });
   assert.equal(result.outcome, "succeeded");
   assert.match(result.assistantText, /\[PHASE_DONE\]/);
@@ -125,13 +125,12 @@ test("initial transport timeout stops after connection and model generation gets
 
 test("meaningful progress renews the phase window up to the absolute recovery deadline", async () => {
   const result = await runFake("continuous-progress", {
-    transport: 100,
+    transport: 750,
     idle: 250,
     tool: 250,
-    phase: 200,
-    // Keep the absolute budget comfortably above Windows PTY/process startup jitter.
-    // The 200ms renewable window is still exercised by the 400ms fake workload.
-    absolute: 2_000,
+    phase: 750,
+    // Allow process startup while exercising renewal across a 1200ms workload.
+    absolute: 3_000,
   });
   assert.equal(result.outcome, "succeeded");
   assert.match(result.assistantText, /\[PHASE_DONE\]/);

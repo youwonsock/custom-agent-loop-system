@@ -75,6 +75,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       }
     }),
 
+    vscode.commands.registerCommand("agentLoop.openPlanReview", async (sessionId?: string) => {
+      if (sessionId) planReviewView?.selectSession(sessionId);
+      await vscode.commands.executeCommand("agentLoopPlanReview.focus");
+    }),
+
     vscode.commands.registerCommand("agentLoop.newSession", async () => {
       await store!.ensureInitialized();
       const panel = LoopWebviewPanel.getInstance(context, store!, client!, config);
