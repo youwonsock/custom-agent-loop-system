@@ -282,9 +282,9 @@
     "package": "node ../scripts/package-vsix.js"
   },
   "devDependencies": {
-    "@types/node": "^20.11.0",
-    "@types/vscode": "^1.85.0",
-    "@vscode/vsce": "^3.9.2",
-    "typescript": "^5.4.0"
+    "@types/node": "^26.6.1",
+    "@types/vscode": "^1.138.0",
+    "@vscode/vsce": "^4.0.0",
+    "typescript": "^7.0.2"
   }
 }
