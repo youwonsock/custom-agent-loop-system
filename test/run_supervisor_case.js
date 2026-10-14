@@ -3,7 +3,7 @@
 const os = require("node:os");
 const path = require("node:path");
 const fs = require("node:fs/promises");
-const { ProcessSupervisor } = require("../dist/process_supervisor");
+const { ProcessSupervisor } = require("../dist/src/core/process_supervisor");
 
 const mode = process.argv[2];
 const transportTimeoutMs = Number(process.argv[3]);
@@ -15,7 +15,9 @@ const maxInMemoryOutputBytes = Number(process.argv[8] || 1024 * 1024);
 const absoluteDeadlineMs = Number(process.argv[9] || phaseTimeoutMs);
 
 void (async () => {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-loop-supervisor-"));
+  const dir = await fs.mkdtemp(
+    path.join(os.tmpdir(), "agent-loop-supervisor-"),
+  );
   try {
     const result = await new ProcessSupervisor().run({
       binary: process.execPath,
@@ -36,29 +38,41 @@ void (async () => {
       rawLogPath: path.join(dir, "attempt.log"),
       interactionWhitelist: [],
       destructivePrompts: [],
-      sensitiveValues: mode === "secret-echo" || mode === "split-secret-echo" ? ["top-secret"] : [],
+      sensitiveValues:
+        mode === "secret-echo" ||
+        mode === "split-secret-echo" ||
+        mode === "terminal-secret-after-completion"
+          ? ["top-secret"]
+          : [],
     });
     const rawLog = await fs.readFile(path.join(dir, "attempt.log"), "utf8");
-    process.stdout.write(JSON.stringify({
-      outcome: result.outcome,
-      failureKind: result.failureKind,
-      failureMessage: result.failureMessage,
-      exitCode: result.exitCode,
-      assistantText: result.assistantText,
-      cliSessionId: result.cliSessionId,
-      eventsCount: result.events.length,
-      eventBytes: result.events.reduce(
-        (total, event) => total + Buffer.byteLength(JSON.stringify(event), "utf8"),
-        0
-      ),
-      rawLogIncludesSecret: rawLog.includes("top-secret"),
-    }));
+    process.stdout.write(
+      JSON.stringify({
+        outcome: result.outcome,
+        evidence: result.evidence,
+        diagnostics: result.diagnostics,
+        failureKind: result.failureKind,
+        failureMessage: result.failureMessage,
+        exitCode: result.exitCode,
+        assistantText: result.assistantText,
+        cliSessionId: result.cliSessionId,
+        eventsCount: result.events.length,
+        eventBytes: result.events.reduce(
+          (total, event) =>
+            total + Buffer.byteLength(JSON.stringify(event), "utf8"),
+          0,
+        ),
+        rawLogIncludesSecret: rawLog.includes("top-secret"),
+      }),
+    );
   } finally {
     await new Promise((resolve) => setTimeout(resolve, 25));
     await fs.rm(dir, { recursive: true, force: true }).catch(() => {});
   }
   process.exit(0);
 })().catch((err) => {
-  process.stderr.write(err instanceof Error ? err.stack || err.message : String(err));
+  process.stderr.write(
+    err instanceof Error ? err.stack || err.message : String(err),
+  );
   process.exit(1);
 });

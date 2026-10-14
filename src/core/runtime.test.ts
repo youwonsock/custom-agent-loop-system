@@ -1,0 +1,84 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { classifyFailure } from "./runtime";
+import { SupervisorResult } from "./process_supervisor";
+import { emptyEvidence } from "./event_evidence";
+import { cliDiagnostic, emptyCliDiagnostics } from "./cli_diagnostics";
+
+const result = (): SupervisorResult => ({
+  evidence: emptyEvidence(),
+  diagnostics: emptyCliDiagnostics(),
+  pid: 1,
+  outcome: "succeeded",
+  failureKind: null,
+  failureMessage: null,
+  exitCode: 0,
+  output: "",
+  assistantText: "",
+  events: [],
+  cliSessionId: null,
+  startedAt: "",
+  endedAt: "",
+  timedOut: false,
+  cancelled: false,
+  rawLogPath: "",
+  controlRequest: null,
+  autoInjected: [],
+});
+test("completion failures retain their typed cause despite auth/status strings in ordinary output", () => {
+  const r = result();
+  r.output =
+    '{"timestamp":1791946608401,"callID":"call-440358e11c92","text":"authentication required, HTTP 429"}';
+  for (const failureKind of [
+    "incomplete_response",
+    "role_violation",
+  ] as const) {
+    const failure = classifyFailure(r, {
+      reason: "specific completion failure",
+      failureKind,
+    });
+    assert.equal(failure.kind, failureKind);
+    assert.equal(failure.message, "specific completion failure");
+  }
+});
+test("explicit supervisor causes cannot be replaced by provider authentication diagnostics", () => {
+  for (const failureKind of [
+    "permission",
+    "spawn_error",
+    "idle_timeout",
+    "cancelled",
+    "orphaned_process",
+  ] as const) {
+    const r = result();
+    r.failureKind = failureKind;
+    r.failureMessage = "confirmed failure";
+    r.exitCode = 1;
+    r.diagnostics.terminalError = cliDiagnostic(
+      "authentication required: sign in",
+    );
+    const failure = classifyFailure(r, {
+      reason: "confirmed failure",
+      failureKind,
+    });
+    assert.equal(failure.kind, failureKind);
+  }
+});
+test("plaintext errors classify unsuccessful CLI exits, but cannot override successful execution", () => {
+  const r = result();
+  r.diagnostics.plainError = cliDiagnostic("authentication required: sign in");
+  assert.equal(
+    classifyFailure(r, {
+      reason: "missing completion",
+      failureKind: "incomplete_response",
+    }).kind,
+    "incomplete_response",
+  );
+  r.exitCode = 1;
+  const failure = classifyFailure(r, {
+    reason: "CLI exit 1",
+    failureKind: "process_exit",
+  });
+  assert.equal(failure.kind, "auth");
+  assert.equal(failure.retryable, false);
+  assert.match(failure.message, /authentication required/);
+});

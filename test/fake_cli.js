@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 
 const { spawn } = require("node:child_process");
+const fs = require("node:fs");
+const path = require("node:path");
 
 const mode = process.argv[2] || "success";
 const emit = (event) => process.stdout.write(`${JSON.stringify(event)}\n`);
@@ -8,6 +10,101 @@ const assistant = (text, id = `text-${Date.now()}`) =>
   emit({ type: "text", id, part: { id, text } });
 
 switch (mode) {
+  case "qa-auth-regression":
+    for (const line of fs
+      .readFileSync(
+        path.join(__dirname, "fixtures/qa-auth-regression.jsonl"),
+        "utf8",
+      )
+      .trim()
+      .split("\n"))
+      emit(JSON.parse(line));
+    process.exit(0);
+    break;
+  case "terminal-secret-after-completion":
+    assistant("APPROVED\n[PHASE_DONE]");
+    emit({
+      type: "error",
+      error: {
+        name: "APIError",
+        data: {
+          statusCode: 401,
+          message: "authentication required: top-secret",
+        },
+      },
+    });
+    for (let n = 0; n < 25; n++)
+      emit({ type: "tool_result", id: `noise-${n}`, payload: "x".repeat(400) });
+    process.exit(0);
+    break;
+  case "claude-terminal-error":
+    assistant("APPROVED\n[PHASE_DONE]");
+    emit({
+      type: "result",
+      subtype: "error_during_execution",
+      is_error: true,
+      errors: ["Invalid API key"],
+      result: "This error must not become assistant completion.\n[PHASE_DONE]",
+    });
+    process.exit(0);
+    break;
+  case "tool-auth-error":
+    emit({
+      type: "tool_use",
+      part: {
+        id: "fetch",
+        type: "tool",
+        tool: "webfetch",
+        state: {
+          status: "error",
+          input: { url: "https://example.com" },
+          error: "HTTP 401: authentication failed",
+        },
+      },
+    });
+    assistant("APPROVED\n[PHASE_DONE]");
+    process.exit(0);
+    break;
+  case "denied-claude-write":
+  case "partial-claude-write":
+    emit({
+      type: "assistant",
+      message: {
+        content: [
+          {
+            type: "tool_use",
+            id: "write-1",
+            name: "Write",
+            input: { file_path: "source.ts", content: "changed" },
+          },
+        ],
+      },
+    });
+    emit({
+      type: "user",
+      message: {
+        content: [
+          {
+            type: "tool_result",
+            tool_use_id: "write-1",
+            is_error: true,
+            content: "tool failed",
+          },
+        ],
+      },
+    });
+    emit({
+      type: "result",
+      subtype: "success",
+      is_error: false,
+      permission_denials:
+        mode === "denied-claude-write"
+          ? [{ tool_use_id: "write-1", tool_name: "Write" }]
+          : [],
+      result: "APPROVED\n[PHASE_DONE]",
+    });
+    process.exit(0);
+    break;
   case "success":
     emit({ type: "step_start", id: "step-1", sessionID: "fake-session-1" });
     assistant("Completed fake work.\n[PHASE_DONE]");
@@ -16,9 +113,9 @@ switch (mode) {
   case "planner":
     assistant(
       "=== PLAN OPTIONS ===\n" +
-      "## OPTION 1: A\nPlan A\n\n" +
-      "## OPTION 2: B\nPlan B\n\n" +
-      "## OPTION 3: C\nPlan C\n[PHASE_DONE]"
+        "## OPTION 1: A\nPlan A\n\n" +
+        "## OPTION 2: B\nPlan B\n\n" +
+        "## OPTION 3: C\nPlan C\n[PHASE_DONE]",
     );
     process.exit(0);
     break;
@@ -31,7 +128,9 @@ switch (mode) {
     process.exit(0);
     break;
   case "split-secret-echo":
-    process.stdout.write('{"type":"text","id":"split-secret","part":{"id":"split-secret","text":"credential=top-');
+    process.stdout.write(
+      '{"type":"text","id":"split-secret","part":{"id":"split-secret","text":"credential=top-',
+    );
     setTimeout(() => {
       process.stdout.write('secret\\n[PHASE_DONE]"}}\n');
       process.exit(0);
@@ -50,6 +149,18 @@ switch (mode) {
     process.exit(1);
     break;
   case "event-flood":
+  case "evidence-flood":
+    if (mode === "evidence-flood") {
+      emit({
+        type: "item.completed",
+        item: { id: "changed-file", type: "file_change" },
+      });
+      emit({
+        type: "item.completed",
+        item: { id: "searched", type: "web_search" },
+      });
+      emit({ type: "turn.completed", usage: { output_tokens: 123 } });
+    }
     for (let index = 0; index < 20; index++) {
       emit({
         type: "tool_result",
@@ -57,7 +168,10 @@ switch (mode) {
         payload: "x".repeat(400),
       });
     }
-    assistant("Completed after event flood.\n[PHASE_DONE]", "event-flood-complete");
+    assistant(
+      "Completed after event flood.\n[PHASE_DONE]",
+      "event-flood-complete",
+    );
     process.exit(0);
     break;
   case "no-output":
@@ -71,23 +185,41 @@ switch (mode) {
     setInterval(() => {}, 1000);
     break;
   case "delayed-model":
-    emit({ type: "step_start", id: "delayed-model-step", sessionID: "delayed-model-session" });
+    emit({
+      type: "step_start",
+      id: "delayed-model-step",
+      sessionID: "delayed-model-session",
+    });
     setTimeout(() => {
-      assistant("Long model generation completed.\n[PHASE_DONE]", "delayed-model-text");
+      assistant(
+        "Long model generation completed.\n[PHASE_DONE]",
+        "delayed-model-text",
+      );
       process.exit(0);
     }, 1100);
     break;
   case "continuous-progress": {
     let progress = 0;
-    emit({ type: "step_start", id: `continuous-${progress++}`, sessionID: "continuous-session" });
+    emit({
+      type: "step_start",
+      id: `continuous-${progress++}`,
+      sessionID: "continuous-session",
+    });
     const timer = setInterval(() => {
       if (progress >= 15) {
         clearInterval(timer);
-        assistant("Progressive work completed.\n[PHASE_DONE]", "continuous-complete");
+        assistant(
+          "Progressive work completed.\n[PHASE_DONE]",
+          "continuous-complete",
+        );
         process.exit(0);
         return;
       }
-      emit({ type: "step_start", id: `continuous-${progress++}`, sessionID: "continuous-session" });
+      emit({
+        type: "step_start",
+        id: `continuous-${progress++}`,
+        sessionID: "continuous-session",
+      });
     }, 80);
     break;
   }
@@ -96,14 +228,22 @@ switch (mode) {
       type: "tool_use",
       id: "delayed-tool-event",
       timestamp: Date.now(),
-      part: { id: "delayed-tool-part", tool: "bash", state: { status: "running" } },
+      part: {
+        id: "delayed-tool-part",
+        tool: "bash",
+        state: { status: "running" },
+      },
     });
     setTimeout(() => {
       emit({
         type: "tool_use",
         id: "delayed-tool-event",
         timestamp: Date.now(),
-        part: { id: "delayed-tool-part", tool: "bash", state: { status: "completed" } },
+        part: {
+          id: "delayed-tool-part",
+          tool: "bash",
+          state: { status: "completed" },
+        },
       });
       assistant("Long tool completed.\n[PHASE_DONE]", "delayed-tool-text");
       process.exit(0);
@@ -114,7 +254,11 @@ switch (mode) {
       type: "tool_use",
       id: "tool-hang-event",
       timestamp: Date.now(),
-      part: { id: "tool-hang-part", tool: "bash", state: { status: "running" } },
+      part: {
+        id: "tool-hang-part",
+        tool: "bash",
+        state: { status: "running" },
+      },
     });
     setInterval(() => {}, 1000);
     break;

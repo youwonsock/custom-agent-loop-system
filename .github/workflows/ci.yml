@@ -1,19 +1,12 @@
 name: CI
-
-on:
-  push:
-  pull_request:
-
+on: [push, pull_request]
 permissions:
   contents: read
-
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
-
 jobs:
-  platform-build-test:
-    name: ${{ matrix.os }} / Node 24
+  platform:
     strategy:
       fail-fast: false
       matrix:
@@ -25,34 +18,19 @@ jobs:
         with:
           node-version: 24
           cache: npm
-          cache-dependency-path: |
-            package-lock.json
-            vscode-extension/package-lock.json
       - run: npm ci
       - run: npm run typecheck
       - run: npm test
       - run: npm run smoke
-      - run: npm audit --omit=dev --audit-level=high
+      - run: npm run build:launcher:mac
+        if: runner.os == 'macOS'
+      - run: npm run test:launcher:mac
+        if: runner.os == 'macOS'
       - run: npm run pack:check
-      - run: npm ci
-        working-directory: vscode-extension
-      - run: npm run typecheck
-        working-directory: vscode-extension
-      - run: npm test
-        working-directory: vscode-extension
-      - run: npm audit --audit-level=high
-        working-directory: vscode-extension
-      - run: npm run package
-        working-directory: vscode-extension
-      - run: node vscode-extension/core/dist/loop_orchestrator.js --help
-      - uses: actions/upload-artifact@v7
-        with:
-          name: agent-loop-vsix-${{ matrix.os }}
-          path: vscode-extension/agent-loop-vscode-*.vsix
-          if-no-files-found: error
-
-  coverage:
-    runs-on: windows-latest
+      - run: npm run pack:smoke
+      - run: npm audit --omit=dev --audit-level=high
+  browser:
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v7
@@ -60,4 +38,13 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
-      - run: npm run coverage
+      - run: npm run build
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:e2e
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: gui-verification
+          path: |
+            artifacts/screenshots/
+            test-results/

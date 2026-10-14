@@ -6,7 +6,13 @@
 .goal/
 .kilo/
 test/
+src/
+web/
 vscode-extension/
+artifacts/
+test-results/
+playwright-report/
+playwright.config.ts
 tsconfig.json
 개선 사항.txt
 sessions_registry.json*

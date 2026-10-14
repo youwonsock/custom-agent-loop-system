@@ -1,0 +1,146 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import {
+  cliDiagnostic,
+  CliDiagnosticCollector,
+  MAX_DIAGNOSTIC_MESSAGE_BYTES,
+} from "./cli_diagnostics";
+
+test("auth requires a real code/status or explicit failure rather than identifiers or a topic", () => {
+  for (const message of [
+    "call-440358e11c92",
+    "timestamp=1791946608401",
+    "Review the authentication flow and API key settings",
+    "429 observations",
+    "credential-helper exited",
+  ]) {
+    assert.equal(cliDiagnostic(message).kind, "process_exit", message);
+  }
+  for (const error of [
+    "authentication required: sign in",
+    "Not logged in. Please run /login",
+    "Invalid API key",
+    { name: "ProviderAuthError", data: { message: "Login required" } },
+    { statusCode: 401, message: "HTTP request rejected" },
+    { code: "authentication_failed" },
+  ]) {
+    assert.equal(cliDiagnostic(error).kind, "auth");
+  }
+  assert.equal(
+    cliDiagnostic({ statusCode: 403, message: "Forbidden" }).kind,
+    "permission",
+  );
+  assert.equal(cliDiagnostic("HTTP 403").kind, "permission");
+  assert.equal(
+    cliDiagnostic({ statusCode: 429, message: "Request rejected" }).kind,
+    "rate_limited",
+  );
+  assert.equal(
+    cliDiagnostic("temporary network connection lost").kind,
+    "network",
+  );
+});
+
+test("only execution-level failures are collected; assistant/tool/embedded errors are ignored", () => {
+  const collector = new CliDiagnosticCollector();
+  for (const event of [
+    { type: "text", part: { text: "authentication required: sign in" } },
+    {
+      type: "assistant",
+      message: { content: [{ type: "text", text: "HTTP 401" }] },
+    },
+    {
+      type: "tool_use",
+      part: {
+        tool: "webfetch",
+        state: { status: "error", error: "HTTP 401: authentication failed" },
+      },
+    },
+    {
+      type: "tool_result",
+      payload: { type: "error", error: { statusCode: 403 } },
+    },
+    { type: "step_finish", timestamp: 1791946608401 },
+  ])
+    collector.observeEvent(event);
+  collector.observeLine("Prompt says authentication required: sign in");
+  assert.equal(
+    JSON.stringify(collector.diagnostics),
+    JSON.stringify({ terminalError: null, plainError: null }),
+  );
+  collector.observeLine("authentication required: sign in");
+  assert.equal(collector.diagnostics.plainError?.kind, "auth");
+});
+
+test("native final failures are normalized across supported protocols and survive normal output", () => {
+  for (const event of [
+    { type: "turn.failed", error: { message: "Invalid API key" } },
+    {
+      type: "error",
+      error: {
+        name: "APIError",
+        data: { statusCode: 401, message: "Unauthorized" },
+      },
+    },
+    {
+      type: "result",
+      subtype: "error_during_execution",
+      is_error: true,
+      errors: ["Not logged in"],
+    },
+    { type: "assistant", error: "authentication_failed" },
+  ]) {
+    const collector = new CliDiagnosticCollector();
+    collector.observeEvent(event);
+    for (let n = 0; n < 100; n++)
+      collector.observeEvent({
+        type: "step_finish",
+        timestamp: 1791946608401,
+        part: { id: `id-${n}`, output: "noise" },
+      });
+    assert.equal(collector.diagnostics.terminalError?.kind, "auth");
+  }
+  const collector = new CliDiagnosticCollector();
+  collector.observeEvent({
+    type: "error",
+    message: "temporary network connection lost",
+    willRetry: true,
+  });
+  assert.equal(JSON.stringify(collector.diagnostics.terminalError), "null");
+  collector.observeEvent({
+    type: "error",
+    message: "temporary network connection lost",
+  });
+  collector.observeEvent({ type: "turn.completed" });
+  assert.equal(JSON.stringify(collector.diagnostics.terminalError), "null");
+  collector.observeEvent({ type: "assistant", error: "authentication_failed" });
+  collector.observeEvent({
+    type: "result",
+    subtype: "error_during_execution",
+    is_error: true,
+    errors: [],
+  });
+  assert.equal(collector.diagnostics.terminalError?.kind, "auth");
+});
+
+test("diagnostics are redacted and bounded without losing the classified kind", () => {
+  const key = "QA_DIAGNOSTIC_TEST_SECRET",
+    previous = process.env[key];
+  process.env[key] = "fixture-private-key-987";
+  try {
+    const diagnostic = cliDiagnostic({
+      statusCode: 401,
+      message: `Invalid API key: ${process.env[key]} ` + "가".repeat(10000),
+    });
+    assert.equal(diagnostic.kind, "auth");
+    assert.ok(
+      Buffer.byteLength(diagnostic.message) <= MAX_DIAGNOSTIC_MESSAGE_BYTES,
+    );
+    assert.ok(!diagnostic.message.includes(process.env[key]!));
+    assert.match(diagnostic.message, /REDACTED/);
+    assert.ok(!diagnostic.message.includes("\uFFFD"));
+  } finally {
+    if (previous === undefined) delete process.env[key];
+    else process.env[key] = previous;
+  }
+});
