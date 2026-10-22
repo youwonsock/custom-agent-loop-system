@@ -52,6 +52,8 @@ function kindOf(
   message: string,
 ): FailureKind {
   const normalized = code.toLowerCase().replace(/[^a-z0-9]/g, "");
+  if (/^Stopped after \d+ consecutive invalid-argument failures for the ".+" tool\./i.test(message))
+    return "tool_arguments";
   if (
     /^(providerautherror|authenticationerror|authenticationfailed|authrequired|unauthenticated|unauthorized|invalidapikey|missingapikey|expiredtoken|notloggedin)$/.test(
       normalized,
@@ -85,13 +87,15 @@ function kindOf(
     /^(ratelimit|ratelimiterror|ratelimitexceeded|quotaexceeded|insufficientquota|billingerror|creditsrequired)$/.test(
       normalized,
     ) ||
-    status === 429 ||
+    status === 429 || status === 503 ||
+    /\bproviders? (?:for this model )?.*\b(?:at capacity|overloaded)\b/i.test(message) ||
     /\brate[ _-]?limit(?:ed| exceeded)?\b|\b(?:quota|credits?) (?:is )?(?:exceeded|exhausted|insufficient)\b/i.test(
       message,
     )
   )
     return "rate_limited";
   if (
+    [499, 502, 504].includes(status ?? 0) ||
     /^(econnreset|econnrefused|enotfound|etimedout|networkerror|transporterror)$/.test(
       normalized,
     ) ||
@@ -211,6 +215,15 @@ export class CliDiagnosticCollector {
     }
   }
   observeLine(line: string): void {
+    // Kilo's native logger writes logfmt alongside JSON events. Only ERROR
+    // records are diagnostics; tool output and assistant text are not scanned.
+    if (/^timestamp=\S+ level=ERROR\b/.test(line)) {
+      const value = line.match(/\berror\.error=("(?:[^"\\]|\\.)*")/);
+      if (value) {
+        try { this.diagnostics.plainError = cliDiagnostic(JSON.parse(value[1]!)); } catch { /* keep raw log */ }
+      }
+      return;
+    }
     if (
       !/^(?:\[[^\]\n]{1,40}\]\s*)?(?:error\b|fatal\b|authentication\b|not (?:authenticated|logged in)\b|login (?:is )?required\b|please (?:sign in|log in|login|run \/login)\b|unauthori[sz]ed\b|unauthenticated\b|(?:invalid|missing|expired|revoked) (?:API |authentication )?(?:key|token|credentials?)\b|API[ _-]?key\b|HTTP\b|temporary (?:network|connection)\b|network (?:error|connection)\b|connection (?:lost|reset|refused)\b|ECONN\w*\b|fetch failed\b|unknown model\b|model .*(?:not found|unavailable|not supported)|rate[ _-]?limit\b|quota .*(?:exceeded|exhausted))/i.test(
         line,

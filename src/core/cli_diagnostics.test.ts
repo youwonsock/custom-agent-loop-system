@@ -40,6 +40,16 @@ test("auth requires a real code/status or explicit failure rather than identifie
     "network",
   );
 });
+test("Kilo tool argument aborts, capacity errors and cancelled requests retain actionable types", () => {
+  assert.equal(cliDiagnostic('Stopped after 3 consecutive invalid-argument failures for the "write" tool.').kind, "tool_arguments");
+  assert.equal(cliDiagnostic({ statusCode: 499, message: "status code 499" }).kind, "network");
+  assert.equal(cliDiagnostic({ statusCode: 503, message: "overloaded" }).kind, "rate_limited");
+  const collector = new CliDiagnosticCollector();
+  collector.observeLine('timestamp=2026-10-22T16:51:13Z level=INFO message="providers are currently at capacity"');
+  assert.equal(JSON.stringify(collector.diagnostics.plainError), "null");
+  collector.observeLine('timestamp=2026-10-22T16:51:13Z level=ERROR run=fixture message="stream error" error.error="AI_APICallError: The request limited providers for this model and they are currently at capacity. Providers considered: reflection."');
+  assert.equal(collector.diagnostics.plainError?.kind, "rate_limited");
+});
 
 test("only execution-level failures are collected; assistant/tool/embedded errors are ignored", () => {
   const collector = new CliDiagnosticCollector();

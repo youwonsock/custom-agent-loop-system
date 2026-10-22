@@ -151,3 +151,49 @@ npm run test:launcher:mac
 - macOS 더블클릭 실행기 통합 테스트도 **2/2** 통과했다. 수정된 소스로 빌드·서버 실행·기존 서버 재사용·소유한 서버만 종료하는 동작을 확인했다.
 
 [코어·CLI 로그](../artifacts/verification/qa-core-tests.log), [GUI 로그](../artifacts/verification/qa-gui-tests.log), [설치 패키지 검증](../artifacts/verification/qa-installed-package.log), [실제 로그 재판정](../artifacts/verification/qa-real-log-replay.json), [인증 오류 표시](../artifacts/screenshots/qa-auth-error-context.png), [QA 재개 완료](../artifacts/screenshots/qa-resume-verified.png).
+
+## Windows Node 24 환경 복원 및 실행 수명 수정 — 2026-10-23
+
+Windows x64의 기본 Node.js를 22.20.0에서 **24.22.1 LTS**로 갱신했다. npm은 **11.14.1**이며, `npm ci`로 기존 lockfile의 311개 패키지를 복원했다. 직접 의존성 17개가 선언과 일치하고, 복원 시 audit 결과는 알려진 취약점 0건이었다. 의존성 누락 및 Node 타입 인식 오류는 복원 후 해소되어 TypeScript 설정 변경은 필요하지 않았다.
+
+### 발견한 문제와 수정
+
+- 모델 조회가 PID 종료만 확인하고 반환해 Windows에서 임시 작업 폴더 삭제가 `EBUSY`로 실패했다. 프로세스와 표준 입출력의 `close`까지 제한 시간 안에 기다리도록 수정하고 회귀 테스트를 추가했다.
+- ConPTY는 프로세스 종료 후 출력 배출을 마친 다음 종료 이벤트를 보낸다. 이 사이 watchdog이 정상 완료를 timeout으로 오인했다. 프로세스가 이미 종료된 경우 최종 종료 이벤트를 제한된 시간 동안 기다리고, 실제 종료 코드 및 공급자 오류 진단으로 판정하도록 수정했다. Windows ConPTY에서 정상 완료와 종료 코드 0의 인증 실패를 함께 검사한다.
+- ConPTY의 네이티브 핸들 때문에 완료·승인 대기 워커가 계속 살아 있어 다음 실행이 거부됐다. 런타임의 상태·로그 저장과 lease 해제가 끝나고 IPC 전송이 배출되면 단일 세션 워커를 종료하도록 수정했다.
+- 인증 대기로 전환한 직후 Stop을 누르면 종료 중인 워커에 중지 요청이 남아, 수동 재개한 새 워커가 다시 STOPPED로 전환됐다. 대기 상태 워커의 종료를 확인한 뒤 중지·중단 요청을 처리하며, 종료 확인 한도를 넘기면 재시도를 요청하고 새 제어 요청을 남기지 않는다. 기존 QA 인증·Stop·동일 방문 재개 시나리오로 검증했다.
+- Windows의 PTY 출력 지연을 고려해 테스트의 세션 대기 한도와 진행 갱신 검사의 시간 여유를 조정했다. 갱신 검사에서 단계 제한은 여전히 1,200ms 작업보다 짧아 실제 진행 갱신을 요구한다. 실제 실행의 timeout 기본값은 변경하지 않았다.
+
+### 최종 검증 결과
+
+| 검사 | 결과 | 증거 |
+|---|---|---|
+| Node 24에서 의존성 복원 | 통과, audit 0건 | [npm ci](../artifacts/verification/windows-node24-install.log) |
+| 백엔드·프런트엔드 타입 검사 | 통과 | [타입 검사](../artifacts/verification/windows-node24-typecheck.log) |
+| 코어·웹 빌드 및 코어·통합·공개 CLI | **95/95 통과** | [빌드·테스트](../artifacts/verification/windows-node24-tests.log) |
+| Chromium GUI | **11/11 통과** | [GUI 검사](../artifacts/verification/windows-node24-e2e.log) |
+| 공개 CLI 도움말 | 통과 | [smoke](../artifacts/verification/windows-node24-smoke.log) |
+| npm 패키지 내용 | 통과, 31개 파일 | [패키지 목록 검사](../artifacts/verification/windows-node24-pack-check.log) |
+| 임시 설치한 npm 패키지 | CLI·웹 자산·새 저장소·4종 모델 API·정상 종료 통과 | [설치 검사](../artifacts/verification/windows-node24-pack-smoke.log) |
+
+실행과 모델 조회는 결정적 가짜 CLI를 사용했다. 이번 검증은 Windows 환경에서 수행했으며 macOS 네이티브 실행기 빌드는 포함하지 않는다. 빌드는 성공했고, 약 611kB의 웹 JavaScript 번들에 대한 크기 경고가 남는다. 로그는 기존 정책대로 Git/npm 배포에서 제외하는 `artifacts/verification`에 보존한다.
+
+## 실제 Kilo Auto Free로 웹 2048 생성 및 검증 (2026-10-23)
+
+위의 결정적 가짜 CLI 검사와 별도로, 로컬 Studio에서 실제 Kilo 네이티브 CLI 7.8.15에 연결해 445개 모델을 조회하고 `kilo/kilo-auto/free`를 지정했다. 승인한 계획으로 `experiments/kilo-2048-web-20261023`에 웹 2048을 생성했다. 독립 테스트에서 발견한 무효 이동의 타일 생성, 저장 데이터 검증, 첫 방문의 새 게임 버튼, 승리 후 게임 오버 표시 오류는 Kilo가 수정했다.
+
+생성한 게임의 테스트 13/13, 별도 규칙 검사 10/10 및 독립 기준 구현과의 이동 비교 4,000건이 통과했다. 실제 브라우저에서 방향키, 새 게임, 저장 복원, 390px 렌더링을 확인했다. 터치는 이벤트 단위 테스트로 검사했으며 물리 장치에서의 스와이프 검증은 포함하지 않는다.
+
+게임 검증은 통과했지만 **전체 자동 실행 그래프는 PAUSED**다. 구현 방문은 성공했고, 테스트 단계에서 Auto Free의 연속 잘못된 write 인자로 정지했으며 피드백을 담은 중단 분석도 초기 PTY 출력 120초 timeout으로 정지했다. QA 검토·최종 승인 노드는 실행되지 않았다. 실제 세션 ID는 `1fbcfb7e-0526-45f2-a45b-034d5c85fef1`이다.
+
+상세 재현 방법, 모델·상태 기록, 실패 이력, 자동 검사 결과, 데스크톱·모바일 화면은 [실제 실행 보고서](../artifacts/verification/kilo-2048/VERIFICATION.md)에 보존했다. 현재 실행 요약은 Kilo의 중첩 모델·토큰 필드를 반영하지 못하므로 실제 라우팅은 원시 CLI 로그를 기준으로 별도 확인했다.
+
+## 실제 Auto Free 전체 루프 복구 및 최종 승인 (2026-10-23)
+
+후속 진단에서 모델의 빈 write 인자, 무료 제공자의 용량 부족, Windows ConPTY의 긴 JSON 전송 손상, PowerShell의 npm.ps1 실행 정책, 요구사항 증거 형식 누락이 서로 다른 원인으로 확인됐다. Windows Kilo에는 stdout/stderr를 별도로 처리하는 파이프 전송을 적용했고, 실제 모델·토큰 기록과 원인별 제한된 재시도, 모든 REQ별 보고서 형식 보완을 추가했다. 실제 실패 증거에 대한 FAIL/REJECTED와 요구사항 완료 기준은 유지했다.
+
+최신 실제 세션 `198e9de6-d065-415d-89cb-33d65e20a12c`은 **SUCCESS**다. 기승인 계획을 사용한 구현 → 테스트 PASS → QA APPROVED → 최종 APPROVED가 각각 첫 시도에 완료됐다. 모든 요청은 `kilo/kilo-auto/free`이며 테스트·QA·승인 각각에 원래 요구사항 8개의 SATISFIED 증거가 있다. 정상 네이티브 최종 응답과 Studio 기록의 정확한 일치도 확인했다.
+
+타입 검사·빌드, 코어/서버/CLI **105/105**, GUI **11/11**, 패키지 **32개 파일** 검사가 통과했다. 게임 테스트는 Auto Free가 추가한 타일 4 생성·게임 오버 재시작 검사를 포함해 **15/15**, 별도 규칙 검사 **10/10** 및 네 방향 독립 비교 **4,000건**이 통과했다. 호스트 실행 정책을 변경하거나 저장된 성공 상태를 직접 조작하지 않았다.
+
+[복구 및 전체 루프 검증 보고서](../artifacts/verification/kilo-2048-recovery/VERIFICATION.md)에 원인·회귀 검사·이전 중지 시도·최종 실제 상태·승인 화면을 보존했다. 앞 절의 PAUSED 및 모델/토큰 누락은 최초 검증 당시 상태이며 이번 후속 수정으로 보완했다.

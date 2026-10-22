@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>2048</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="container">
+    <header class="header">
+      <div class="title-block">
+        <h1>2048</h1>
+        <div class="scores">
+          <div class="score-box">
+            <div class="score-label">SCORE</div>
+            <div class="score-value" id="score">0</div>
+          </div>
+          <div class="score-box">
+            <div class="score-label">BEST</div>
+            <div class="score-value" id="best">0</div>
+          </div>
+        </div>
+      </div>
+      <div class="right-panel">
+        <button id="new-game" class="new-game-btn">New Game</button>
+        <p class="hint">Use arrow keys or swipe to move</p>
+      </div>
+    </header>
+
+    <div class="game-area">
+      <div class="board-wrapper">
+        <div class="board" id="board">
+          <div class="grid-background">
+            <div class="grid-cell"></div>
+            <div class="grid-cell"></div>
+            <div class="grid-cell"></div>
+            <div class="grid-cell"></div>
+            <div class="grid-cell"></div>
+            <div class="grid-cell"></div>
+            <div class="grid-cell"></div>
+            <div class="grid-cell"></div>
+            <div class="grid-cell"></div>
+            <div class="grid-cell"></div>
+            <div class="grid-cell"></div>
+            <div class="grid-cell"></div>
+            <div class="grid-cell"></div>
+            <div class="grid-cell"></div>
+            <div class="grid-cell"></div>
+            <div class="grid-cell"></div>
+          </div>
+          <div class="tile-container" id="tile-container"></div>
+        </div>
+      </div>
+      <div class="message-layer" id="message-layer"></div>
+    </div>
+
+    <footer class="footer">
+      <p>Join the numbers and get to the 2048 tile!</p>
+    </footer>
+  </div>
+
+  <script src="game.js"></script>
+  <script src="input.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

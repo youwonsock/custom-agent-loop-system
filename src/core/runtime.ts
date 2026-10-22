@@ -23,7 +23,7 @@ import {
 import { AgentAttemptRunner } from "./agent_attempt_runner";
 import { queryModels } from "./catalog";
 import { buildInvocation, isReadOnly } from "./invocation";
-import { buildNodePrompt } from "./prompt";
+import { buildNodePrompt, buildRecoveryMessage } from "./prompt";
 import { transition } from "./graph";
 import {
   parseRequirementEvidence,
@@ -46,7 +46,7 @@ export function classifyFailure(
     !["process_exit", "incomplete_response"].includes(result.failureKind);
   const diagnostic =
     result.diagnostics.terminalError ??
-    (result.exitCode !== 0 ? result.diagnostics.plainError : null);
+    (result.exitCode !== 0 || result.timedOut ? result.diagnostics.plainError : null);
   const kind =
     result.outcome === "orphaned_process"
       ? "orphaned_process"
@@ -65,12 +65,14 @@ export function classifyFailure(
     !preserved && diagnostic
       ? diagnostic.message
       : (completion.reason ?? result.failureMessage);
-  const message =
+  let message =
     kind === "auth"
       ? `CLI 인증이 필요합니다. 해당 CLI에서 로그인한 뒤 재개하세요.${diagnostic ? ` (${diagnostic.message})` : ""}`
       : kind === "model_unavailable"
         ? `CLI에서 선택한 모델을 실행할 수 없습니다. 모델 권한과 설정을 확인하세요.${diagnostic ? ` (${diagnostic.message})` : ""}`
         : (detail ?? `CLI 실패 (${result.exitCode})`);
+  if (preserved && result.timedOut && diagnostic && diagnostic.kind !== "process_exit")
+    message += `\nLast observed CLI error: ${diagnostic.message}`;
   return {
     kind,
     message,
@@ -616,6 +618,7 @@ export class GraphRuntime {
             attempt.assistantTextBytes !== progress.assistantTextBytes ||
             attempt.maxTokens !== progress.maxTokens;
           attempt.pid = progress.childPid;
+          attempt.cliSessionId = progress.cliSessionId;
           this.activePid = progress.childPid;
           this.owner.setChildPid(progress.childPid);
           attempt.lastProgressAt = progress.lastProgressAt;
@@ -699,7 +702,7 @@ export class GraphRuntime {
         await this.save();
         return null;
       }
-      recoveryMessage = `[${failure.kind}] ${failure.message}\nPrevious observed output:\n${result.assistantText.slice(-5000)}`;
+      recoveryMessage = buildRecoveryMessage(failure.kind, failure.message, result.assistantText, result.events);
       const decision = runner.decideRetry({
         failure,
         attemptNumber: normal + 1,

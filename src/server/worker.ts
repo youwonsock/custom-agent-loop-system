@@ -39,5 +39,11 @@ void runtime
     process.exitCode = 1;
   })
   .finally(() => {
-    if (process.connected) process.disconnect?.();
+    // All state/log writes and lease release have completed. ConPTY can retain
+    // native helper handles, so end this single-session worker after IPC drains.
+    const exit = () => process.exit(process.exitCode ?? 0);
+    if (process.connected) {
+      process.once("disconnect", exit);
+      process.disconnect?.();
+    } else exit();
   });

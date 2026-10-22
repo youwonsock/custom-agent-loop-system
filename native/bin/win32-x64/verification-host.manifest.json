@@ -1,0 +1,9 @@
+{
+    "schemaVersion":  1,
+    "source":  "native/verification-host.cpp",
+    "sourceCommit":  "870b0b5df34e7ac7cdb9af98b532726f17582f98",
+    "target":  "win32-x64",
+    "artifact":  "native/bin/win32-x64/verification-host.exe",
+    "sha256":  "009e619da0611e3f815bdf5085b4e2de678c521fefd920464546435ce51fedb5",
+    "builtAt":  "2026-09-11T16:33:25.7598744Z"
+}

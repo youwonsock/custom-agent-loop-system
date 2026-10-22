@@ -3,6 +3,7 @@ import * as fs from "node:fs";
 import * as fsp from "node:fs/promises";
 import * as path from "node:path";
 import * as pty from "node-pty";
+import { OutputStream, SupervisedChild, spawnPipeChild } from "./process_transport";
 import {
   EventEvidence,
   emptyEvidence,
@@ -10,6 +11,7 @@ import {
   completedSearch,
   claudeCompletedSearch,
   observeTokens,
+  observeModel,
 } from "./event_evidence";
 import {
   AttemptStatus,
@@ -111,6 +113,7 @@ export interface SupervisorProgress {
 }
 
 export interface ProcessSupervisorOptions {
+  transport?: "pty" | "pipe";
   binary: string;
   args: string[];
   cwd: string;
@@ -489,7 +492,10 @@ export class ProcessSupervisor {
     const sensitiveValues = [
       ...new Set((options.sensitiveValues ?? []).filter(Boolean)),
     ].sort((left, right) => right.length - left.length);
-    const redactor = new StreamingRedactor(sensitiveValues);
+    const redactors = {
+      stdout: new StreamingRedactor(sensitiveValues),
+      stderr: new StreamingRedactor(sensitiveValues),
+    };
     const maximumRawLogBytes = Math.max(
       MIN_RAW_LOG_BYTES,
       Math.min(MAX_RAW_LOG_BYTES, options.maxInMemoryOutputBytes * 16),
@@ -510,9 +516,11 @@ export class ProcessSupervisor {
       }
     };
 
-    let child: pty.IPty;
+    let child: SupervisedChild;
     try {
-      child = pty.spawn(options.binary, options.args, {
+      child = options.transport === "pipe"
+        ? spawnPipeChild(options.binary, options.args, options.cwd, options.env)
+        : pty.spawn(options.binary, options.args, {
         name: "xterm-256color",
         cols: options.cols,
         rows: options.rows,
@@ -546,7 +554,7 @@ export class ProcessSupervisor {
     }
 
     const pid = child.pid;
-    const lineBuffer = new LineBuffer();
+    const lineBuffers = { stdout: new LineBuffer(), stderr: new LineBuffer() };
     const events: AnyObj[] = [];
     const eventByteSizes: number[] = [];
     let eventBytes = 0;
@@ -574,7 +582,7 @@ export class ProcessSupervisor {
     let exitSeen = false;
     let actualExitCode = -1;
     let controlRequest: ClaimedControlRequest | null = null;
-    let jsonReassemblyBuffer = "";
+    const jsonReassembly = { stdout: "", stderr: "" };
     let transportTimer: NodeJS.Timeout | null = null;
     let activityTimer: NodeJS.Timeout | null = null;
     let phaseTimer: NodeJS.Timeout | null = null;
@@ -634,10 +642,12 @@ export class ProcessSupervisor {
       if (resolved) return;
       resolved = true;
       clearRuntimeTimers();
-      const finalSafeData = redactor.flush();
-      if (finalSafeData) handleSafeData(finalSafeData);
-      const remainder = lineBuffer.flush();
-      if (remainder) processLine(remainder);
+      for (const stream of ["stdout", "stderr"] as const) {
+        const finalSafeData = redactors[stream].flush();
+        if (finalSafeData) handleSafeData(finalSafeData, stream);
+        const remainder = lineBuffers[stream].flush();
+        if (remainder) processLine(remainder, stream);
+      }
       evidence.fileMutation ||= mutations.finish();
       const terminal = diagnosticCollector.diagnostics.terminalError;
       if (
@@ -678,6 +688,15 @@ export class ProcessSupervisor {
       rawLog.end(() => resolveResult!(finalResult));
     };
 
+    const finishExit = (): void => {
+      finish(
+        actualExitCode === 0 ? "succeeded" : "process_exit",
+        actualExitCode === 0 ? null : "process_exit",
+        actualExitCode === 0 ? null : `Process exited with code ${actualExitCode}`,
+        false,
+      );
+    };
+
     const terminate = async (
       intendedOutcome: AttemptStatus,
       intendedFailure: FailureKind,
@@ -687,6 +706,25 @@ export class ProcessSupervisor {
       if (terminating || resolved) return;
       terminating = true;
       clearRuntimeTimers();
+      if (!cancelled && checkProcessLiveness(pid) === "dead") {
+        // ConPTY drains output before emitting onExit, even after the PID dies.
+        // Preserve the real exit result instead of timing out during that drain.
+        let drainTimer: NodeJS.Timeout | undefined;
+        try {
+          await Promise.race([
+            exitPromise,
+            new Promise<void>((resolve) => {
+              drainTimer = setTimeout(resolve, options.killTimeoutMs);
+            }),
+          ]);
+        } finally {
+          clearTimeout(drainTimer);
+        }
+        if (exitSeen) {
+          finishExit();
+          return;
+        }
+      }
       try {
         child.kill();
       } catch {
@@ -720,14 +758,17 @@ export class ProcessSupervisor {
         void terminate(
           "transport_timeout",
           "transport_timeout",
-          `No initial PTY transport output for ${options.transportTimeoutMs}ms`,
+          `No initial CLI transport output for ${options.transportTimeoutMs}ms`,
           false,
         );
       }, options.transportTimeoutMs);
     };
 
     const resetActivityTimer = (): void => {
-      if (resolved || !transportEstablished || activity === "initial_transport")
+      if (
+        resolved || terminating || !transportEstablished ||
+        activity === "initial_transport"
+      )
         return;
       if (activityTimer) clearTimeout(activityTimer);
       const isToolExecution = activity === "tool_execution";
@@ -809,9 +850,8 @@ export class ProcessSupervisor {
         evidence.completedSearches++;
       }
       evidence.maxTokens = Math.max(evidence.maxTokens, observeTokens(event));
-      const reportedModel =
-        event.model ?? (event.message as AnyObj | undefined)?.model;
-      if (typeof reportedModel === "string")
+      const reportedModel = observeModel(event);
+      if (reportedModel)
         evidence.actualModelId = reportedModel;
       const eventBytesForEntry = Buffer.byteLength(
         JSON.stringify(event),
@@ -849,23 +889,23 @@ export class ProcessSupervisor {
       notifyProgress();
     };
 
-    function processLine(line: string): void {
+    function processLine(line: string, stream: OutputStream = "stdout"): void {
       const trimmed = stripTerminalControlSequences(line).trim();
       if (trimmed.length === 0) return;
 
-      const candidate = jsonReassemblyBuffer
-        ? `${jsonReassemblyBuffer}${trimmed}`
+      const candidate = jsonReassembly[stream]
+        ? `${jsonReassembly[stream]}${trimmed}`
         : trimmed;
-      if (jsonReassemblyBuffer || trimmed.startsWith("{")) {
+      if (jsonReassembly[stream] || trimmed.startsWith("{")) {
         const complete = isStructurallyCompleteJson(candidate);
         if (
           !complete &&
           Buffer.byteLength(candidate, "utf8") <= options.maxInMemoryOutputBytes
         ) {
-          jsonReassemblyBuffer = candidate;
+          jsonReassembly[stream] = candidate;
           return;
         }
-        jsonReassemblyBuffer = "";
+        jsonReassembly[stream] = "";
         try {
           processEvent(JSON.parse(candidate) as AnyObj);
           return;
@@ -876,6 +916,13 @@ export class ProcessSupervisor {
 
       const lower = trimmed.toLowerCase();
       diagnosticCollector.observeLine(trimmed);
+      if (/^timestamp=\S+ level=(?:INFO|WARN|ERROR)\b/.test(trimmed)) {
+        const session = trimmed.match(/\bsession\.id=(ses_[A-Za-z0-9]+)/);
+        if (session) cliSessionId = session[1]!;
+        // Operational logs establish transport, but never renew the model's
+        // progress deadline or act as an interactive approval prompt.
+        return;
+      }
       if (isInteractiveAccessPrompt(trimmed)) {
         void terminate(
           "process_exit",
@@ -905,7 +952,7 @@ export class ProcessSupervisor {
       }
     }
 
-    const handleSafeData = (safeData: string): void => {
+    const handleSafeData = (safeData: string, stream: OutputStream = "stdout"): void => {
       options.onOutput?.(safeData);
       writeRawLog(safeData);
       outputTail = appendRing(
@@ -916,20 +963,24 @@ export class ProcessSupervisor {
       lastOutputAt = new Date().toISOString();
       const cleanedData = stripTerminalControlSequences(safeData);
       if (cleanedData.trim().length > 0) establishTransport();
-      for (const line of lineBuffer.push(cleanedData)) {
-        processLine(line);
+      for (const line of lineBuffers[stream].push(cleanedData)) {
+        processLine(line, stream);
       }
       notifyProgress();
     };
 
-    child.onData((data) => {
+    child.onData((data, stream = "stdout") => {
       if (resolved) return;
       // Normalize terminal control sequences before streaming redaction. Some PTY
       // implementations inject cursor-control bytes between writes; redacting the
       // normalized stream prevents a split credential from being reconstructed by
       // the assistant-event parser even when those bytes bisect the secret.
-      const safeData = redactor.push(stripTerminalControlSequences(data));
-      if (safeData) handleSafeData(safeData);
+      const safeData = redactors[stream].push(stripTerminalControlSequences(data));
+      if (safeData) handleSafeData(safeData, stream);
+    });
+    child.onError?.(error => {
+      actualExitCode = -1;
+      finish("spawn_error", "spawn_error", error.message, false);
     });
 
     child.onExit((event) => {
@@ -937,14 +988,7 @@ export class ProcessSupervisor {
       actualExitCode = event.exitCode;
       resolveExit?.();
       if (terminating || resolved) return;
-      finish(
-        event.exitCode === 0 ? "succeeded" : "process_exit",
-        event.exitCode === 0 ? null : "process_exit",
-        event.exitCode === 0
-          ? null
-          : `Process exited with code ${event.exitCode}`,
-        false,
-      );
+      finishExit();
     });
 
     armInitialTransportTimer();
@@ -978,7 +1022,7 @@ export class ProcessSupervisor {
         ...result,
         outcome: "process_exit",
         failureKind: "process_exit",
-        failureMessage: "PTY completed without an exit event",
+        failureMessage: "CLI transport completed without an exit event",
         exitCode: -1,
       };
     }

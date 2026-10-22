@@ -10,6 +10,21 @@ const assistant = (text, id = `text-${Date.now()}`) =>
   emit({ type: "text", id, part: { id, text } });
 
 switch (mode) {
+  case "pipe-json-interleaved": {
+    const text = '한글🙂'.repeat(1200) + '\n[PHASE_DONE]';
+    const bytes = Buffer.from(JSON.stringify({ type: 'text', sessionID: 'pipe-session', part: { text } }) + '\n');
+    process.stdout.write(bytes.subarray(0, 3601));
+    process.stderr.write('timestamp=2026-10-22T16:51:13Z level=ERROR message="stream error" error.error="Providers for this model are at capacity."\n');
+    setTimeout(() => {
+      process.stdout.write(bytes.subarray(3601));
+      emit({ type: 'step_finish', part: { model: { providerID: 'kilo', modelID: 'pipe-fixture' }, tokens: { total: 42 } } });
+    }, 40);
+    break;
+  }
+  case "native-provider-retries":
+    console.error('timestamp=2026-10-22T16:51:12Z level=INFO message=stream session.id=ses_nativeRetry');
+    setInterval(() => console.error('timestamp=2026-10-22T16:51:13Z level=ERROR message="stream error" error.error="Providers for this model are currently at capacity."'), 30);
+    break;
   case "qa-auth-regression":
     for (const line of fs
       .readFileSync(

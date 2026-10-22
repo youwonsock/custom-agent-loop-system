@@ -56,16 +56,46 @@ export async function stopChild(
   child: ChildProcessWithoutNullStreams,
   timeoutMs = 2_000,
 ): Promise<void> {
-  child.stdin.destroy();
-  if (child.pid && checkProcessLiveness(child.pid) !== "dead") {
-    child.kill("SIGTERM");
-    const deadline = Date.now() + 300;
-    while (checkProcessLiveness(child.pid) === "alive" && Date.now() < deadline)
-      await delay(20);
-    if (checkProcessLiveness(child.pid) !== "dead")
-      await terminateProcessTreeBounded(child.pid, timeoutMs);
-    if (checkProcessLiveness(child.pid) !== "dead")
-      throw new Error("조회 프로세스 종료를 확인할 수 없습니다.");
+  // A dead PID can precede the close event and release of Windows cwd handles.
+  let closed =
+    child.stdout.closed && child.stderr.closed &&
+    (child.exitCode !== null || child.signalCode !== null);
+  let onClose: () => void = () => {};
+  const close = new Promise<void>((resolve) => {
+    onClose = () => {
+      closed = true;
+      resolve();
+    };
+    child.once("close", onClose);
+  });
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    child.stdin.destroy();
+    if (child.pid && checkProcessLiveness(child.pid) !== "dead") {
+      child.kill("SIGTERM");
+      const deadline = Date.now() + 300;
+      while (checkProcessLiveness(child.pid) === "alive" && Date.now() < deadline)
+        await delay(20);
+      if (checkProcessLiveness(child.pid) !== "dead")
+        await terminateProcessTreeBounded(child.pid, timeoutMs);
+      if (checkProcessLiveness(child.pid) !== "dead")
+        throw new Error("조회 프로세스 종료를 확인할 수 없습니다.");
+    }
+    if (!closed) {
+      await Promise.race([
+        close,
+        new Promise<void>((_, reject) => {
+          timer = setTimeout(
+            () =>
+              reject(new Error("조회 프로세스 연결 종료를 확인할 수 없습니다.")),
+            timeoutMs,
+          );
+        }),
+      ]);
+    }
+  } finally {
+    clearTimeout(timer);
+    child.removeListener("close", onClose);
   }
 }
 export interface CatalogOptions {

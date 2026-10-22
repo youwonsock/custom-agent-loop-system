@@ -86,6 +86,8 @@ export function validateCompletion(
       );
   }
   const coverage = evaluateRequirementCoverage(output, requirements);
+  const missingOnly = coverage.missing.length > 0 &&
+    coverage.unresolved.length === coverage.missing.length;
   if (node.type === "planning") {
     answer.plans = parsePlans(output);
     const count = node.planning?.optionsCount ?? 3;
@@ -108,6 +110,8 @@ export function validateCompletion(
         : "FAIL";
     if (lines.at(-1)![1]!.toUpperCase() === "PASS" && !coverage.allSatisfied)
       answer.reason = `요구사항 증거가 부족합니다: ${coverage.unresolved.join(", ")}`;
+    if (lines.at(-1)![1]!.toUpperCase() === "PASS" && missingOnly)
+      return fail(`요구사항 증거 형식이 누락되었거나 잘못되었습니다: ${coverage.missing.join(", ")}. 기존 결과를 보존하고 모든 REQ의 올바른 증거 블록과 VERDICT를 포함한 전체 최종 보고를 다시 반환하세요.`);
   }
   if (node.type === "review" || node.type === "approval") {
     const lines = [...output.matchAll(/^(APPROVED|REJECTED)\b.*$/gim)];
@@ -121,6 +125,8 @@ export function validateCompletion(
       !coverage.allSatisfied
     )
       answer.reason = `요구사항 증거가 부족합니다: ${coverage.unresolved.join(", ")}`;
+    if (lines.at(-1)![1]!.toUpperCase() === "APPROVED" && missingOnly)
+      return fail(`요구사항 증거 형식이 누락되었거나 잘못되었습니다: ${coverage.missing.join(", ")}. 기존 결과를 보존하고 모든 REQ의 올바른 증거 블록과 승인 판정을 포함한 전체 최종 보고를 다시 반환하세요.`);
   }
   return answer;
 }

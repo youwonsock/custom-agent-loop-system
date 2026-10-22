@@ -4,6 +4,7 @@ import { classifyFailure } from "./runtime";
 import { SupervisorResult } from "./process_supervisor";
 import { emptyEvidence } from "./event_evidence";
 import { cliDiagnostic, emptyCliDiagnostics } from "./cli_diagnostics";
+import { buildRecoveryMessage } from "./prompt";
 
 const result = (): SupervisorResult => ({
   evidence: emptyEvidence(),
@@ -24,6 +25,27 @@ const result = (): SupervisorResult => ({
   rawLogPath: "",
   controlRequest: null,
   autoInjected: [],
+});
+test("malformed tool input gets bounded schema feedback and a fresh-session retry", () => {
+  const r = result();
+  r.exitCode = 1;
+  r.diagnostics.terminalError = cliDiagnostic('Stopped after 3 consecutive invalid-argument failures for the "write" tool.');
+  const failure = classifyFailure(r, { reason: "CLI failed", failureKind: null });
+  assert.equal(failure.kind, "tool_arguments");
+  assert.equal(failure.retryable, true);
+  const recovery = buildRecoveryMessage(failure.kind, failure.message, "Existing tests pass", [{ type: "tool_use", part: { tool: "write", state: { status: "error", error: 'filePath and content are required' } } }]);
+  assert.match(recovery, /filePath and content are required/);
+  assert.match(recovery, /never submit \{\}/);
+});
+test("a provider capacity retry timeout keeps its timeout cause and provider explanation", () => {
+  const r = result();
+  r.failureKind = "idle_timeout";
+  r.failureMessage = "No meaningful progress";
+  r.timedOut = true;
+  r.diagnostics.plainError = cliDiagnostic({ statusCode: 503, message: "Providers are at capacity" });
+  const failure = classifyFailure(r, { reason: "No meaningful progress", failureKind: null });
+  assert.equal(failure.kind, "idle_timeout");
+  assert.match(failure.message, /Providers are at capacity/);
 });
 test("completion failures retain their typed cause despite auth/status strings in ordinary output", () => {
   const r = result();

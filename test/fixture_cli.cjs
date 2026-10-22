@@ -150,6 +150,18 @@ if (args.includes("app-server")) {
     console.error("temporary network connection lost");
     process.exit(7);
   }
+  if (prompt.includes("fixture:tool-arguments-once")) {
+    if (calls[type] === 1) {
+      emit({ type: "step_start", sessionID: "fixture-malformed-session" });
+      emit({ type: "tool_use", part: { tool: "write", state: { status: "error", error: "filePath and content are missing and required", input: {} } } });
+      emit({ type: "error", error: { message: 'Stopped after 3 consecutive invalid-argument failures for the "write" tool.' } });
+      process.exit(1);
+    }
+    if (!prompt.includes("filePath and content are missing and required") || args.includes("--session")) {
+      console.error("Error: missing schema feedback or reused invalid session");
+      process.exit(1);
+    }
+  }
   if (prompt.includes("fixture:spent-network")) {
     emit({
       type: "item.completed",
@@ -180,12 +192,14 @@ if (args.includes("app-server")) {
       type === "review" &&
       prompt.includes("fixture:reject-once") &&
       calls[type] === 1;
-    const evidence = reqs
+    let evidence = reqs
       .map(
         (r) =>
           `[REQUIREMENT_EVIDENCE]\nREQ_ID: ${r}\nSTATUS: ${rejected ? "PARTIAL" : "SATISFIED"}\nEVIDENCE: fixture observed acceptance artifact\n[/REQUIREMENT_EVIDENCE]`,
       )
       .join("\n");
+    if (prompt.includes("fixture:evidence-typo-once") && ["test", "review", "approval"].includes(type) && calls[type] === 1)
+      evidence = evidence.replace("REQ_ID: ", "REQ_ID: REQ_ID: ");
     let text = "";
     if (type === "planning") {
       const count = Number(

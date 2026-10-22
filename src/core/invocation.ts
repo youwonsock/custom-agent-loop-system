@@ -14,7 +14,7 @@ export async function buildInvocation(
     allowedPaths: string[];
     resumeId?: string;
   },
-): Promise<{ binary: string; args: string[]; env: Record<string, string> }> {
+): Promise<{ binary: string; args: string[]; env: Record<string, string>; transport?: "pipe" }> {
   const executable = await resolveExecutable(c.binary),
     readonly = isReadOnly(node.type);
   const env = Object.fromEntries(
@@ -60,6 +60,10 @@ export async function buildInvocation(
     if (opts.resumeId) args.push("--resume", opts.resumeId);
   } else {
     args = ["run", "--format", "json", "--model", b.modelId, "--dir", opts.cwd];
+    // Kilo emits no JSON until the model starts a step. Bootstrap/provider
+    // logs must be enabled before the subcommand to distinguish a live CLI
+    // waiting on capacity from a broken initial transport.
+    if (c.type === "kilo") args.unshift("--print-logs", "--log-level", "INFO");
     if (b.variant) args.push("--variant", b.variant);
     if (opts.resumeId) args.push("--session", opts.resumeId);
     if (opts.fullAccess && !readonly) args.push("--auto");
@@ -88,11 +92,20 @@ export async function buildInvocation(
         ...permission,
       },
     });
-    args.push(opts.prompt);
+    const protocol = c.type !== "kilo" ? "" :
+      '\n\nNative tool protocol: use the exact schema supplied by this CLI. Never send an empty tool input. After a schema error, correct the missing fields before trying again; do not repeat the same invalid call. ' +
+      (readonly
+        ? 'Use only permitted read-only tools and inspect prior actual test evidence. Never request write or shell execution permissions.'
+        : 'The write tool requires both filePath (absolute path) and content (string). Preserve existing tests and use bash to run them before deciding whether additional coverage is necessary. ' +
+          (process.platform === "win32"
+            ? 'The tool shell is Windows PowerShell: use npm.cmd and npx.cmd to avoid npm.ps1 execution policy errors, or invoke node.exe directly. Use PowerShell syntax, not Bash for/do/done loops or &&. Do not change the host execution policy.'
+            : ""));
+    args.push(opts.prompt + protocol);
   }
   return {
     binary: executable.file,
     args: [...executable.prefix, ...args],
     env,
+    ...(c.type === "kilo" && process.platform === "win32" ? { transport: "pipe" as const } : {}),
   };
 }

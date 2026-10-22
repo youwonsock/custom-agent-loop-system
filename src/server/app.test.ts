@@ -10,6 +10,8 @@ import { delay } from "../core/resilience";
 const origin = "http://127.0.0.1:4317",
   host = "127.0.0.1:4317",
   binary = path.resolve(__dirname, "../../../test/fixture_cli.cjs");
+// ConPTY drains output for about a second per role before reporting process exit.
+const sessionWaitMs = process.platform === "win32" ? 20_000 : 10_000;
 const quickSettings = {
   maxAgentAttempts: 1,
   maxCompletionRecoveryAttempts: 1,
@@ -79,7 +81,7 @@ async function setup(monitor = false) {
 async function wait(
   read: () => Promise<SessionState>,
   status: SessionState["status"],
-  timeout = 10000,
+  timeout = sessionWaitMs,
 ): Promise<SessionState> {
   const end = Date.now() + timeout;
   let s = await read();
@@ -262,7 +264,7 @@ test("planning revisits get new visit IDs and new approvals; earlier approval ca
     expectedRevision: 1,
   });
   assert.equal(approve.statusCode, 200, approve.body);
-  const deadline = Date.now() + 10000;
+  const deadline = Date.now() + sessionWaitMs;
   do {
     state = await read();
     if (
@@ -490,6 +492,21 @@ test("unfinished QA mentioning auth uses bounded completion recovery and keeps i
   assert.equal(qa.attempts[1]!.mode, "completion_recovery");
   assert.equal(qa.attempts[1]!.reconnectUsed, false);
 });
+test("positive verdicts with malformed requirement blocks recover in the same role without repeating implementation", async (t) => {
+  const s = await setup();
+  t.after(s.cleanup);
+  const graph = await automaticPlans(s);
+  const id = await launch(s, graph, "fixture:evidence-typo-once", { maxAgentAttempts: 2, phaseRecoveryBudgetMs: 7000 });
+  const state = await wait(() => s.store.readSession(id), "SUCCESS");
+  assert.equal(state.visits.filter(v => v.nodeId === "implementation").length, 1);
+  for (const nodeId of ["test", "review", "approval"]) {
+    const visit = state.visits.find(v => v.nodeId === nodeId)!;
+    assert.equal(visit.status, "succeeded");
+    assert.equal(visit.attempts.length, 2);
+    assert.equal(visit.attempts[0]!.failureKind, "incomplete_response");
+    assert.equal(visit.attempts[1]!.reconnectUsed, false);
+  }
+});
 test("transport retry reconnects once within the same visit with the saved CLI session", async (t) => {
   const s = await setup();
   t.after(s.cleanup);
@@ -507,6 +524,21 @@ test("transport retry reconnects once within the same visit with the saved CLI s
     "utf8",
   );
   assert.match(args, /fixture-session/);
+});
+test("malformed Kilo tool calls recover with schema feedback in a fresh attempt on the same model", async (t) => {
+  const s = await setup();
+  t.after(s.cleanup);
+  await s.store.saveConnection({ id: "fixture", label: "Fixture Kilo", type: "kilo", binary });
+  const graph = await minimal(s);
+  graph.defaultBinding = { connectionId: "fixture", modelId: "fixture/fixture-model" };
+  const saved = await s.store.saveGraph(graph.id, graph, graph.revision);
+  const id = await launch(s, saved, "fixture:tool-arguments-once", { maxAgentAttempts: 2, phaseRecoveryBudgetMs: 7000 });
+  const state = await wait(() => s.store.readSession(id), "SUCCESS");
+  const attempts = state.visits[0]!.attempts;
+  assert.equal(attempts.length, 2);
+  assert.equal(attempts[0]!.failureKind, "tool_arguments");
+  assert.equal(attempts[1]!.reconnectUsed, false);
+  assert.ok(attempts.every(a => a.requestedModelId === "fixture/fixture-model"));
 });
 test("token-free transport exhaustion schedules recovery then resumes automatically", async (t) => {
   const s = await setup(true);

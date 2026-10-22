@@ -13,6 +13,7 @@ interface CaseResult {
     fileMutation: boolean;
     completedSearches: number;
     maxTokens: number;
+    actualModelId: string | null;
   };
   outcome: string;
   failureKind: string | null;
@@ -31,6 +32,22 @@ test("file mutation, search and spend survive eviction from the recent event rin
   assert.equal(result.evidence.maxTokens, 123);
   assert.ok(result.eventBytes <= 1024);
 });
+test("pipe JSON preserves long Unicode records while stderr arrives inside a stdout record", async () => {
+  const result = await runFake("pipe-json-interleaved", { transportMode: "pipe" });
+  assert.equal(result.outcome, "succeeded");
+  assert.equal(result.assistantText, '한글🙂'.repeat(1200) + '\n[PHASE_DONE]');
+  assert.equal(result.cliSessionId, "pipe-session");
+  assert.equal(result.evidence.maxTokens, 42);
+  assert.equal(result.evidence.actualModelId, "kilo/pipe-fixture");
+  assert.equal(result.diagnostics.plainError?.kind, "rate_limited");
+});
+test("pipe transport retains streaming credential redaction and bounded termination", async () => {
+  const secret = await runFake("split-secret-echo", { transportMode: "pipe" });
+  assert.equal(secret.rawLogIncludesSecret, false);
+  assert.doesNotMatch(secret.assistantText, /top-secret/);
+  const stopped = await runFake("ignore-termination", { transportMode: "pipe", transport: 100 });
+  assert.equal(stopped.outcome, "transport_timeout");
+});
 
 function runFake(
   mode: string,
@@ -42,6 +59,8 @@ function runFake(
     cols?: number;
     maxBytes?: number;
     absolute?: number;
+    conpty?: boolean;
+    transportMode?: "pty" | "pipe";
   },
 ): Promise<CaseResult> {
   const helper = path.join(
@@ -65,6 +84,8 @@ function runFake(
         String(timeouts?.cols ?? 1_000),
         String(timeouts?.maxBytes ?? 1024 * 1024),
         String(timeouts?.absolute ?? timeouts?.phase ?? 2_000),
+        String(timeouts?.conpty ?? false),
+        timeouts?.transportMode ?? "pty",
       ],
       { timeout: 10_000, windowsHide: true },
       (err, stdout, stderr) => {
@@ -94,6 +115,24 @@ test("supervisor captures assistant events and CLI session id", async () => {
   assert.match(result.assistantText, /\[PHASE_DONE\]/);
   assert.equal(result.cliSessionId, "fake-session-1");
 });
+
+test(
+  "ConPTY output draining preserves the exit result after the process dies",
+  { skip: process.platform !== "win32" },
+  async () => {
+    for (const mode of ["success", "claude-terminal-error"]) {
+      const result = await runFake(mode, {
+        conpty: true,
+        transport: 750,
+        idle: 200,
+        phase: 2_000,
+      });
+      assert.equal(result.exitCode, 0);
+      assert.equal(result.outcome, mode === "success" ? "succeeded" : "process_exit");
+      assert.equal(result.failureKind, mode === "success" ? null : "auth");
+    }
+  },
+);
 
 test("raw prompt echo cannot become assistant completion", async () => {
   const result = await runFake("prompt-echo");
@@ -163,17 +202,25 @@ test("initial transport timeout stops after connection and model generation gets
   assert.equal(result.outcome, "succeeded");
   assert.match(result.assistantText, /\[PHASE_DONE\]/);
 });
+test("Kilo bootstrap logs establish transport but repeated capacity logs cannot extend model idle time", async () => {
+  const result = await runFake("native-provider-retries", { transport: 750, idle: 250, phase: 2000 });
+  assert.equal(result.outcome, "idle_timeout");
+  assert.equal(result.cliSessionId, "ses_nativeRetry");
+  assert.equal(result.diagnostics.plainError?.kind, "rate_limited");
+});
 
 test("meaningful progress renews the phase window up to the absolute recovery deadline", async () => {
+  const windows = process.platform === "win32";
   const result = await runFake("continuous-progress", {
-    transport: 750,
-    idle: 250,
-    tool: 250,
-    phase: 750,
-    // Allow process startup while exercising renewal across a 1200ms workload.
-    absolute: 3_000,
+    transport: windows ? 2_000 : 750,
+    // WinPTY may batch progress while starting the helper or draining output.
+    idle: windows ? 1_000 : 250,
+    tool: windows ? 1_000 : 250,
+    phase: windows ? 1_000 : 750,
+    // Both phase windows remain shorter than the 1200ms workload.
+    absolute: windows ? 5_000 : 3_000,
   });
-  assert.equal(result.outcome, "succeeded");
+  assert.equal(result.outcome, "succeeded", JSON.stringify(result));
   assert.match(result.assistantText, /\[PHASE_DONE\]/);
 });
 

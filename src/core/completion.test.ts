@@ -122,3 +122,24 @@ test("missing markers and read-only mutations expose typed failure causes", () =
     "role_violation",
   );
 });
+test("missing or malformed positive evidence uses bounded report recovery while real negative evidence stays a verdict", () => {
+  const requirements = deriveRequirementLedger("one\ntwo").items;
+  const block = (id: string, status = "SATISFIED") => `[REQUIREMENT_EVIDENCE]\nREQ_ID: ${id}\nSTATUS: ${status}\nEVIDENCE: observed check\n[/REQUIREMENT_EVIDENCE]`;
+  for (const type of ["test", "review", "approval"] as const) {
+    const node = createGraph().nodes.find(n => n.type === type)!;
+    const verdict = type === "test" ? "VERDICT: PASS" : "APPROVED";
+    const malformed = validateCompletion(node, result(`${block("REQ-001")}\n${block("REQ_ID: REQ-002")}\n${verdict}\n[PHASE_DONE]`), "goal", requirements);
+    assert.equal(malformed.valid, false);
+    assert.equal(malformed.failureKind, "incomplete_response");
+    assert.match(malformed.reason!, /REQ-002/);
+    const repaired = validateCompletion(node, result(`${block("REQ-001")}\n${block("REQ-002")}\n${verdict}\n[PHASE_DONE]`), "goal", requirements);
+    assert.equal(repaired.valid, true);
+    assert.equal(repaired.verdict, type === "test" ? "PASS" : "APPROVED");
+    const negative = validateCompletion(node, result(`${block("REQ-001")}\n${block("REQ-002", "FAILED")}\n${verdict}\n[PHASE_DONE]`), "goal", requirements);
+    assert.equal(negative.valid, true);
+    assert.equal(negative.verdict, type === "test" ? "FAIL" : "REJECTED");
+    const mixed = validateCompletion(node, result(`${block("REQ-001", "FAILED")}\n${verdict}\n[PHASE_DONE]`), "goal", requirements);
+    assert.equal(mixed.valid, true);
+    assert.equal(mixed.verdict, type === "test" ? "FAIL" : "REJECTED");
+  }
+});

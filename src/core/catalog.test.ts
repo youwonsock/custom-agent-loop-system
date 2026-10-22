@@ -3,11 +3,32 @@ import assert from "node:assert/strict";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { queryModels, normalizeModels } from "./catalog";
+import { spawn } from "node:child_process";
+import { once } from "node:events";
+import { queryModels, normalizeModels, stopChild } from "./catalog";
 import { buildInvocation } from "./invocation";
 import { createGraph } from "./graph";
 import { CliDiagnosticError } from "./cli_diagnostics";
 const binary = path.resolve(__dirname, "../../../test/fixture_cli.cjs");
+test("model query cleanup waits for process and stdio close", async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "catalog-close-test-"));
+  const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+    cwd: root,
+    stdio: "pipe",
+    windowsHide: true,
+  });
+  t.after(async () => {
+    await stopChild(child);
+    await fs.rm(root, { recursive: true, force: true, maxRetries: 5 });
+  });
+  await once(child, "spawn");
+  let closed = false;
+  child.once("close", () => {
+    closed = true;
+  });
+  await stopChild(child);
+  assert.equal(closed, true);
+});
 for (const type of ["codex", "opencode", "kilo", "claude"] as const)
   test(`${type} queries native model API with project context, without coding turns`, async (t) => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "catalog-api-test-"));
@@ -91,6 +112,20 @@ test("native invocation preserves MCP/web/hooks and never forces pure mode", asy
     assert.equal(invocation.args.includes("--mcp-config"), false);
     assert.equal(invocation.args.includes("--search"), false);
     assert.equal(JSON.stringify(invocation).includes("mcpServers"), false);
+    if (type === "kilo") {
+      assert.ok(invocation.args.indexOf("--print-logs") < invocation.args.indexOf("run"));
+      assert.match(invocation.args.at(-1)!, /filePath.*content/);
+      if (process.platform === "win32") assert.match(invocation.args.at(-1)!, /npm\.cmd.*execution policy/);
+      if (process.platform === "win32") assert.equal(invocation.transport, "pipe");
+      const review = await buildInvocation(
+        { id: type, label: type, type, binary },
+        { connectionId: type, modelId: "fixture-model" },
+        g.nodes.find(n => n.type === "review")!,
+        { prompt: "review", cwd: os.tmpdir(), fullAccess: false, allowedPaths: [] },
+      );
+      assert.match(review.args.at(-1)!, /only permitted read-only tools/);
+      assert.doesNotMatch(review.args.at(-1)!, /use bash/);
+    }
   }
 });
 

@@ -234,6 +234,12 @@ export function claudeCompletedSearch(
 export function observeTokens(event: Event, depth = 0): number {
   if (depth > 5) return 0;
   let count = 0;
+  const part = obj(event.part), tokens = obj(part.tokens);
+  // Kilo/OpenCode report usage under step_finish.part.tokens, not *_tokens.
+  if (event.type === "step_finish")
+    for (const key of ["total", "output", "reasoning"])
+      if (typeof tokens[key] === "number" && Number.isFinite(tokens[key]))
+        count = Math.max(count, tokens[key] as number);
   for (const [key, value] of Object.entries(event)) {
     if (
       typeof value === "number" &&
@@ -244,4 +250,15 @@ export function observeTokens(event: Event, depth = 0): number {
       count = Math.max(count, observeTokens(value as Event, depth + 1));
   }
   return count;
+}
+export function observeModel(event: Event): string | null {
+  const direct = event.model ?? obj(event.message).model;
+  if (typeof direct === "string") return direct;
+  if (event.type === "step_finish" || event.type === "step_start") {
+    const model = obj(obj(event.part).model);
+    if (typeof model.modelID === "string")
+      return typeof model.providerID === "string"
+        ? `${model.providerID}/${model.modelID}` : model.modelID;
+  }
+  return null;
 }

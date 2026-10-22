@@ -1,0 +1,118 @@
+{
+  "checkedAt": "2026-10-22T16:53:32.889Z",
+  "initial": {
+    "best": "0",
+    "score": "0",
+    "tiles": [
+      {
+        "left": "343.5px",
+        "top": "0px",
+        "value": "2"
+      },
+      {
+        "left": "229px",
+        "top": "343.5px",
+        "value": "2"
+      }
+    ]
+  },
+  "moved": {
+    "best": "8",
+    "score": "8",
+    "tiles": [
+      {
+        "left": "343.5px",
+        "top": "0px",
+        "value": "2"
+      },
+      {
+        "left": "229px",
+        "top": "229px",
+        "value": "4"
+      },
+      {
+        "left": "229px",
+        "top": "343.5px",
+        "value": "2"
+      },
+      {
+        "left": "343.5px",
+        "top": "343.5px",
+        "value": "4"
+      }
+    ]
+  },
+  "restored": {
+    "best": "8",
+    "score": "8",
+    "tiles": [
+      {
+        "left": "343.5px",
+        "top": "0px",
+        "value": "2"
+      },
+      {
+        "left": "229px",
+        "top": "229px",
+        "value": "4"
+      },
+      {
+        "left": "229px",
+        "top": "343.5px",
+        "value": "2"
+      },
+      {
+        "left": "343.5px",
+        "top": "343.5px",
+        "value": "4"
+      }
+    ]
+  },
+  "persistenceMatches": true,
+  "desktopNow": {
+    "best": "64",
+    "score": "64",
+    "tiles": [
+      {
+        "left": "343.5px",
+        "top": "0px",
+        "value": "2"
+      },
+      {
+        "left": "343.5px",
+        "top": "114.5px",
+        "value": "16"
+      },
+      {
+        "left": "343.5px",
+        "top": "229px",
+        "value": "8"
+      },
+      {
+        "left": "0px",
+        "top": "343.5px",
+        "value": "2"
+      },
+      {
+        "left": "114.5px",
+        "top": "343.5px",
+        "value": "4"
+      },
+      {
+        "left": "229px",
+        "top": "343.5px",
+        "value": "4"
+      },
+      {
+        "left": "343.5px",
+        "top": "343.5px",
+        "value": "2"
+      }
+    ]
+  },
+  "consoleErrors": [],
+  "mobileFrame": {
+    "title": "2048 mobile preview",
+    "width": 390
+  }
+}

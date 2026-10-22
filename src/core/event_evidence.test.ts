@@ -4,10 +4,19 @@ import {
   claudeCompletedSearch,
   fileMutation,
   MutationTracker,
+  observeTokens,
+  observeModel,
 } from "./event_evidence";
 import { shellMutation } from "./shell_mutation";
 import * as fs from "node:fs";
 import * as path from "node:path";
+test("native Kilo step usage/model evidence is retained without reading tool payloads", () => {
+  const part = { model: { providerID: "kilo", modelID: "reflection/beam" }, tokens: { total: 13990, input: 11766, output: 12, reasoning: 36 } };
+  assert.equal(observeTokens({ type: "step_finish", part }), 13990);
+  assert.equal(observeModel({ type: "step_finish", part }), "kilo/reflection/beam");
+  assert.equal(observeModel({ type: "tool_use", part }), null);
+  assert.equal(observeTokens({ type: "tool_use", part }), 0);
+});
 test("Claude search starts do not count as completed research; only successful tool results count", () => {
   const pending = new Set<string>();
   assert.equal(

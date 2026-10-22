@@ -27,6 +27,7 @@ export type FailureKind =
   | "process_exit"
   | "incomplete_response"
   | "network"
+  | "tool_arguments"
   | "rate_limited"
   | "auth"
   | "model_unavailable"

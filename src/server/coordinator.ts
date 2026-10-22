@@ -236,6 +236,14 @@ export class SessionCoordinator extends EventEmitter {
       const state = await this.store.readSession(id);
       if (state.status === "SUCCESS")
         throw new AppError(409, "완료된 세션입니다.");
+      if (!["RUNNING", "RECOVERING"].includes(state.status)) {
+        // A held worker no longer polls controls while releasing its lease.
+        // Let it exit before deciding whether a new queued request is needed.
+        const deadline = Date.now() + 2_000;
+        while (this.children.has(id) && Date.now() < deadline) await delay(25);
+        if (this.children.has(id))
+          throw new AppError(409, "세션 워커가 종료되는 중입니다. 잠시 후 다시 시도하세요.");
+      }
       const lease = await readJsonFile<SessionLease>(
         path.join(this.store.sessionDir(id), "lease.json"),
       );
@@ -389,6 +397,10 @@ export class SessionCoordinator extends EventEmitter {
             active?.attempts.some((a) => a.activity !== "initial_transport")
           ) {
             const paused = await this.store.mutateSession(s.id, (state) => {
+              // A manual resume may have started a new worker since the
+              // monitor read this snapshot/lease. Never pause its new state
+              // using the previous owner's stale evidence.
+              if (this.children.has(s.id) || state.updatedAt !== s.updatedAt || state.status !== "RUNNING") return;
               state.status = "PAUSED";
               state.statusReason =
                 "이전 워커의 소유권을 확인할 수 없습니다. 모델 사용 가능성이 있어 수동 재개가 필요합니다.";
