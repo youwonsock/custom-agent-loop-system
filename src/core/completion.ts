@@ -1,3 +1,4 @@
+import { NodeVerdict } from "../shared/execution_types";
 import { AgentNode, CommandReceipt, PlanChoice } from "../shared/domain";
 import { SupervisorResult } from "./process_supervisor";
 import {
@@ -29,7 +30,7 @@ export interface Completion {
   reason: string | null;
   failureKind: FailureKind | null;
   output: string;
-  verdict: string | null;
+  verdict: NodeVerdict | null;
   plans: PlanChoice[];
   researchBlocked: boolean;
   environmentBlocked: string | null;

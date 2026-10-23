@@ -1,3 +1,4 @@
+import { decodeSession } from "./session_schema";
 import { applyApproval } from "./session_transitions";
 import { SessionSummary, sessionSummary } from "../shared/session_updates";
 import * as fs from "node:fs/promises";
@@ -223,17 +224,25 @@ export class StudioStore {
     return summaries.filter((s): s is SessionSummary => !!s).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   }
   async readSession(id: string): Promise<SessionState> {
-    const s = await readJsonFile<SessionState>(
-      path.join(this.sessionDir(id), "state.json"),
-    );
-    if (!s) throw new AppError(404, "세션이 없습니다.");
-    if (s.stateVersion !== 3)
-      throw new AppError(400, "새 세션 형식만 지원합니다.");
-    return s;
+    let raw: string;
+    try { raw = await fs.readFile(path.join(this.sessionDir(id), "state.json"), "utf8"); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") throw new AppError(404, "세션이 없습니다.");
+      throw error;
+    }
+    let value: unknown;
+    try { value = JSON.parse(raw); }
+    catch { throw new AppError(500, "세션 snapshot JSON이 손상되었습니다. 원본 파일을 확인하세요.", "invalid_session"); }
+    return decodeSession(value, id);
   }
+
   async writeSession(state: SessionState): Promise<void> {
     await withShortFileLock(path.join(this.sessionDir(state.id), "state.lock"), async () => {
-      const current = await readJsonFile<SessionState>(path.join(this.sessionDir(state.id), "state.json"));
+      const current = await this.readSession(state.id).catch(error => {
+        if (error instanceof AppError && error.statusCode === 404) return null;
+        throw error;
+      });
+      decodeSession(state, state.id);
       if (current && (current.revision ?? 0) !== (state.revision ?? 0))
         throw new AppError(409, "더 새로운 세션 상태가 저장되어 이전 상태를 덮어쓸 수 없습니다.", "stale_session");
       state.revision = (current?.revision ?? 0) + 1;
@@ -250,6 +259,7 @@ export class StudioStore {
       async () => {
         const s = await this.readSession(id);
         change(s);
+        decodeSession(s, id);
         s.revision = (s.revision ?? 0) + 1;
         s.updatedAt = new Date().toISOString();
         await atomicWriteJsonFile(

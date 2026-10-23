@@ -509,7 +509,7 @@ export class GraphRuntime {
         mode: completionRecovery
           ? ("completion_recovery" as const)
           : ("standard" as const),
-        failureKind: null as string | null,
+        failureKind: null,
         message: null as string | null,
         logPath,
         lastProgressAt: null as string | null,

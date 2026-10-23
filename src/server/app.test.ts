@@ -1111,3 +1111,29 @@ test("stale runtime snapshot cannot overwrite a newer STOP decision", async t =>
   await assert.rejects(s.store.writeSession(stale), (e: unknown) => (e as {code?:string}).code === "stale_session");
   assert.deepEqual(await s.store.readSession(id), current);
 });
+
+test("snapshot decoding rejects malformed v3 data and preserves compatible legacy evidence", async t => {
+  const s = await setup(); t.after(s.cleanup);
+  const id = await launch(s, await minimal(s), "snapshot validation");
+  const valid = await wait(() => s.store.readSession(id), "SUCCESS"); await delay(100);
+  const file = path.join(s.store.sessionDir(id), "state.json");
+  const { decodeSession } = await import("../core/session_schema.js");
+  const legacy = structuredClone(valid); delete legacy.revision;
+  for (const v of legacy.visits) for (const a of v.attempts) { delete a.completionAccepted; delete a.fileMutation; delete a.commands; delete a.pricing; }
+  assert.equal(decodeSession(legacy,id).stateVersion,3);
+  for (const mutate of [
+    (v: any) => { delete v.graph; }, (v: any) => { v.visits=null; },
+    (v: any) => { delete v.settings; }, (v: any) => { v.activeVisitId="nonexistent"; },
+    (v: any) => { v.visits[0].attempts[0].status="fake-success"; },
+    (v: any) => { v.visits[1].attempts[0].commands[0].exitCode="0"; },
+    (v: any) => { v.id="different"; },
+  ]) {
+    const broken = structuredClone(valid); mutate(broken);
+    await fs.writeFile(file,JSON.stringify(broken));
+    await assert.rejects(s.store.readSession(id),(e:unknown)=>(e as {code?:string}).code==="invalid_session");
+    assert.deepEqual(JSON.parse(await fs.readFile(file,"utf8")),broken,"corrupt original is never rewritten");
+  }
+  await fs.writeFile(file,"{ broken json");
+  await assert.rejects(s.store.readSession(id),/JSON이 손상/);
+  await fs.writeFile(file,JSON.stringify(valid));
+});

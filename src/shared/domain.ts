@@ -1,3 +1,4 @@
+import type { Activity, AttemptStatus, FailureKind, NodeVerdict } from "./execution_types";
 export const NODE_TYPES = [
   "planning",
   "implementation",
@@ -129,18 +130,18 @@ export interface AttemptRecord {
   commands?: CommandReceipt[];
   id: string;
   number: number;
-  status: string;
+  status: AttemptStatus | FailureKind | "interrupted";
   startedAt: string;
   endedAt: string | null;
   pid: number | null;
   cliSessionId: string | null;
   reconnectUsed: boolean;
   mode: "standard" | "completion_recovery";
-  failureKind: string | null;
+  failureKind: FailureKind | "worker_crash" | null;
   message: string | null;
   logPath: string;
   lastProgressAt: string | null;
-  activity: string;
+  activity: Activity;
   deadlineAt: string;
   requestedModelId: string;
   actualModelId: string | null;
@@ -163,7 +164,7 @@ export interface NodeVisit {
   completedAt: string | null;
   attempts: AttemptRecord[];
   output: string;
-  verdict: string | null;
+  verdict: NodeVerdict | null;
   plans: PlanChoice[];
   selectedPlanId: number | null;
   cycleStartedAt: string;
