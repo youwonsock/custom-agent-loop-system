@@ -149,14 +149,14 @@ if (args.includes("app-server")) {
     process.exit(0);
   }
   if (
-    prompt.includes("fixture:network") &&
+    type === "implementation" && prompt.includes("fixture:network") &&
     (!prompt.includes("fixture:network-once") || calls[type] === 1)
   ) {
     emit({ type: "thread.started", thread_id: "fixture-session" });
     console.error("temporary network connection lost");
     process.exit(7);
   }
-  if (prompt.includes("fixture:tool-arguments-once")) {
+  if (type === "implementation" && prompt.includes("fixture:tool-arguments-once")) {
     if (calls[type] === 1) {
       emit({ type: "step_start", sessionID: "fixture-malformed-session" });
       emit({ type: "tool_use", part: { tool: "write", state: { status: "error", error: "filePath and content are missing and required", input: {} } } });
@@ -168,7 +168,7 @@ if (args.includes("app-server")) {
       process.exit(1);
     }
   }
-  if (prompt.includes("fixture:spent-network") &&
+  if (type === "implementation" && prompt.includes("fixture:spent-network") &&
       (!prompt.includes("fixture:spent-network-once") || calls[type] === 1)) {
     emit({
       type: "item.completed",
@@ -180,20 +180,20 @@ if (args.includes("app-server")) {
     console.error("temporary network connection lost");
     process.exit(7);
   }
-  if (prompt.includes("fixture:quota") &&
+  if (type === "implementation" && prompt.includes("fixture:quota") &&
       (!prompt.includes("fixture:quota-once") || calls[type] === 1)) {
     emit({ type: "error", error: { code: "insufficient_quota", statusCode: 429, message: "Provider quota exhausted" } });
     process.exit(1);
   }
   if (
-    prompt.includes("fixture:auth") &&
+    type === "implementation" && prompt.includes("fixture:auth") &&
     (!prompt.includes("fixture:auth-once") || calls[type] === 1)
   ) {
     console.error("authentication required: sign in");
     process.exit(1);
   }
   if (
-    prompt.includes("fixture:progress-budget-once") && calls[type] === 1
+    type === "implementation" && prompt.includes("fixture:progress-budget-once") && calls[type] === 1
   ) {
     emit({ type: "thread.started", thread_id: "fixture-session" });
     let progress = 0;

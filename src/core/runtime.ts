@@ -35,6 +35,7 @@ import { messageOf } from "./errors";
 import { outsidePaths } from "./access_paths";
 import { currentTestProof, mergeReceipts } from "./verification_evidence";
 import { modelPricing } from "./model_pricing";
+import { successBlockers } from "./success_gate";
 
 export interface RuntimeHooks {
   onState?: (state: SessionState) => void;
@@ -300,12 +301,19 @@ export class GraphRuntime {
         }
         const id = this.state.currentNodeId;
         if (id === "SUCCESS" || id === "PAUSED") {
-          this.state.status = id;
+          const blockers = id === "SUCCESS" ? successBlockers(this.state) : [];
+          this.state.status = blockers.length ? "PAUSED" : id;
           this.state.statusReason =
-            id === "SUCCESS"
-              ? "그래프 실행을 완료했습니다."
+            blockers.length
+              ? `성공 조건 미충족: ${blockers.join(" ")} 수정·테스트·최종 승인을 다시 수행하도록 수동 재개하세요.`
+              : id === "SUCCESS"
+              ? "모든 필수 요구사항, 실제 테스트 실행 증거와 최종 승인을 확인했습니다."
               : (this.state.statusReason ??
                 "중단 분석을 완료했습니다. 계획과 근거를 검토한 뒤 재개하세요.");
+          if (blockers.length) {
+            this.state.currentNodeId = "PAUSED";
+            this.state.automaticRecovery = null;
+          }
           this.state.activeVisitId = null;
           await this.save();
           return;
@@ -642,6 +650,7 @@ export class GraphRuntime {
       attempt.cliSessionId = result.cliSessionId;
       attempt.actualModelId = result.evidence.actualModelId;
       attempt.commands = result.evidence.commands;
+      attempt.fileMutation = result.evidence.fileMutation;
       if (result.evidence.fileMutation) visit.verifiedCommands = [];
       if (node.type === "test") visit.verifiedCommands = mergeReceipts(visit.verifiedCommands, result.evidence.commands);
       attempt.assistantTextBytes = result.evidence.assistantTextBytes;
@@ -687,6 +696,7 @@ export class GraphRuntime {
         return null;
       }
       if (completion.valid) {
+        attempt.completionAccepted = !completion.researchBlocked;
         await this.save();
         return completion;
       }

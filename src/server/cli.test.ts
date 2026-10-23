@@ -38,13 +38,13 @@ test("public CLI init, graphs, models, run and resume share the standalone works
   const graph = await store.graph(listed[0].id);
   graph.defaultBinding = { connectionId: "fixture", modelId: "fixture-model" };
   graph.nodes = graph.nodes.filter((n) =>
-    ["implementation", "interrupt"].includes(n.id),
+    ["implementation", "test", "approval", "interrupt"].includes(n.id),
   );
   graph.edges = graph.edges
     .filter((e) => graph.nodes.some((n) => n.id === e.source))
     .map((e) =>
-      e.source === "implementation" && e.outcome === "success"
-        ? { ...e, target: "SUCCESS" }
+      e.source === "test"
+        ? { ...e, target: e.outcome === "success" ? "approval" : "implementation" }
         : e,
     );
   graph.entrypoints = {

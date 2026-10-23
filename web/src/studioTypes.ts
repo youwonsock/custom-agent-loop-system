@@ -1,3 +1,4 @@
+import { successPathDiagnostics } from "../../src/shared/graph_success";
 import type { AgentGraphDocument, LocalConnection, ModelCatalog, SessionState } from "../../src/shared/domain";
 export interface Bootstrap {
   version: string;
@@ -56,5 +57,6 @@ export function clientDiagnostics(g: AgentGraphDocument): string[] {
     g.nodes.find((n) => n.id === g.entrypoints.interrupt)?.type !== "interrupt"
   )
     errors.push("중단 처리 노드의 유형은 interrupt여야 합니다.");
+  errors.push(...successPathDiagnostics(g).map(d => d.message));
   return errors;
 }

@@ -28,6 +28,23 @@ async function waitForCanvasFit(page: Page) {
 test.beforeAll(async () => {
   await fs.mkdir(target, { recursive: true });
 });
+test("editor disables execution and explains completion paths that bypass tests or final approval", async ({ page }) => {
+  await page.route("**/api/bootstrap", async route => {
+    const response = await route.fetch();
+    const boot = await response.json();
+    const graph = boot.graphs.find((g: any) => g.nodes.some((n: any) => n.id === "approval") && g.nodes.some((n: any) => n.id === "test"));
+    graph.defaultBinding = { connectionId: "fixture", modelId: "fixture-model" };
+    graph.edges.find((e: any) => e.source === "implementation" && e.outcome === "success").target = "SUCCESS";
+    boot.graphs = [graph];
+    await route.fulfill({ response, json: boot });
+  });
+  await page.goto("/");
+  await page.getByLabel("실행 목표").fill("Do not skip verification");
+  await expect(page.getByText("완료(SUCCESS)는 최종 승인 노드의 성공 경로로만 연결하세요.", { exact: true })).toBeVisible();
+  await expect(page.getByText("실행·재진입·중단 경로에서 테스트를 건너뛰고 완료할 수 없습니다.", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "그래프 실행", exact: false })).toBeDisabled();
+  await page.screenshot({ path: "artifacts/screenshots/unsafe-success-blocked.png", fullPage: true });
+});
 test("graph editing, model connection, plan editing/approval and complete execution", async ({
   page,
 }) => {
@@ -99,7 +116,7 @@ test("graph editing, model connection, plan editing/approval and complete execut
     timeout: 20_000,
   });
   await expect(
-    page.getByText("그래프 실행을 완료했습니다.", { exact: true }),
+    page.getByText("모든 필수 요구사항, 실제 테스트 실행 증거와 최종 승인을 확인했습니다.", { exact: true }),
   ).toBeVisible();
   await expect(page.locator(".visit-panel")).toContainText("최종 승인");
   await page.screenshot({
@@ -385,7 +402,7 @@ test("closing and reopening the browser retains a running worker and Stop works 
       .filter((e: any) => ["implementation", "interrupt"].includes(e.source))
       .map((e: any) =>
         e.source === "implementation" && e.outcome === "success"
-          ? { ...e, target: "SUCCESS" }
+          ? { ...e, target: "PAUSED" }
           : e,
       ),
     entrypoints: {

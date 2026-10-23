@@ -8,6 +8,7 @@ import {
   Terminal,
 } from "../shared/domain";
 import { AppError } from "./errors";
+import { successPathDiagnostics } from "../shared/graph_success";
 
 export const safeId = (value: unknown): value is string =>
   typeof value === "string" && /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(value);
@@ -242,6 +243,7 @@ export function graphDiagnostics(
   for (const n of g.nodes)
     if (!reachable.has(n.id))
       add("unreachable", "어떤 실행 진입점에서도 도달할 수 없습니다.", n.id);
+  out.push(...successPathDiagnostics(g));
   return out;
 }
 export function transition(

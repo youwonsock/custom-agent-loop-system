@@ -4,6 +4,7 @@ import { outsidePaths } from "./access_paths";
 import { CommandTracker, currentTestProof, isVerificationCommand } from "./verification_evidence";
 import { SessionState, NodeVisit } from "../shared/domain";
 import { createGraph } from "./graph";
+import { deriveRequirementLedger } from "./requirement_ledger";
 
 test("prompt path scan preserves spaces, URL targets and actual external requests", () => {
   const root = "/Users/me/Desktop/agent graph test/game";
@@ -40,18 +41,20 @@ test("native receipts distinguish blocked, failed, successful and unexecuted che
   tracker.observe({ type: "assistant", message: { content: [{ type: "tool_use", id: "claude", name: "Bash", input: { command: "go test ./..." } }] } });
   tracker.observe({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: "claude", is_error: false, content: "ok" }] } });
   assert.equal(tracker.receipts.at(-1)!.exitCode, 0);
+  tracker.observe({ type: "item.completed", item: { id: "failed-zero", type: "command_execution", command: "npm run verify", exit_code: 0, status: "failed" } });
+  assert.equal(tracker.receipts.at(-1)!.exitCode, null, "native failure status cannot be promoted by exit zero");
   tracker.observe({ type: "item.completed", item: { id: "edit", type: "file_change", status: "completed" } });
   assert.equal(tracker.receipts.length, 0, "later edits invalidate earlier checks");
 });
 
 test("proof is invalidated by subsequent implementation or failed tests; legacy snapshots fail closed", () => {
   const check = { id: "c", command: "npm test", exitCode: 0, environmentError: null };
-  const passed = { id: "test1", nodeId: "test", status: "succeeded", verdict: "PASS", verifiedCommands: [check] } as NodeVisit;
+  const passed = { id: "test1", nodeId: "test", status: "succeeded", verdict: "PASS", completedAt: "2026-10-24", output: "[REQUIREMENT_EVIDENCE]\nREQ_ID: REQ-001\nSTATUS: SATISFIED\nEVIDENCE: executed\nCHECK_COMMAND: npm test\n[/REQUIREMENT_EVIDENCE]\nVERDICT: PASS\n[PHASE_DONE]", attempts: [{ status: "succeeded", completionAccepted: true, endedAt: "2026-10-24", commands: [check] }], verifiedCommands: [check] } as NodeVisit;
   const review = { id: "review1", nodeId: "review" } as NodeVisit;
-  const state = { graph: createGraph(), visits: [passed, review] } as SessionState;
+  const state = { graph: createGraph(), requirements: deriveRequirementLedger("goal"), visits: [passed, review] } as SessionState;
   assert.deepEqual(currentTestProof(state, review), [check]);
   state.visits.splice(1, 0, { id: "impl2", nodeId: "implementation" } as NodeVisit);
   assert.deepEqual(currentTestProof(state, review), []);
-  state.visits = [{ ...passed, verifiedCommands: undefined }, review];
+  state.visits = [{ ...passed, attempts: [], verifiedCommands: undefined }, review];
   assert.deepEqual(currentTestProof(state, review), []);
 });

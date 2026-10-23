@@ -122,6 +122,9 @@ export interface CommandReceipt {
   environmentError: string | null;
 }
 export interface AttemptRecord {
+  /** Written only after runtime completion validation; absent legacy evidence fails closed. */
+  completionAccepted?: boolean;
+  fileMutation?: boolean;
   pricing?: ModelPricing;
   commands?: CommandReceipt[];
   id: string;

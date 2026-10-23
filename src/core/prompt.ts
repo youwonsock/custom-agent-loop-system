@@ -96,7 +96,7 @@ export function buildNodePrompt(
     );
   if (node.type === "review" || node.type === "approval")
     lines.push(
-      "APPROVED requires concrete SATISFIED evidence for every REQ. Finish with APPROVED or REJECTED.",
+      "APPROVED requires concrete SATISFIED evidence for every REQ and current native PASS receipts from the test role. Reject skipped, failed or stale verification. A failure, new implementation, plan or interrupt invalidates earlier test approval; rerun tests before approving. Only the final approval role can complete the session. Finish with APPROVED or REJECTED.",
     );
   if (
     requiresResearch(state.goal) &&

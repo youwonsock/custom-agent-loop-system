@@ -1,5 +1,6 @@
 import { CommandReceipt, NodeVisit, SessionState } from "../shared/domain";
 import { fileMutation } from "./event_evidence";
+import { evaluateRequirementCoverage, parseRequirementEvidence, RequirementItem } from "./requirement_ledger";
 
 type Obj = Record<string, unknown>;
 const obj = (v: unknown): Obj => v && typeof v === "object" && !Array.isArray(v) ? v as Obj : {};
@@ -32,7 +33,7 @@ export class CommandTracker {
   private readonly pending = new Map<string, string>();
   private record(id: unknown, command: unknown, exit: unknown, output: unknown, failed = false): void {
     if (typeof command !== "string" || command.length > 4096 || !isVerificationCommand(command)) return;
-    const code = typeof exit === "number" && Number.isInteger(exit) ? exit : null;
+    const code = typeof exit === "number" && Number.isInteger(exit) && !(failed && exit === 0) ? exit : null;
     const text = typeof output === "string" ? output : "";
     const blocked = (code !== 0 || failed) && /(?:listen\s+(?:EPERM|EACCES)|(?:EPERM|EACCES)[^\n]{0,80}(?:listen|bind)|sandbox[^\n]{0,80}(?:denied|not permitted)|network[^\n]{0,60}(?:unreachable|disabled)|ENETUNREACH|EAI_AGAIN|permission denied)/i.exec(text);
     const receipt: CommandReceipt = { id: String(id ?? "unknown"), command: canonicalCommand(command), exitCode: code, environmentError: blocked ? blocked[0].slice(0, 300) : null };
@@ -71,14 +72,47 @@ export function mergeReceipts(...groups: (CommandReceipt[] | undefined)[]): Comm
   return [...latest.values()].slice(-64);
 }
 
-/** Old snapshots without receipts are readable but never upgraded to verified. */
+export function acceptedVisit(visit: NodeVisit): boolean {
+  const attempt = visit.attempts?.at(-1);
+  return visit.status === "succeeded" && !!visit.completedAt &&
+    attempt?.completionAccepted === true && attempt.status === "succeeded" &&
+    !attempt.failureKind && !!attempt.endedAt && !attempt.pid &&
+    visit.output.trim().split("\n").at(-1)?.trim() === "[PHASE_DONE]";
+}
+
+export function verifiedTestCommands(visit: NodeVisit, requirements: RequirementItem[]): CommandReceipt[] {
+  if (!requirements.length || !acceptedVisit(visit) || visit.verdict !== "PASS" ||
+      !evaluateRequirementCoverage(visit.output, requirements).allSatisfied) return [];
+  // Reconstruct from observed attempt receipts, never from prose or a saved verdict.
+  let commands: CommandReceipt[] = [];
+  for (const attempt of visit.attempts) {
+    if (attempt.fileMutation) commands = [];
+    commands = mergeReceipts(commands, attempt.commands);
+  }
+  if (!commands.length || commands.some(c => c.exitCode !== 0 || c.environmentError || !isVerificationCommand(c.command))) return [];
+  const records = new Map(parseRequirementEvidence(visit.output).map(r => [r.requirementId, r]));
+  if (requirements.some(r => {
+    const command = records.get(r.id)?.checkCommand;
+    return !command || !commands.some(c => checkCommandKey(c.command) === checkCommandKey(command));
+  })) return [];
+  return commands;
+}
+
+/** Only a current, accepted test visit can authorize review/final approval.
+ * New work, failed visits, interrupts and observed mutations invalidate it.
+ * Old snapshots lacking acceptance metadata remain readable, but fail closed.
+ */
 export function currentTestProof(state: SessionState, before: NodeVisit): CommandReceipt[] {
   let proof: CommandReceipt[] = [];
   for (const visit of state.visits) {
+    if (visit.attempts?.some(a => a.fileMutation)) proof = [];
     if (visit.id === before.id) break;
     const type = state.graph.nodes.find(n => n.id === visit.nodeId)?.type;
-    if (type === "implementation" || type === "test") proof = [];
-    if (type === "test" && visit.verdict === "PASS" && visit.status === "succeeded") proof = visit.verifiedCommands ?? [];
+    if (type !== "review" && type !== "approval") proof = [];
+    if (type === "test") proof = verifiedTestCommands(visit, state.requirements.items);
+    if ((type === "review" || type === "approval") &&
+        (!acceptedVisit(visit) || visit.verdict !== "APPROVED" ||
+         !evaluateRequirementCoverage(visit.output, state.requirements.items).allSatisfied)) proof = [];
   }
   return proof;
 }
