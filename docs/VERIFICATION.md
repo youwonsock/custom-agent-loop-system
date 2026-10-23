@@ -168,13 +168,13 @@ Windows x64의 기본 Node.js를 22.20.0에서 **24.22.1 LTS**로 갱신했다. 
 
 | 검사 | 결과 | 증거 |
 |---|---|---|
-| Node 24에서 의존성 복원 | 통과, audit 0건 | [npm ci](../artifacts/verification/windows-node24-install.log) |
-| 백엔드·프런트엔드 타입 검사 | 통과 | [타입 검사](../artifacts/verification/windows-node24-typecheck.log) |
-| 코어·웹 빌드 및 코어·통합·공개 CLI | **95/95 통과** | [빌드·테스트](../artifacts/verification/windows-node24-tests.log) |
-| Chromium GUI | **11/11 통과** | [GUI 검사](../artifacts/verification/windows-node24-e2e.log) |
-| 공개 CLI 도움말 | 통과 | [smoke](../artifacts/verification/windows-node24-smoke.log) |
-| npm 패키지 내용 | 통과, 31개 파일 | [패키지 목록 검사](../artifacts/verification/windows-node24-pack-check.log) |
-| 임시 설치한 npm 패키지 | CLI·웹 자산·새 저장소·4종 모델 API·정상 종료 통과 | [설치 검사](../artifacts/verification/windows-node24-pack-smoke.log) |
+| Node 24에서 의존성 복원 | 통과, audit 0건 | npm ci (현재 확인 불가: 당시 로컬 자료 `../artifacts/verification/windows-node24-install.log`) |
+| 백엔드·프런트엔드 타입 검사 | 통과 | 타입 검사 (현재 확인 불가: 당시 로컬 자료 `../artifacts/verification/windows-node24-typecheck.log`) |
+| 코어·웹 빌드 및 코어·통합·공개 CLI | **95/95 통과** | 빌드·테스트 (현재 확인 불가: 당시 로컬 자료 `../artifacts/verification/windows-node24-tests.log`) |
+| Chromium GUI | **11/11 통과** | GUI 검사 (현재 확인 불가: 당시 로컬 자료 `../artifacts/verification/windows-node24-e2e.log`) |
+| 공개 CLI 도움말 | 통과 | smoke (현재 확인 불가: 당시 로컬 자료 `../artifacts/verification/windows-node24-smoke.log`) |
+| npm 패키지 내용 | 통과, 31개 파일 | 패키지 목록 검사 (현재 확인 불가: 당시 로컬 자료 `../artifacts/verification/windows-node24-pack-check.log`) |
+| 임시 설치한 npm 패키지 | CLI·웹 자산·새 저장소·4종 모델 API·정상 종료 통과 | 설치 검사 (현재 확인 불가: 당시 로컬 자료 `../artifacts/verification/windows-node24-pack-smoke.log`) |
 
 실행과 모델 조회는 결정적 가짜 CLI를 사용했다. 이번 검증은 Windows 환경에서 수행했으며 macOS 네이티브 실행기 빌드는 포함하지 않는다. 빌드는 성공했고, 약 611kB의 웹 JavaScript 번들에 대한 크기 경고가 남는다. 로그는 기존 정책대로 Git/npm 배포에서 제외하는 `artifacts/verification`에 보존한다.
 
@@ -186,7 +186,7 @@ Windows x64의 기본 Node.js를 22.20.0에서 **24.22.1 LTS**로 갱신했다. 
 
 게임 검증은 통과했지만 **전체 자동 실행 그래프는 PAUSED**다. 구현 방문은 성공했고, 테스트 단계에서 Auto Free의 연속 잘못된 write 인자로 정지했으며 피드백을 담은 중단 분석도 초기 PTY 출력 120초 timeout으로 정지했다. QA 검토·최종 승인 노드는 실행되지 않았다. 실제 세션 ID는 `1fbcfb7e-0526-45f2-a45b-034d5c85fef1`이다.
 
-상세 재현 방법, 모델·상태 기록, 실패 이력, 자동 검사 결과, 데스크톱·모바일 화면은 [실제 실행 보고서](../artifacts/verification/kilo-2048/VERIFICATION.md)에 보존했다. 현재 실행 요약은 Kilo의 중첩 모델·토큰 필드를 반영하지 못하므로 실제 라우팅은 원시 CLI 로그를 기준으로 별도 확인했다.
+상세 재현 방법, 모델·상태 기록, 실패 이력, 자동 검사 결과, 데스크톱·모바일 화면은 실제 실행 보고서 (현재 확인 불가: 당시 로컬 자료 `../artifacts/verification/kilo-2048/VERIFICATION.md`)에 보존했다. 현재 실행 요약은 Kilo의 중첩 모델·토큰 필드를 반영하지 못하므로 실제 라우팅은 원시 CLI 로그를 기준으로 별도 확인했다.
 
 ## 실제 Auto Free 전체 루프 복구 및 최종 승인 (2026-10-23)
 
@@ -196,4 +196,12 @@ Windows x64의 기본 Node.js를 22.20.0에서 **24.22.1 LTS**로 갱신했다. 
 
 타입 검사·빌드, 코어/서버/CLI **105/105**, GUI **11/11**, 패키지 **32개 파일** 검사가 통과했다. 게임 테스트는 Auto Free가 추가한 타일 4 생성·게임 오버 재시작 검사를 포함해 **15/15**, 별도 규칙 검사 **10/10** 및 네 방향 독립 비교 **4,000건**이 통과했다. 호스트 실행 정책을 변경하거나 저장된 성공 상태를 직접 조작하지 않았다.
 
-[복구 및 전체 루프 검증 보고서](../artifacts/verification/kilo-2048-recovery/VERIFICATION.md)에 원인·회귀 검사·이전 중지 시도·최종 실제 상태·승인 화면을 보존했다. 앞 절의 PAUSED 및 모델/토큰 누락은 최초 검증 당시 상태이며 이번 후속 수정으로 보완했다.
+복구 및 전체 루프 검증 보고서 (현재 확인 불가: 당시 로컬 자료 `../artifacts/verification/kilo-2048-recovery/VERIFICATION.md`)에 원인·회귀 검사·이전 중지 시도·최종 실제 상태·승인 화면을 보존했다. 앞 절의 PAUSED 및 모델/토큰 누락은 최초 검증 당시 상태이며 이번 후속 수정으로 보완했다.
+
+## 검증 자료 보존 정책
+
+`npm run verify:platform`과 `npm run verify:browser`는 검사별 stdout/stderr와 `summary.json`을 `artifacts/verification/<suite>-<platform>-<arch>/`에 기록한다. 요약은 커밋 SHA, 작업 트리 변경 여부, 실행 환경, 명령, 시작/종료 시각, 종료코드, 성공·실패·미실행 상태를 포함한다. 앞 검사가 실패하면 뒤 검사는 미실행으로 남고 최초 실패 종료코드를 반환한다.
+
+CI는 성공·실패와 관계없이 OS·커밋·실행 ID·회차별 artifact를 90일 보존한다. 브라우저 artifact에는 스크린샷과 실패 trace도 포함한다. Git에는 결과 요약과 해당 Actions 실행 링크를 기록하며, 만료 후에도 요약은 남지만 원본 artifact는 다시 내려받을 수 없을 수 있다. 기존 `../artifacts/` 링크는 당시 로컬 기록으로 공유 저장소의 영구 증거가 아니다.
+
+실제 CLI를 사용한 과거 기록은 실행 당시 문서이며, fake CLI 자동 검증과 구분한다. 사용자 홈의 실행 세션·인증 설정·실제 모델 로그는 수집하지 않는다.

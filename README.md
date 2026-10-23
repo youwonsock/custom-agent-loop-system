@@ -6,7 +6,7 @@
 
 Node.js 24 이상과 사용할 코딩 CLI의 설치·인증이 필요합니다.
 
-macOS에서는 프로젝트 폴더의 **Agent Graph Studio.app**을 더블클릭해 실행할 수 있습니다. 실행기가 필요한 패키지 설치와 빌드를 진행하고 브라우저를 엽니다. 실행기 창의 **종료** 버튼 또는 Cmd+Q로 서버를 종료합니다. 이미 터미널에서 실행한 서버가 있으면 그 서버를 재사용하며, 실행기를 종료해도 기존 서버는 중지하지 않습니다.
+macOS에서는 프로젝트 폴더의 **Agent Graph Studio.app**을 더블클릭해 실행할 수 있습니다. 실행기가 lockfile·Node 실행 환경·설치된 패키지를 확인하고 필요하면 패키지를 다시 설치한 뒤 빌드하고 브라우저를 엽니다. 동시에 실행해도 프로젝트 초기화는 한 번에 하나씩 진행합니다. 실행기 창의 **종료** 버튼 또는 Cmd+Q로 서버를 종료합니다. 이미 터미널에서 실행한 서버가 있으면 그 서버를 재사용하며, 실행기를 종료해도 기존 서버는 중지하지 않습니다.
 
 앱 실행기를 재생성하려면 macOS에서 Xcode Command Line Tools를 설치하고 `npm run build:launcher:mac`을 실행합니다. 실행기 파일은 소스 프로젝트 폴더와 함께 사용하며 Node.js 런타임을 포함하지 않습니다. 실행 로그는 `~/Library/Logs/AgentGraphStudio/launcher.log`에 기록됩니다.
 
@@ -88,6 +88,10 @@ agent-loop resume --session SESSION_ID
 ## 개발과 검증
 
 ```sh
+npm run verify:platform
+npm run verify:browser
+
+# 개별 검사
 npm run typecheck
 npm test
 npx playwright install chromium
