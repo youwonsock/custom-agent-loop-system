@@ -9,7 +9,7 @@ import {
 } from "../shared/domain";
 import { cliDiagnostic, CliDiagnosticError } from "./cli_diagnostics";
 import { checkProcessLiveness, delay } from "./resilience";
-import { terminateProcessTreeBounded } from "./process_supervisor";
+import { terminateProcessTreeBounded } from "./process_lifecycle";
 import { modelPricing } from "./model_pricing";
 
 export interface Executable {

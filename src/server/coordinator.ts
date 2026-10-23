@@ -26,7 +26,7 @@ import {
   withShortFileLock,
   delay,
 } from "../core/resilience";
-import { terminateProcessTreeBounded } from "../core/process_supervisor";
+import { terminateProcessTreeBounded } from "../core/process_lifecycle";
 
 export interface StartRequest {
   requestId: string;
