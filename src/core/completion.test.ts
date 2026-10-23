@@ -168,3 +168,15 @@ test("observed environment failure holds even a claimed PASS without retrying re
   assert.match(completion.environmentBlocked!, /listen EPERM/);
   assert.equal(completion.valid, true);
 });
+
+test("real CLI markdown reports and redirected checks retain verdicts without false format recovery", () => {
+  const node = createGraph().nodes[2]!, requirements = deriveRequirementLedger("acceptance").items;
+  const text = "[REQUIREMENT_EVIDENCE]\nREQ_ID: REQ-001\nSTATUS: SATISFIED\nEVIDENCE: observed test\nCHECK_COMMAND: `npm test`\n[/REQUIREMENT_EVIDENCE]\n**VERDICT: PASS**\n[PHASE_DONE]";
+  const r = result(text);
+  r.evidence.commands = [{ id: "real", command: "npm test > verification/test-output.txt 2>&1", exitCode: 0, environmentError: null }];
+  assert.equal(validateCompletion(node, r, "goal", requirements).verdict, "PASS");
+  const blocked = result(text.replace("STATUS: SATISFIED", "STATUS: BLOCKED").replace("VERDICT: PASS", "VERDICT: FAIL"));
+  const held = validateCompletion(node, blocked, "goal", requirements);
+  assert.equal(held.verdict, "BLOCKED");
+  assert.match(held.environmentBlocked!, /테스트 역할이/);
+});

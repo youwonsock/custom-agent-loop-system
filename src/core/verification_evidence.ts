@@ -5,8 +5,15 @@ type Obj = Record<string, unknown>;
 const obj = (v: unknown): Obj => v && typeof v === "object" && !Array.isArray(v) ? v as Obj : {};
 
 export function canonicalCommand(command: string): string {
+  command = command.trim().replace(/^`([^`]+)`$/, "$1");
   const wrapper = command.match(/^(?:\/[^\s]+\/)?(?:ba|z|da|k)?sh\s+-[a-z]*c\s+(['"])([\s\S]*)\1$/);
   return (wrapper ? wrapper[2]!.replace(/'\\''/g, "'") : command).trim();
+}
+
+export function checkCommandKey(command: string): string {
+  // Output capture does not alter the check's exit status; never strip pipes,
+  // command chaining, substitutions or a failure-masking suffix.
+  return canonicalCommand(command).replace(/\s+>\s*(?:'[^']*'|"[^"$`]*"|[^\s;&|$`]+)(?:\s+2>&1)?\s*$/, "").trim();
 }
 
 // Fail closed for report-only commands (cat/echo), pipelines and masked exits.
