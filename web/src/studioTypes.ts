@@ -1,5 +1,6 @@
+import type { SessionSummary } from "../../src/shared/session_updates";
 import { successPathDiagnostics } from "../../src/shared/graph_success";
-import type { AgentGraphDocument, LocalConnection, ModelCatalog, SessionState } from "../../src/shared/domain";
+import type { AgentGraphDocument, LocalConnection, ModelCatalog } from "../../src/shared/domain";
 export interface Bootstrap {
   version: string;
   root: string;
@@ -7,7 +8,7 @@ export interface Bootstrap {
   graphs: AgentGraphDocument[];
   connections: LocalConnection[];
   catalogs: ModelCatalog[];
-  sessions: SessionState[];
+  sessions: SessionSummary[];
 }
 export const statusNames: Record<string, string> = {
   RUNNING: "실행 중",

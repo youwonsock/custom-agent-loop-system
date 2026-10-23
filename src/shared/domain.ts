@@ -174,6 +174,8 @@ export interface NodeVisit {
 }
 export interface SessionState {
   stateVersion: 3;
+  /** Monotonic persistence revision; absent in legacy version-3 snapshots. */
+  revision?: number;
   id: string;
   requestId: string;
   goal: string;

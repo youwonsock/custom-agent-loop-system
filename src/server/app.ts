@@ -1,3 +1,4 @@
+import { sessionSummary } from "../shared/session_updates";
 import Fastify, { FastifyInstance } from "fastify";
 import cookie from "@fastify/cookie";
 import staticFiles from "@fastify/static";
@@ -77,14 +78,14 @@ export async function createServer(
         ...(e.details ? { details: e.details } : {}),
       });
   });
-  app.get("/api/bootstrap", async () => ({
+  app.get<{ Querystring: { summary?: string } }>("/api/bootstrap", async request => ({
     version: "4.0.0",
     root: store.root,
     defaultTarget: options.defaultTarget ?? process.cwd(),
     graphs: await store.graphs(),
     connections: await store.connections(),
     catalogs: await store.catalogs(),
-    sessions: await store.sessions(),
+    sessions: request.query.summary === "1" ? await store.sessionSummaries() : await store.sessions(),
   }));
   app.get("/api/graphs", () => store.graphs());
   app.post("/api/graphs", async (request) => {
@@ -186,7 +187,7 @@ export async function createServer(
       request.query.path ?? options.defaultTarget ?? process.cwd(),
     ),
   );
-  app.get("/api/sessions", () => store.sessions());
+  app.get<{ Querystring: { summary?: string } }>("/api/sessions", request => request.query.summary === "1" ? store.sessionSummaries() : store.sessions());
   app.post<{ Body: StartRequest }>("/api/sessions", async (request, reply) =>
     reply.code(202).send(await coordinator.start(request.body)),
   );
@@ -238,7 +239,7 @@ export async function createServer(
       await handle.close();
     }
   });
-  app.get("/api/events", async (_request, reply) => {
+  app.get<{ Querystring: { summary?: string } }>("/api/events", async (request, reply) => {
     reply.hijack();
     streams.add(reply.raw);
     reply.raw.writeHead(200, {
@@ -249,8 +250,11 @@ export async function createServer(
     });
     reply.raw.write("event: ready\ndata: {}\n\n");
     const listener = (event: StudioEvent) => {
-      if (!reply.raw.destroyed)
-        reply.raw.write(`data: ${JSON.stringify(event)}\n\n`);
+      if (reply.raw.destroyed || (request.query.summary === "1" && event.type === "log")) return;
+      const outgoing = request.query.summary === "1" && event.type === "session" && event.data
+        ? { ...event, data: sessionSummary(event.data as import("../shared/domain").SessionState) } : event;
+      reply.raw.write(`data: ${JSON.stringify(outgoing)}\n\n`);
+      if (reply.raw.writableLength > 4 * 1024 * 1024) reply.raw.destroy(); // reconnect fetches the latest snapshot; bound slow-client buffering
     };
     coordinator.on("studio", listener);
     const timer = setInterval(() => {

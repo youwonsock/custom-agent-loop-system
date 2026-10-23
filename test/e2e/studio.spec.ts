@@ -29,7 +29,7 @@ test.beforeAll(async () => {
   await fs.mkdir(target, { recursive: true });
 });
 test("editor disables execution and explains completion paths that bypass tests or final approval", async ({ page }) => {
-  await page.route("**/api/bootstrap", async route => {
+  await page.route("**/api/bootstrap*", async route => {
     const response = await route.fetch();
     const boot = await response.json();
     const graph = boot.graphs.find((g: any) => g.nodes.some((n: any) => n.id === "approval") && g.nodes.some((n: any) => n.id === "test"));

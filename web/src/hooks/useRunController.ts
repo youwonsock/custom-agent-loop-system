@@ -1,3 +1,4 @@
+import { isNewerSession, mergeSessions, sessionSummary } from "../../../src/shared/session_updates";
 import { useEffect, useRef, useState } from "react";
 import { type SessionState, type SessionAction } from "../../../src/shared/domain";
 import { api, id } from "../api";
@@ -21,6 +22,7 @@ export function useRunController(data: StudioData, graph: GraphEditor) {
   const [accessMode, setAccessMode] = useState<"ask" | "full_access">("ask"),
     [maxIterations, setMaxIterations] = useState(20), [starting, setStarting] = useState(false),
     [selectedRun, setSelectedRun] = useState<string | null>(null);
+  const [run, setRun] = useState<SessionState | undefined>();
   const [log, setLog] = useState(""),
     logOffset = useRef(0),
     logKey = useRef(""),
@@ -46,18 +48,24 @@ export function useRunController(data: StudioData, graph: GraphEditor) {
         accessMode,
         settings: { maxIterations },
       });
-      setSessions((values) => [
-        state,
-        ...values.filter((s) => s.id !== state.id),
-      ]);
+      setSessions(values => mergeSessions(values, [sessionSummary(state)]));
+      setRun(state);
       setSelectedRun(state.id);
       setView("runs");
       setNotice("저장된 그래프와 연결 설정으로 실행을 시작했습니다.");
     });
     setStarting(false);
   };
-  const run = sessions.find((s) => s.id === selectedRun),
-    visit =
+  const summary = sessions.find(s => s.id === selectedRun);
+  useEffect(() => {
+    if (!summary) { setRun(undefined); return; }
+    const controller = new AbortController();
+    void api<SessionState>(`/sessions/${summary.id}`, "GET", undefined, controller.signal)
+      .then(next => { if (!controller.signal.aborted) setRun(current => !current || current.id !== next.id || isNewerSession(next, current) ? next : current); })
+      .catch(e => { if (!controller.signal.aborted) data.setError(e.message); });
+    return () => controller.abort();
+  }, [selectedRun, summary?.revision, summary?.updatedAt]);
+  const visit =
       run?.visits.find((v) => v.id === run.activeVisitId) ?? run?.visits.at(-1),
     pendingVisit = run?.pendingApproval
       ? run.visits.find((v) => v.id === run.pendingApproval!.visitId)
@@ -132,10 +140,8 @@ export function useRunController(data: StudioData, graph: GraphEditor) {
         "POST",
         { ...action, requestId: id() },
       );
-      setSessions((values) => [
-        next,
-        ...values.filter((s) => s.id !== next.id),
-      ]);
+      setSessions(values => mergeSessions(values, [sessionSummary(next)]));
+      setRun(current => !current || current.id !== next.id || isNewerSession(next, current) ? next : current);
       if (action.type === "edit_plan") {
         setPlanEditing(false);
         setNotice("계획 문서를 저장했습니다. 저장된 문서를 승인하세요.");
@@ -165,7 +171,7 @@ export function useRunController(data: StudioData, graph: GraphEditor) {
     interruptText,
     setInterruptText,
     start,
-    run,
+    run: run?.id === selectedRun ? run : undefined,
     visit,
     pendingVisit,
     plan,

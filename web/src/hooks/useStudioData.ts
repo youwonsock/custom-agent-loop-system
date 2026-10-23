@@ -1,9 +1,9 @@
-import { useCallback, useEffect, useState } from "react";
+import { mergeSessions, reconcileSessionList, type SessionSummary } from "../../../src/shared/session_updates";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   type AgentGraphDocument,
   type LocalConnection,
   type ModelCatalog,
-  type SessionState,
   type StudioEvent,
 } from "../../../src/shared/domain";
 import { api } from "../api";
@@ -16,7 +16,9 @@ export function useStudioData() {
   const [graphs, setGraphs] = useState<AgentGraphDocument[]>([]),
     [connections, setConnections] = useState<LocalConnection[]>([]),
     [catalogs, setCatalogs] = useState<ModelCatalog[]>([]),
-    [sessions, setSessions] = useState<SessionState[]>([]);
+    [sessions, setSessions] = useState<SessionSummary[]>([]);
+  const sessionsRef = useRef(sessions);
+  sessionsRef.current = sessions;
   const [target,setTarget] = useState(""), [goal,setGoal] = useState("");
   const [notice,setNotice] = useState(""), [error,setError] = useState("");
   const [directory, setDirectory] = useState<{
@@ -27,7 +29,7 @@ export function useStudioData() {
     [directoryBusy, setDirectoryBusy] = useState(false);
   useEffect(() => {
     let alive = true;
-    void api<Bootstrap>("/bootstrap")
+    void api<Bootstrap>("/bootstrap?summary=1")
       .then((data) => {
         if (!alive) return;
         setBoot(data);
@@ -52,23 +54,20 @@ export function useStudioData() {
   }, []);
   useEffect(() => {
     if (!boot) return;
-    const source = new EventSource("/api/events");
+    const source = new EventSource("/api/events?summary=1");
     source.onmessage = (event) => {
       const data = JSON.parse(event.data) as StudioEvent;
       if (data.type === "session" && data.data) {
-        const state = data.data as SessionState;
-        setSessions((values) =>
-          [state, ...values.filter((v) => v.id !== state.id)].sort((a, b) =>
-            b.createdAt.localeCompare(a.createdAt),
-          ),
-        );
+        const state = data.data as SessionSummary;
+        setSessions(values => mergeSessions(values, [state]));
       } else if (data.type === "graphs") void refreshGraphs();
       else if (data.type === "connections")
         void api<LocalConnection[]>("/connections").then(setConnections);
     };
     source.addEventListener("ready", () => {
-      void api<SessionState[]>("/sessions")
-        .then(setSessions)
+      const atRequest = sessionsRef.current;
+      void api<SessionSummary[]>("/sessions?summary=1")
+        .then(incoming => setSessions(values => reconcileSessionList(values, incoming, atRequest)))
         .catch(() => {});
     });
     return () => source.close();

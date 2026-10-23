@@ -1082,3 +1082,20 @@ for (const role of ["review", "approval"] as const) test(`${role} failed extra c
   assert.equal(visits.at(-1)!.verdict, "APPROVED");
   assert.equal(state.visits.filter(v => v.nodeId === "test").length, 2);
 });
+
+test("summary API preserves full API compatibility and unchanged completed records are not reread each tick", async t => {
+  const s = await setup(); t.after(s.cleanup);
+  const id = await launch(s, await minimal(s), "summary acceptance");
+  await wait(() => s.store.readSession(id), "SUCCESS"); await delay(100);
+  const full = (await s.request("GET", `/api/sessions/${id}`)).json<SessionState>();
+  const summary = (await s.request("GET", "/api/sessions?summary=1")).json()[0];
+  assert.ok(full.visits.length); assert.ok(full.revision! > 1);
+  assert.equal(summary.revision, full.revision); assert.equal(summary.visits, undefined);
+  assert.equal((await s.request("GET", "/api/sessions")).json()[0].visits.length, full.visits.length);
+  const original = s.store.readSession.bind(s.store); let reads = 0;
+  s.store.readSession = async value => { reads++; return original(value); };
+  await s.store.sessionSummaries(); await s.store.sessionSummaries();
+  assert.equal(reads, 0, "summary cache decodes only changed snapshots");
+  await s.store.mutateSession(id, state => { state.statusReason = "updated"; });
+  assert.equal((await s.store.sessionSummaries())[0]!.statusReason, "updated");
+});

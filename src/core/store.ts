@@ -1,3 +1,4 @@
+import { SessionSummary, sessionSummary } from "../shared/session_updates";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { randomUUID } from "node:crypto";
@@ -18,6 +19,7 @@ import { createGraph, safeId, validateGraphDocument } from "./graph";
 import { AppError } from "./errors";
 
 export class StudioStore {
+  private readonly summaryCache = new Map<string, { signature: string; summary: SessionSummary }>();
   constructor(readonly root: string) {}
   async init(): Promise<void> {
     await fs.mkdir(path.join(this.root, "graphs"), { recursive: true });
@@ -201,6 +203,24 @@ export class StudioStore {
       .filter((v): v is SessionState => Boolean(v))
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   }
+  /** Stat all records, but decode only changed snapshots; never retain historical output in memory. */
+  async sessionSummaries(): Promise<SessionSummary[]> {
+    const ids = (await fs.readdir(path.join(this.root, "sessions"))).filter(safeId);
+    const idSet = new Set(ids);
+    for (const id of this.summaryCache.keys()) if (!idSet.has(id)) this.summaryCache.delete(id);
+    const summaries = await Promise.all(ids.map(async id => {
+      try {
+        const info = await fs.stat(path.join(this.sessionDir(id), "state.json"));
+        const signature = `${info.mtimeMs}:${info.ctimeMs}:${info.size}:${info.ino}`;
+        const cached = this.summaryCache.get(id);
+        if (cached?.signature === signature) return cached.summary;
+        const summary = sessionSummary(await this.readSession(id));
+        this.summaryCache.set(id, { signature, summary });
+        return summary;
+      } catch { this.summaryCache.delete(id); return null; }
+    }));
+    return summaries.filter((s): s is SessionSummary => !!s).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  }
   async readSession(id: string): Promise<SessionState> {
     const s = await readJsonFile<SessionState>(
       path.join(this.sessionDir(id), "state.json"),
@@ -211,15 +231,12 @@ export class StudioStore {
     return s;
   }
   async writeSession(state: SessionState): Promise<void> {
-    state.updatedAt = new Date().toISOString();
-    await withShortFileLock(
-      path.join(this.sessionDir(state.id), "state.lock"),
-      () =>
-        atomicWriteJsonFile(
-          path.join(this.sessionDir(state.id), "state.json"),
-          state,
-        ),
-    );
+    await withShortFileLock(path.join(this.sessionDir(state.id), "state.lock"), async () => {
+      const current = await readJsonFile<SessionState>(path.join(this.sessionDir(state.id), "state.json"));
+      state.revision = (current?.revision ?? 0) + 1;
+      state.updatedAt = new Date().toISOString();
+      await atomicWriteJsonFile(path.join(this.sessionDir(state.id), "state.json"), state);
+    });
   }
   async mutateSession(
     id: string,
@@ -230,6 +247,7 @@ export class StudioStore {
       async () => {
         const s = await this.readSession(id);
         change(s);
+        s.revision = (s.revision ?? 0) + 1;
         s.updatedAt = new Date().toISOString();
         await atomicWriteJsonFile(
           path.join(this.sessionDir(id), "state.json"),

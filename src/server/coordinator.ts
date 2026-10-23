@@ -1,3 +1,4 @@
+import { isNewerSession, sessionSummary, SessionSummary } from "../shared/session_updates";
 import { fork, ChildProcess } from "node:child_process";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
@@ -36,6 +37,7 @@ export interface StartRequest {
   settings?: Partial<ExecutionSettings>;
 }
 export class SessionCoordinator extends EventEmitter {
+  private readonly published = new Map<string, SessionSummary>();
   private children = new Map<string, ChildProcess>();
   private closing = false;
   private monitor: NodeJS.Timeout | null = null;
@@ -44,6 +46,12 @@ export class SessionCoordinator extends EventEmitter {
     super();
   }
   emitStudio(event: StudioEvent): void {
+    if (event.type === "session" && event.data) {
+      const summary = sessionSummary(event.data as SessionState);
+      const previous = this.published.get(summary.id);
+      if (previous && !isNewerSession(summary, previous)) return;
+      this.published.set(summary.id, summary);
+    }
     this.emit("studio", event);
   }
   async start(input: StartRequest): Promise<SessionState> {
@@ -368,7 +376,13 @@ export class SessionCoordinator extends EventEmitter {
     }, 1_000);
   }
   private async reconcile(): Promise<void> {
-    for (const s of await this.store.sessions()) {
+    const summaries = await this.store.sessionSummaries();
+    const ids = new Set(summaries.map(s => s.id));
+    for (const id of this.published.keys()) if (!ids.has(id)) this.published.delete(id);
+    for (const summary of summaries) {
+      const previous = this.published.get(summary.id);
+      if (previous && !isNewerSession(summary, previous) && !["RUNNING", "RECOVERING"].includes(summary.status)) continue;
+      const s = await this.store.readSession(summary.id);
       this.emitStudio({ type: "session", sessionId: s.id, data: s });
       if (this.children.has(s.id)) continue;
       if (
