@@ -7,7 +7,7 @@ import {
 } from "./requirement_ledger";
 import { isReadOnly } from "./invocation";
 import { FailureKind } from "./resilience";
-import { checkCommandKey, isVerificationCommand } from "./verification_evidence";
+import { checkCommandKey, failedVerificationCommand, isVerificationCommand } from "./verification_evidence";
 export const requiresResearch = (goal: string): boolean =>
   /(?:인터넷|웹)\s*(?:을|를|에서|으로)?\s*(?:검색|조사|찾)|\b(?:search|browse|research|look\s*up)(?:\s+the)?\s+(?:internet|web)\b|\b(?:internet|web)\s+(?:search|research)\b/i.test(
     goal.replace(/\s+/g, " "),
@@ -72,13 +72,13 @@ export function validateCompletion(
       "읽기 전용 역할에서 파일 변경이 관측되었습니다.",
       "role_violation",
     );
-  if (node.type === "test") {
+  if (["test", "review", "approval"].includes(node.type)) {
     const blocked = commands.find(c => c.environmentError);
     const reportedBlocked = parseRequirementEvidence(output).some(r => r.status === "BLOCKED");
     if (blocked || reportedBlocked || /^(?:\*\*|__)?VERDICT:\s*BLOCKED\b/im.test(output)) {
       answer.verdict = "BLOCKED";
       answer.environmentBlocked = blocked
-        ? `검증 환경 제약: ${blocked.command} → ${blocked.environmentError}. 환경을 해결한 뒤 같은 테스트 방문을 수동 재개하세요.`
+        ? `검증 환경 제약: ${blocked.command} → ${blocked.environmentError}. 환경을 해결한 뒤 같은 방문을 수동 재개하세요.`
         : "테스트 역할이 필수 검사를 BLOCKED로 보고했습니다. 실제 명령 로그와 환경을 확인한 뒤 수동 재개하세요.";
       return answer;
     }
@@ -145,13 +145,15 @@ export function validateCompletion(
     if (lines.at(-1)![1]!.toUpperCase() === "APPROVED" && missingOnly)
       return fail(`요구사항 증거 형식이 누락되었거나 잘못되었습니다: ${coverage.missing.join(", ")}. 기존 결과를 보존하고 모든 REQ의 올바른 증거 블록과 승인 판정을 포함한 전체 최종 보고를 다시 반환하세요.`);
   }
-  if (answer.verdict === "PASS") {
-    const failed = commands.find(c => c.exitCode !== 0);
+  if (answer.verdict === "PASS" || answer.verdict === "APPROVED") {
+    const failed = failedVerificationCommand(commands);
     if (failed) {
-      answer.verdict = "FAIL";
+      answer.verdict = node.type === "test" ? "FAIL" : "REJECTED";
       answer.reason = `관측된 검증 명령이 성공하지 않았습니다: ${failed.command} (exit ${failed.exitCode ?? "unknown"}).`;
       return answer;
     }
+  }
+  if (answer.verdict === "PASS") {
     const records = new Map(parseRequirementEvidence(output).map(r => [r.requirementId, r]));
     const unverified = requirements.filter(r => {
       const command = records.get(r.id)?.checkCommand;

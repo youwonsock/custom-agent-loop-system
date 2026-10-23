@@ -254,6 +254,8 @@ if (args.includes("app-server")) {
       text =
         "Failure evidence reviewed. Inspect the last attempt and fix the cause before resuming.";
     emit({ type: "thread.started", thread_id: "fixture-session" });
+    if (["review", "approval"].includes(type) && prompt.includes(`fixture:${type}-check-fail-once`) && calls[type] === 1)
+      emit({ type: "item.completed", item: { id: "extra-check", type: "command_execution", command: "node --test extra.test.cjs", exit_code: 1, status: "completed", aggregated_output: "# fail 1" } });
     if (type === "test") {
       const blocked = prompt.includes("fixture:environment-once") && calls[type] === 1;
       emit({ type: "item.completed", item: { id: "acceptance", type: "command_execution", command: "node --test acceptance.test.cjs", exit_code: blocked ? 1 : 0, status: "completed", aggregated_output: blocked ? "Error: listen EPERM: operation not permitted 127.0.0.1" : "# pass 1\n# fail 0" } });

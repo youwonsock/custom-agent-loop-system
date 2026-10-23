@@ -652,7 +652,7 @@ export class GraphRuntime {
       attempt.commands = result.evidence.commands;
       attempt.fileMutation = result.evidence.fileMutation;
       if (result.evidence.fileMutation) visit.verifiedCommands = [];
-      if (node.type === "test") visit.verifiedCommands = mergeReceipts(visit.verifiedCommands, result.evidence.commands);
+      if (["test", "review", "approval"].includes(node.type)) visit.verifiedCommands = mergeReceipts(visit.verifiedCommands, result.evidence.commands);
       attempt.assistantTextBytes = result.evidence.assistantTextBytes;
       attempt.maxTokens = result.evidence.maxTokens;
       if (orphaned) {

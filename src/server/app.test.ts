@@ -1071,3 +1071,14 @@ test("a saved RUNNING state without a lease is paused instead of remaining stuck
   assert.match(paused.statusReason ?? "", /소유권/);
   assert.equal(paused.visits[0]!.attempts.length, 1);
 });
+
+for (const role of ["review", "approval"] as const) test(`${role} failed extra check rejects approval and requires a new verified cycle`, async t => {
+  const s = await setup(); t.after(s.cleanup);
+  const id = await launch(s, await automaticPlans(s), `fixture:${role}-check-fail-once`);
+  const state = await wait(() => s.store.readSession(id), "SUCCESS");
+  const visits = state.visits.filter(v => v.nodeId === role);
+  assert.equal(visits[0]!.verdict, "REJECTED");
+  assert.equal(visits[0]!.status, "failed");
+  assert.equal(visits.at(-1)!.verdict, "APPROVED");
+  assert.equal(state.visits.filter(v => v.nodeId === "test").length, 2);
+});

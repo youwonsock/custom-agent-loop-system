@@ -77,19 +77,30 @@ export function acceptedVisit(visit: NodeVisit): boolean {
   return visit.status === "succeeded" && !!visit.completedAt &&
     attempt?.completionAccepted === true && attempt.status === "succeeded" &&
     !attempt.failureKind && !!attempt.endedAt && !attempt.pid &&
+    !failedVerificationCommand(visitCommands(visit)) &&
     visit.output.trim().split("\n").at(-1)?.trim() === "[PHASE_DONE]";
+}
+
+/** Shared negative evidence policy for test, review, approval and terminal gates. */
+export function failedVerificationCommand(commands: CommandReceipt[]): CommandReceipt | undefined {
+  return commands.find(c => c.exitCode !== 0 || !!c.environmentError);
+}
+
+export function visitCommands(visit: NodeVisit): CommandReceipt[] {
+  let commands: CommandReceipt[] = [];
+  for (const attempt of visit.attempts ?? []) {
+    if (attempt.fileMutation) commands = [];
+    commands = mergeReceipts(commands, attempt.commands);
+  }
+  return commands;
 }
 
 export function verifiedTestCommands(visit: NodeVisit, requirements: RequirementItem[]): CommandReceipt[] {
   if (!requirements.length || !acceptedVisit(visit) || visit.verdict !== "PASS" ||
       !evaluateRequirementCoverage(visit.output, requirements).allSatisfied) return [];
   // Reconstruct from observed attempt receipts, never from prose or a saved verdict.
-  let commands: CommandReceipt[] = [];
-  for (const attempt of visit.attempts) {
-    if (attempt.fileMutation) commands = [];
-    commands = mergeReceipts(commands, attempt.commands);
-  }
-  if (!commands.length || commands.some(c => c.exitCode !== 0 || c.environmentError || !isVerificationCommand(c.command))) return [];
+  const commands = visitCommands(visit);
+  if (!commands.length || failedVerificationCommand(commands) || commands.some(c => !isVerificationCommand(c.command))) return [];
   const records = new Map(parseRequirementEvidence(visit.output).map(r => [r.requirementId, r]));
   if (requirements.some(r => {
     const command = records.get(r.id)?.checkCommand;

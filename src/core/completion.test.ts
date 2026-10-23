@@ -180,3 +180,17 @@ test("real CLI markdown reports and redirected checks retain verdicts without fa
   assert.equal(held.verdict, "BLOCKED");
   assert.match(held.environmentBlocked!, /테스트 역할이/);
 });
+
+for (const type of ["review", "approval"] as const) test(`${type} cannot approve observed failed or blocked verification`, () => {
+  const node = createGraph().nodes.find(n => n.type === type)!;
+  const requirements = deriveRequirementLedger("acceptance").items;
+  const output = "[REQUIREMENT_EVIDENCE]\nREQ_ID: REQ-001\nSTATUS: SATISFIED\nEVIDENCE: claimed\n[/REQUIREMENT_EVIDENCE]\nAPPROVED\n[PHASE_DONE]";
+  const prior = [{ id: "passed", command: "npm test", exitCode: 0, environmentError: null }];
+  for (const exitCode of [1, null]) {
+    const completion = validateCompletion(node, result(output), "goal", requirements, [{ ...prior[0]!, exitCode }], prior);
+    assert.equal(completion.verdict, "REJECTED");
+  }
+  const blocked = validateCompletion(node, result(output), "goal", requirements, [{ ...prior[0]!, exitCode: 1, environmentError: "listen EPERM" }], prior);
+  assert.equal(blocked.verdict, "BLOCKED");
+  assert.ok(blocked.environmentBlocked);
+});

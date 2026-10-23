@@ -56,6 +56,9 @@ const invalid: Record<string, (s: SessionState) => void> = {
   "replanning after tests": s => { s.visits.splice(1, 0, visit("planning")); },
   "interrupt after tests": s => { s.visits.splice(1, 0, visit("interrupt")); },
   "failed review bypass": s => { s.visits[1]!.status = "failed"; s.visits[1]!.verdict = "REJECTED"; },
+  "failed review command": s => { s.visits[1]!.attempts[0]!.commands = [{ ...receipt, exitCode: 1 }]; },
+  "failed approval command": s => { s.visits[2]!.attempts[0]!.commands = [{ ...receipt, exitCode: 1 }]; },
+  "failed command retained across report repair": s => { s.visits[2]!.attempts.unshift({ ...s.visits[2]!.attempts[0]!, completionAccepted: false, commands: [{ ...receipt, exitCode: 1 }] }); },
   "review mutation": s => { s.visits[1]!.attempts[0]!.fileMutation = true; },
   "approval mutation": s => { s.visits[2]!.attempts[0]!.fileMutation = true; },
 };
