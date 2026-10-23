@@ -37,6 +37,9 @@ const forbidden = [...files].filter(
     file.endsWith(".test.js") ||
     file.startsWith("test/") ||
     file.startsWith("vscode-extension/") ||
+    file.startsWith("desktop-app/") ||
+    file.startsWith(".build/") ||
+    file.startsWith("native/") ||
     file.startsWith(".goal/") ||
     file.startsWith(".kilo/") ||
     file.startsWith("sessions_registry.json") ||

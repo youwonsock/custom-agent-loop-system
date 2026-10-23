@@ -44,3 +44,13 @@ coverage/
 
 # Launcher initialization ownership
 .agent-graph-setup.lock*
+
+# Retired desktop/extension and native build outputs
+/desktop-app/
+/vscode-extension/
+/.build/
+/native/
+/test/game.js
+/test/index.html
+/test/render.js
+/test/styles.css
