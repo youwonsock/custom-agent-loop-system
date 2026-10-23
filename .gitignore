@@ -41,3 +41,6 @@ coverage/
 
 # Plans (kilo) - keep plans dir but ignore any local-only notes
 .kilo/*
+
+# Launcher initialization ownership
+.agent-graph-setup.lock*

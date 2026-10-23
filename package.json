@@ -12,6 +12,7 @@
     "build:launcher:mac": "node scripts/build-macos-launcher.js",
     "typecheck": "tsc --noEmit && tsc -p web/tsconfig.json --noEmit",
     "test": "npm run build && node --test --test-concurrency=1 dist/src/core/*.test.js dist/src/server/*.test.js",
+    "test:tooling": "node --test test/tooling/*.test.cjs",
     "test:e2e": "playwright test",
     "test:launcher:mac": "node --test test/desktop-launcher.test.cjs",
     "coverage": "npm run build && node --test --test-concurrency=1 --experimental-test-coverage --test-coverage-include=dist/src/core/*.js --test-coverage-exclude=dist/src/core/*.test.js dist/src/core/*.test.js dist/src/server/*.test.js",

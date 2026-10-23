@@ -8,8 +8,8 @@ const { spawn } = require("node:child_process");
 const { once } = require("node:events");
 const project = path.resolve(__dirname, "..");
 
-function launch(root, port) {
-  const child = spawn(process.execPath, [path.join(project, "scripts/desktop-launcher.js"), "--project", project, "--root", root, "--port", String(port), "--log", path.join(root, "launcher.log")], { stdio: ["pipe", "pipe", "pipe"] });
+function launch(root, port, source = project) {
+  const child = spawn(process.execPath, [path.join(project, "scripts/desktop-launcher.js"), "--project", source, "--root", root, "--port", String(port), "--log", path.join(root, "launcher.log")], { stdio: ["pipe", "pipe", "pipe"] });
   const messages = [];
   let buffer = "";
   child.stdout.on("data", data => {
@@ -39,7 +39,7 @@ function launch(root, port) {
     clearTimeout(timer);
     assert.equal(child.exitCode, 0);
   };
-  return { child, waitState, stop };
+  return { child, messages, waitState, stop };
 }
 
 test("double-click helper builds, serves assets, reuses its existing server and safely stops only its own server", { timeout: 45_000 }, async t => {
@@ -77,4 +77,35 @@ test("an occupied foreign port is reported without stopping its owner", { timeou
   assert.match(error.message, /다른 서버/);
   await launcher.stop();
   assert.equal(await (await fetch(`http://127.0.0.1:${port}`)).text(), "different service");
+});
+
+test("simultaneous launchers reuse one server after serialized setup", { timeout: 45_000 }, async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "graph-launcher-race-"));
+  const socket = http.createServer(); socket.listen(0, '127.0.0.1'); await once(socket, 'listening');
+  const port = socket.address().port; await new Promise(resolve => socket.close(resolve));
+  const first = launch(root, port), second = launch(root, port);
+  t.after(async () => { await first.stop(); await second.stop(); await fs.rm(root, { recursive: true, force: true }); });
+  const results = await Promise.all([first.waitState('ready'), second.waitState('ready')]);
+  assert.deepEqual(results.map(r => r.owned).sort(), [false, true]);
+  assert.equal(results[0].url, results[1].url);
+  assert.equal([...first.messages, ...second.messages].filter(m => m.message.includes('패키지를 설치')).length, 0);
+});
+
+test("stopping during setup terminates its child and releases initialization ownership", { timeout: 15_000 }, async t => {
+  const source = await fs.mkdtemp(path.join(os.tmpdir(), 'graph-launcher-cancel-'));
+  t.after(() => fs.rm(source, { recursive: true, force: true }));
+  await fs.cp(path.join(project, 'package.json'), path.join(source, 'package.json'));
+  await fs.cp(path.join(project, 'package-lock.json'), path.join(source, 'package-lock.json'));
+  // Isolate generated files while reusing the already validated installation.
+  await fs.symlink(path.join(project, 'node_modules'), path.join(source, 'node_modules'), 'dir');
+  await fs.mkdir(path.join(source, 'scripts'));
+  await fs.writeFile(path.join(source, 'scripts/build.js'), "require('node:fs').writeFileSync('setup.pid', String(process.pid)); setInterval(() => {}, 1000);");
+  const launcher = launch(source, 0, source); t.after(launcher.stop);
+  const deadline = Date.now() + 7000;
+  while (!(await fs.stat(path.join(source, 'setup.pid')).catch(() => null)) && Date.now() < deadline) await new Promise(r => setTimeout(r, 20));
+  const pid = Number(await fs.readFile(path.join(source, 'setup.pid'), 'utf8'));
+  await launcher.stop();
+  assert.throws(() => process.kill(pid, 0), { code: 'ESRCH' });
+  await assert.rejects(fs.access(path.join(source, '.agent-graph-setup.lock')));
+  assert.equal(launcher.messages.some(m => m.state === 'ready'), false);
 });
