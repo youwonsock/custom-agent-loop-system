@@ -133,6 +133,8 @@ async function main() {
     await startServer();
   } finally {
     if (stopPreparation) await stopPreparation;
+    if (stopping && server && server.exitCode === null && server.signalCode === null)
+      await once(server, "exit");
     setupLock.release();
     setupLock = null;
   }

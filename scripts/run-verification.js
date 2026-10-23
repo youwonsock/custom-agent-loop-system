@@ -22,23 +22,25 @@ async function runChecks({ suite, steps, cwd, outputDirectory, metadata = {} }) 
     await save();
     const handle = await fs.open(path.join(outputDirectory, check.log), 'w');
     let writes = Promise.resolve();
+    let outputError;
     try {
       const result = await new Promise(resolve => {
         const child = spawn(step.command[0], step.command.slice(1), { cwd, env: process.env, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
         let spawnError;
         const record = chunk => {
           process.stdout.write(chunk);
-          writes = writes.then(() => handle.write(chunk)).catch(error => { spawnError ??= error; });
+          writes = writes.then(() => handle.writeFile(chunk)).catch(error => { outputError ??= error; });
         };
         child.stdout.on('data', record); child.stderr.on('data', record);
         child.once('error', error => { spawnError = error; record(Buffer.from(error.message + '\n')); });
         child.once('close', (code, signal) => resolve({ code, signal, error: spawnError }));
       });
       await writes;
-      check.exitCode = result.code === 0 && !result.error ? 0 : result.code > 0 ? result.code : result.signal === 'SIGINT' ? 130 : result.signal === 'SIGTERM' ? 143 : 1;
+      const error = result.error ?? outputError;
+      check.exitCode = result.code === 0 && !error ? 0 : result.code > 0 ? result.code : result.signal === 'SIGINT' ? 130 : result.signal === 'SIGTERM' ? 143 : 1;
       check.signal = result.signal;
       check.status = check.exitCode === 0 ? 'passed' : 'failed';
-      if (result.error) check.reason = result.error.message;
+      if (error) check.reason = error.message;
       failure = check.exitCode;
     } finally {
       await handle.close();
