@@ -625,6 +625,24 @@ test("reported Kilo QA log events proceed to final approval through the GUI", as
   expect(run.visits.at(-1).nodeId).toBe("approval");
 });
 
+test("environment-blocked verification displays the cause and resumes only the same test visit", async ({ page }) => {
+  const { id, project } = await startQaFixture(page, "fixture:environment-once");
+  await expect(page.locator(".page-heading .status-pill")).toHaveText("사용자 대기");
+  await expect(page.locator(".run-reason")).toContainText("listen EPERM");
+  const before = await (await page.request.get(`/api/sessions/${id}`)).json();
+  const visit = before.visits.at(-1);
+  expect(visit.nodeId).toBe("test");
+  expect(visit.verdict).toBe("BLOCKED");
+  await page.screenshot({ path: "artifacts/screenshots/environment-blocked.png", fullPage: true });
+  await page.getByRole("button", { name: "재개", exact: true }).click();
+  await expect(page.locator(".page-heading .status-pill")).toHaveText("완료");
+  const after = await (await page.request.get(`/api/sessions/${id}`)).json();
+  expect(after.visits.find((v: any) => v.nodeId === "test").id).toBe(visit.id);
+  expect(after.visits.slice(0, 2)).toEqual(before.visits.slice(0, 2));
+  expect(JSON.parse(await fs.readFile(path.join(project, ".fixture-calls.json"), "utf8")))
+    .toEqual({ planning: 1, implementation: 1, test: 2, review: 1, approval: 1 });
+});
+
 test("view changes preserve a pending graph save and unfinished connection input", async ({ page }) => {
   await page.goto("/");
   await page.getByRole("button", { name: "새 그래프", exact: true }).click();
