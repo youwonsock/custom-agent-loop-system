@@ -1,5 +1,39 @@
 # 구현 검증 및 수정 기록
 
+## 2026-10-23 실제 실행 후 완료 판정 보강
+
+제품 코드 `508c7cb519b92927ea91950a127f938895d219e4`, GUI 회귀 추가 `28775e2`를 검증했다. 작업 브랜치는 `codex/verified-completion`이며 원격 CI는 이번 수정에 대해 실행하지 않았다. 이전 Actions 결과는 아래 해당 커밋의 기록으로만 해석한다.
+
+- `4fce808`: HTTP/파일 경로 구분, 공백·Windows 승인 경로 보존, 네이티브 검증 명령/종료 코드 기록, 요구사항 CHECK_COMMAND 연결, 수정 후 증거 무효화, 현재 테스트 PASS에 근거한 검토/승인, 환경 차단 대기.
+- `508c7cb`: 실제 Luna가 반환한 Markdown 판정·리다이렉션 명령·REQ BLOCKED 보고 호환성.
+- `28775e2`: 환경 차단 이유 표시와 같은 테스트 방문의 GUI 수동 재개 검사.
+
+| 검사 | 현재 확인 결과 |
+|---|---|
+| macOS arm64 / Node 25.2.1 코어·서버·CLI | 112 통과, Windows 전용 1 제외, 0 실패 |
+| 개발 도구 / macOS 실행기 | 8/8, 4/4 |
+| Chromium GUI | 16/16 (기존 15 + 환경 차단/재개) |
+| 패키지 내용 / 설치 실행 / 운영 의존성 audit | 42개 파일 정상, 설치 실행 통과, 취약점 0 |
+| 이번 변경의 Windows/Linux/Node 24 CI | 미실행, 새 Actions 링크 없음 |
+
+플랫폼 suite는 508c7cb, GUI suite는 28775e2에서 실행했다. 두 커밋 간 제품 코드 차이는 없다. 초기 패키지 검사 실패와 최종 순차 재검증 성공을 모두 보존했다. [플랫폼 요약](../artifacts/verification/platform-darwin-arm64/summary.json), [GUI 요약](../artifacts/verification/browser-darwin-arm64/summary.json).
+
+실제 모델 호출은 fake CLI 회귀 검사와 구분한다. 이전 게임/세션을 보존하고 바탕화면 `agent graph test/retest-20261023-175531`의 복사본에서 재검증했다.
+
+| 실제 실행 | 결과 |
+|---|---|
+| GPT-6 Luna 기본 그래프 | 모델이 수정했으나 샌드박스 `listen EPERM`으로 테스트 BLOCKED / WAITING_USER. 구현을 반복하거나 성공으로 올리지 않았다. 운영자 환경의 게임 테스트는 15/15. |
+| Kilo Auto Free 자율 수정 | 공급자 오류/무응답 이후 재개해 일부 수정했지만 복구 예산으로 PAUSED. 자율 완주 실패를 보존. |
+| Kilo Auto Free 보완 후 검증 전용 그래프 | 운영자가 잔여 포인터/심볼릭 링크/테스트 API 오류를 보완한 뒤 같은 요청 모델로 npm test exit 0, 31/31을 관측하고 SUCCESS. 전체 자율 구현 성공과 구분. |
+
+두 게임 모두 운영자 독립 엔진 검사 13개 묶음/4,000 비교, 저장값 경계 10개, HTTP 9개, CUA 브라우저 17개를 통과했다. 물리 터치스크린은 미검증이다. Kilo 수정 전 파일과 운영자 diff, 독립 테스트 원본, 실제 요청/라우팅 모델, 세션·attempt·로그·제품 해시를 로컬 결과 폴더에 보존했다. 네이티브 Codex가 실제 모델 ID를 보고하지 않아 요청 모델 gpt-6-luna만 확인했다. Kilo는 요청 `kilo/kilo-auto/free`를 유지했고 reflection/beam, nvidia/nemotron-3.5-super-vl:free, dots-studio/dots-3-note-preview:free 라우팅이 관측됐다.
+
+실행 기록은 검사 실행 여부를 보강하며 테스트의 충분성을 보장하지 않는다. 모델의 코드/검사 품질, 네이티브 환경 제약, 공급자 가용성에는 여전히 감독이 필요하다. 이전 세션은 새 증거 필드 없이 읽되, 존재하지 않는 검증 기록을 통과 근거로 추정하지 않는다.
+
+상세 로컬 결과: `/Users/supercent/Desktop/agent graph test/retest-20261023-175531/TEST_RESULTS.md`. 이번 실행의 새 CI 링크는 없으며 아래는 과거 커밋의 검증 이력이다.
+
+## 이전 검증 이력
+
 기준 코드: 1fc80c8. 검증일: 2026-10-13. 인수 기준은 [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md)를 따른다.
 
 상태: 기능 검증 완료. 계획의 24개 인수 기준을 구현·검사·수정 기록과 대조했다. 검증용 CLI를 사용하는 테스트와 실제 CLI의 모델 목록 조회를 구분했다.
