@@ -76,18 +76,23 @@ export function buildNodePrompt(
       (v) =>
         `[${v.nodeId} / ${v.id}] ${v.verdict ?? v.status}\n${v.output.slice(-6000)}`,
     ),
-    "=== VERIFICATION EXECUTION CONTRACT ===",
-    "Run the check as a single foreground command. For Node projects use npm test, or npm test > verification/model-tests.txt 2>&1 after creating the log directory in a SEPARATE tool call. Read the saved log in another tool call. Do not append echo, cat, tail, sed, exit, pipelines, background &, or shell status wrappers to the test command. CHECK_COMMAND must match the actual command (the trailing log redirect may be omitted). A failed assertion must remain a nonzero native exit. After changing files, rerun the affected checks; prior receipts are stale.",
-    "Test externally observable behavior and adversarial boundaries, not just implementation helpers. For a served browser app, assert actual HTTP status/content for the entrypoint and assets, a missing file, traversal rejection and malformed URL handling. Close only servers the test started. Verify input blocking in overlays, persisted restart/continue state after reload, large safe-integer storage boundaries and visible controls at required viewport sizes. Do not claim actual browser testing from a DOM mock or source inspection.",
     "=== NATIVE VERIFICATION RECEIPTS (execution evidence, not proof of coverage) ===",
     JSON.stringify(node.type === "test" ? visit.verifiedCommands ?? [] : currentTestProof(state, visit)),
     "=== REQUIREMENT EVIDENCE FORMAT ===",
     "For each requirement report: [REQUIREMENT_EVIDENCE]\nREQ_ID: REQ-001\nSTATUS: SATISFIED|PARTIAL|FAILED|BLOCKED\nEVIDENCE: concrete observed check or artifact\n[/REQUIREMENT_EVIDENCE]. Never invent a passed check.",
   ];
+  if (node.type === "implementation" || node.type === "test")
+    lines.push(
+    "=== VERIFICATION EXECUTION CONTRACT ===",
+    "Run the check as a single foreground command. For Node projects use npm test, or npm test > verification/model-tests.txt 2>&1 after creating the log directory in a SEPARATE tool call. Read the saved log in another tool call. Do not append echo, cat, tail, sed, exit, pipelines, background &, or shell status wrappers to the test command. CHECK_COMMAND must match the actual command (the trailing log redirect may be omitted). A failed assertion must remain a nonzero native exit. After changing files, rerun the affected checks; prior receipts are stale.",
+    "Test externally observable behavior and adversarial boundaries, not just implementation helpers. For a served browser app, assert actual HTTP status/content for the entrypoint and assets, a missing file, traversal rejection and malformed URL handling. Close only servers the test started. Verify input blocking in overlays, persisted restart/continue state after reload, large safe-integer storage boundaries and visible controls at required viewport sizes. Do not claim actual browser testing from a DOM mock or source inspection.",
+    );
+  else
+    lines.push("Read-only audit: you must not execute tests or start servers. Inspect files and current native test-role receipts, including their exit codes and matching source-bound operator evidence. If checks need rerunning, report REJECTED with the reason so the graph returns to the writable implementation/test path. Never run a test to replace or repair missing proof from a read-only role.");
   if (["test", "review", "approval"].includes(node.type))
     lines.push(
       "The complete final report must contain one correctly formatted block for EVERY ID below. Choose exactly one STATUS and replace the EVIDENCE placeholder with observed facts. Write REQ_ID exactly once per line. A bare PASS or APPROVED without these blocks is incomplete.",
-      ...state.requirements.items.map(r => `[REQUIREMENT_EVIDENCE]\nREQ_ID: ${r.id}\nSTATUS: SATISFIED|PARTIAL|FAILED|BLOCKED\nEVIDENCE: concrete observed check or artifact\n[/REQUIREMENT_EVIDENCE]`),
+      ...state.requirements.items.map(r => `[REQUIREMENT_EVIDENCE]\nREQ_ID: ${r.id}\nSTATUS: SATISFIED|PARTIAL|FAILED|BLOCKED\nEVIDENCE: concrete observed check or artifact${node.type === "test" ? "\nCHECK_COMMAND: exact executed foreground test command" : ""}\n[/REQUIREMENT_EVIDENCE]`),
     );
   if (node.type === "planning")
     lines.push(

@@ -4,6 +4,7 @@ import { outsidePaths } from "./access_paths";
 import { CommandTracker, currentTestProof, isVerificationCommand } from "./verification_evidence";
 import { SessionState, NodeVisit } from "../shared/domain";
 import { createGraph } from "./graph";
+import { buildNodePrompt } from "./prompt";
 import { deriveRequirementLedger } from "./requirement_ledger";
 
 test("prompt path scan preserves spaces, URL targets and actual external requests", () => {
@@ -68,4 +69,18 @@ test("foreground capture retains the native failing exit; background and reporti
   assert.equal(tracker.receipts[0]!.exitCode, 1);
   for (const c of ["npm test &", "npm test & true", "npm test 2>&1 &", "npm test > out; echo $?", "npm test 2>&1 | tee out; echo $?"])
     assert.equal(isVerificationCommand(c), false, c);
+});
+
+
+test("only writable roles receive test-execution instructions; audits inspect existing native proof", () => {
+  const graph = createGraph();
+  for (const node of graph.nodes) {
+    const visit = { id: "visit", nodeId: node.id, attempts: [] } as unknown as NodeVisit;
+    const state = { id: "session", graph, goal: "build a local app", requirements: deriveRequirementLedger("build a local app"), visits: [visit], accessMode: "ask", additionalAllowedPaths: [], targetProjectPath: "/work" } as unknown as SessionState;
+    const prompt = buildNodePrompt(state, node, visit);
+    const writable = ["implementation", "test"].includes(node.type);
+    assert.equal(prompt.includes("=== VERIFICATION EXECUTION CONTRACT ==="), writable);
+    assert.equal(prompt.includes("must not execute tests or start servers"), !writable);
+    if (node.type === "test") assert.match(prompt, /EVIDENCE: concrete observed check or artifact\nCHECK_COMMAND: exact executed foreground test command/);
+  }
 });
