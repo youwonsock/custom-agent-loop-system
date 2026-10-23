@@ -1,5 +1,6 @@
 import { AgentNode, ExecutionBinding, LocalConnection } from "../shared/domain";
 import { resolveExecutable } from "./catalog";
+import * as path from "node:path";
 export function isReadOnly(type: AgentNode["type"]): boolean {
   return ["planning", "review", "approval", "interrupt"].includes(type);
 }
@@ -36,6 +37,8 @@ export async function buildInvocation(
         : opts.fullAccess
           ? "danger-full-access"
           : "workspace-write",
+      "-c", "allow_login_shell=false",
+      "-c", `shell_environment_policy.set.PATH=${JSON.stringify([path.dirname(process.execPath), env.PATH ?? ""].filter(Boolean).join(path.delimiter))}`,
     ];
     for (const dir of opts.allowedPaths) args.push("--add-dir", dir);
     if (b.variant)

@@ -216,3 +216,15 @@ test("OpenCode and Kilo use native auto permission flag only for approved writab
     }
   }
 });
+
+
+test("Codex uses the orchestrator Node PATH without a login shell or changing sandbox permissions", async () => {
+  for (const role of ["implementation", "test", "review"] as const) {
+    const invocation = await buildInvocation({ id: "codex", label: "codex", type: "codex", binary }, { connectionId: "codex", modelId: "fixture-model" }, createGraph().nodes.find(n => n.type === role)!, { prompt: "check", cwd: os.tmpdir(), fullAccess: false, allowedPaths: [] });
+    assert.ok(invocation.args.includes("allow_login_shell=false"));
+    assert.ok(invocation.args.some(a => a.startsWith("shell_environment_policy.set.PATH=") && a.includes(path.dirname(process.execPath).replaceAll("\\", "\\\\"))));
+    assert.equal(invocation.args[invocation.args.indexOf("--sandbox") + 1], role === "review" ? "read-only" : "workspace-write");
+    assert.equal(invocation.args.includes("--approve-for-me"), false);
+    assert.equal(invocation.args.some(a => a.includes("network_access=true")), false);
+  }
+});

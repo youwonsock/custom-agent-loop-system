@@ -21,6 +21,8 @@ export function checkCommandKey(command: string): string {
 // This proves execution, not the adequacy or honesty of model-authored tests.
 export function isVerificationCommand(command: string): boolean {
   const c = canonicalCommand(command);
+  // Do not accept a backgrounded test whose shell exits before the test does.
+  if (c.replace(/2>&1/g, "").replace(/&&/g, "").includes("&")) return false;
   if (/[\n;|`]/.test(c) || /\$\(/.test(c)) return false;
   const segments = c.split(/\s*&&\s*/);
   if (segments.length > 2 || (segments.length === 2 && !/^cd\s+/.test(segments[0]!))) return false;

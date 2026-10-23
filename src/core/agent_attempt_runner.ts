@@ -1,4 +1,5 @@
 import { AttemptFailure } from "./resilience";
+import { isUpstreamCredentialFailure } from "./cli_diagnostics";
 
 export interface RetryPolicySettings {
   maxAttempts: number;
@@ -56,6 +57,7 @@ export class AgentAttemptRunner {
     const reconnect =
       !input.reconnectUsed &&
       Boolean(input.cliSessionId) &&
+      !isUpstreamCredentialFailure(input.failure.message) &&
       ["network", "transport_timeout", "idle_timeout"].includes(
         input.failure.kind,
       );

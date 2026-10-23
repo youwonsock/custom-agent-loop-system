@@ -169,3 +169,14 @@ test("diagnostics are redacted and bounded without losing the classified kind", 
     else process.env[key] = previous;
   }
 });
+
+
+test("explicit upstream credential failures retry without treating operator authentication failures as transient", () => {
+  const upstream = "AI_APICallError: Upstream request failed: Invalid credential";
+  assert.equal(cliDiagnostic(upstream).kind, "network");
+  assert.equal(cliDiagnostic({ statusCode: 502, message: upstream }).kind, "network");
+  assert.equal(cliDiagnostic({ statusCode: 401, message: upstream }).kind, "auth");
+  assert.equal(cliDiagnostic({ statusCode: 403, message: upstream }).kind, "auth");
+  for (const message of ["Invalid credential", "Invalid API key", "Upstream authentication failed", "Please fix credentials"])
+    assert.notEqual(cliDiagnostic(message).kind, "network", message);
+});

@@ -26,7 +26,7 @@ const responsibilities: Record<AgentNode["type"], string> = {
     "Inspect requirements and existing files without writing files. Propose complete, materially different strategies. Do not implement or invoke native plan approval tools; return the options as assistant text.",
   implementation:
     "Inspect existing work first. Implement cumulatively. Do not weaken, delete or skip tests to make the implementation appear complete. Run focused checks and report observed results.",
-  test: "Run existing tests, add missing acceptance coverage and execute it. You may edit tests but never production code. Report product failures as FAIL. If required checks cannot run because of environment permissions, unavailable network or tooling, report VERDICT: BLOCKED and the exact command, observed error and operator action. Never repair production code to work around an execution sandbox.",
+  test: "Run existing tests, add missing acceptance coverage and execute it. You may edit tests but never production code. Report product failures as FAIL. If required checks cannot run because of environment permissions, unavailable network or tooling, report VERDICT: BLOCKED and the exact command, observed error and operator action. Never repair production code or change sandbox settings to work around an execution sandbox. If the native CLI supports per-command approval, request approval for the exact required local test command; a denied request remains BLOCKED.",
   review:
     "Independently inspect the code, original goal and test evidence using read-only tools. Reject missing or contradictory evidence. Never repair files or conceal failing tests.",
   approval:
@@ -76,6 +76,9 @@ export function buildNodePrompt(
       (v) =>
         `[${v.nodeId} / ${v.id}] ${v.verdict ?? v.status}\n${v.output.slice(-6000)}`,
     ),
+    "=== VERIFICATION EXECUTION CONTRACT ===",
+    "Run the check as a single foreground command. For Node projects use npm test, or npm test > verification/model-tests.txt 2>&1 after creating the log directory in a SEPARATE tool call. Read the saved log in another tool call. Do not append echo, cat, tail, sed, exit, pipelines, background &, or shell status wrappers to the test command. CHECK_COMMAND must match the actual command (the trailing log redirect may be omitted). A failed assertion must remain a nonzero native exit. After changing files, rerun the affected checks; prior receipts are stale.",
+    "Test externally observable behavior and adversarial boundaries, not just implementation helpers. For a served browser app, assert actual HTTP status/content for the entrypoint and assets, a missing file, traversal rejection and malformed URL handling. Close only servers the test started. Verify input blocking in overlays, persisted restart/continue state after reload, large safe-integer storage boundaries and visible controls at required viewport sizes. Do not claim actual browser testing from a DOM mock or source inspection.",
     "=== NATIVE VERIFICATION RECEIPTS (execution evidence, not proof of coverage) ===",
     JSON.stringify(node.type === "test" ? visit.verifiedCommands ?? [] : currentTestProof(state, visit)),
     "=== REQUIREMENT EVIDENCE FORMAT ===",

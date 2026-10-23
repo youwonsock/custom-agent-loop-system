@@ -44,6 +44,12 @@ export function diagnosticMessage(value: string): string {
     .replace(/\uFFFD$/, "");
 }
 
+/** Explicit upstream routing failure, not a missing operator credential.
+ * A real 401/403 always wins; no generic "invalid credential" retry exemption. */
+export function isUpstreamCredentialFailure(message: string): boolean {
+  return /(?:^|\n)(?:Last observed CLI error: )?(?:AI_APICallError: )?Upstream request failed: Invalid credential(?:[.\r\n]|$)/.test(message);
+}
+
 // These phrases describe an actual failure, rather than a mention of auth, a
 // model, a token count, or an HTTP-looking substring in an identifier.
 function kindOf(
@@ -52,6 +58,7 @@ function kindOf(
   message: string,
 ): FailureKind {
   const normalized = code.toLowerCase().replace(/[^a-z0-9]/g, "");
+  if (status !== 401 && status !== 403 && isUpstreamCredentialFailure(message)) return "network";
   if (/^Stopped after \d+ consecutive invalid-argument failures for the ".+" tool\./i.test(message))
     return "tool_arguments";
   if (

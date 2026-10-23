@@ -113,3 +113,14 @@ test("plaintext errors classify unsuccessful CLI exits, but cannot override succ
   assert.equal(failure.retryable, false);
   assert.match(failure.message, /authentication required/);
 });
+
+
+test("upstream route credential timeout remains bounded retryable while local auth does not", () => {
+  const r = result();
+  r.timedOut = true;
+  r.failureKind = "idle_timeout";
+  r.diagnostics.plainError = cliDiagnostic("AI_APICallError: Upstream request failed: Invalid credential");
+  const failure = classifyFailure(r, { reason: "Idle", failureKind: null });
+  assert.equal(failure.retryable, true);
+  assert.match(failure.message, /Upstream request failed/);
+});

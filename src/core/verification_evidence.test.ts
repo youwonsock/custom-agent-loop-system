@@ -58,3 +58,14 @@ test("proof is invalidated by subsequent implementation or failed tests; legacy 
   state.visits = [{ ...passed, attempts: [], verifiedCommands: undefined }, review];
   assert.deepEqual(currentTestProof(state, review), []);
 });
+
+
+test("foreground capture retains the native failing exit; background and reporting suffixes are never proof", () => {
+  const capture = "npm test > verification/model-tests.txt 2>&1";
+  assert.equal(isVerificationCommand(capture), true);
+  const tracker = new CommandTracker();
+  tracker.observe(codex(capture, 1, "1 failing test"));
+  assert.equal(tracker.receipts[0]!.exitCode, 1);
+  for (const c of ["npm test &", "npm test & true", "npm test 2>&1 &", "npm test > out; echo $?", "npm test 2>&1 | tee out; echo $?"])
+    assert.equal(isVerificationCommand(c), false, c);
+});
