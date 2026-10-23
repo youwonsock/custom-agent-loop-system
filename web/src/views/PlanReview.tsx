@@ -1,9 +1,9 @@
 
-import type { StudioController } from "../hooks/useStudioController";
+import type { PlanReviewModel } from "./viewModels";
 import { lazy } from "react";
 const Markdown = lazy(() => import("../components/Markdown"));
 
-export default function PlanReview({ controller }: { controller: StudioController }) {
+export default function PlanReview({ controller }: { controller: PlanReviewModel }) {
   const {
     planText,
     setPlanText,

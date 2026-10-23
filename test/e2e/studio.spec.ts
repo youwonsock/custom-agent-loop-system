@@ -45,6 +45,21 @@ test("editor disables execution and explains completion paths that bypass tests 
   await expect(page.getByRole("button", { name: "그래프 실행", exact: false })).toBeDisabled();
   await page.screenshot({ path: "artifacts/screenshots/unsafe-success-blocked.png", fullPage: true });
 });
+test("editor rejects a closed execution cycle using the shared server diagnostics", async ({ page }) => {
+  await page.route("**/api/bootstrap*", async route => {
+    const response = await route.fetch();
+    const boot = await response.json();
+    const graph = boot.graphs.find((g: any) => g.nodes.some((n: any) => n.id === "approval"));
+    graph.defaultBinding = { connectionId: "fixture", modelId: "fixture-model" };
+    graph.edges = graph.edges.map((e: any) => e.source === "interrupt" ? e : { ...e, target: e.source });
+    boot.graphs = [graph];
+    await route.fulfill({ response, json: boot });
+  });
+  await page.goto("/");
+  await page.getByLabel("실행 목표").fill("Closed cycles must not run");
+  await expect(page.getByText("완료 또는 일시정지로 나갈 수 있는 경로가 없습니다.", { exact: true }).first()).toBeVisible();
+  await expect(page.getByRole("button", { name: "그래프 실행", exact: false })).toBeDisabled();
+});
 test("graph editing, model connection, plan editing/approval and complete execution", async ({
   page,
 }) => {

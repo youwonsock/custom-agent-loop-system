@@ -1,9 +1,9 @@
 import { SERVICE_TYPES, type LocalConnection } from "../../../src/shared/domain";
 import { api, id } from "../api";
 import { pricingNames, stamp } from "../studioTypes";
-import type { StudioController } from "../hooks/useStudioController";
+import type { ConnectionsViewModel } from "./viewModels";
 
-export default function ConnectionsView({ controller }: { controller: StudioController }) {
+export default function ConnectionsView({ controller }: { controller: ConnectionsViewModel }) {
   const {
     view,
     connections,

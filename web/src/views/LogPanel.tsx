@@ -1,6 +1,6 @@
-import type { StudioController } from "../hooks/useStudioController";
+import type { LogPanelModel } from "./viewModels";
 
-export default function LogPanel({ controller }: { controller: StudioController }) {
+export default function LogPanel({ controller }: { controller: LogPanelModel }) {
   const {
     log,
     logRef,

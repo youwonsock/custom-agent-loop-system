@@ -3,7 +3,7 @@ import { type LocalConnection, type ModelCatalog } from "../../../src/shared/dom
 import { api, id } from "../api";
 import type { StudioData } from "./useStudioData";
 
-export function useConnections(data: StudioData) {
+export function useConnections(data: Pick<StudioData, "setCatalogs" | "target" | "setTarget" | "setNotice" | "setError">) {
   const {
     setCatalogs,
     target,

@@ -5,7 +5,7 @@ import { api, id } from "../api";
 import type { StudioData } from "./useStudioData";
 import type { GraphEditor } from "./useGraphEditor";
 
-export function useRunController(data: StudioData, graph: GraphEditor) {
+export function useRunController(data: Pick<StudioData, "view" | "setView" | "sessions" | "setSessions" | "target" | "goal" | "setNotice" | "setError" | "attempt">, graph: Pick<GraphEditor, "flush">) {
   const {
     view,
     setView,

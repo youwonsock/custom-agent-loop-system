@@ -1,13 +1,13 @@
 import { api } from "../api";
 import { statusNames, pricingNames, stamp } from "../studioTypes";
-import type { StudioController } from "../hooks/useStudioController";
+import type { RunsViewModel } from "./viewModels";
 import { Canvas } from "../Canvas";
 import { lazy } from "react";
 const Markdown = lazy(() => import("../components/Markdown"));
 import PlanReview from "./PlanReview";
 import LogPanel from "./LogPanel";
 
-export default function RunsView({ controller }: { controller: StudioController }) {
+export default function RunsView({ controller }: { controller: RunsViewModel }) {
   const {
     view,
     setView,

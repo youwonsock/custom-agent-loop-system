@@ -1,6 +1,6 @@
-import type { StudioController } from "../hooks/useStudioController";
+import type { DirectoryDialogModel } from "./viewModels";
 
-export default function DirectoryDialog({ controller }: { controller: StudioController }) {
+export default function DirectoryDialog({ controller }: { controller: DirectoryDialogModel }) {
   const {
     setTarget,
     setNotice,

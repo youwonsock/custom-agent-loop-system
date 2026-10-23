@@ -7,7 +7,7 @@ import { typeMeta } from "../nodeMeta";
 import { backupKey, fingerprint, clientDiagnostics } from "../studioTypes";
 import type { StudioData } from "./useStudioData";
 
-export function useGraphEditor(data: StudioData) {
+export function useGraphEditor(data: Pick<StudioData, "boot" | "view" | "setView" | "setGraphs" | "setNotice" | "setError" | "refreshGraphs">) {
   const {
     boot,
     view,
