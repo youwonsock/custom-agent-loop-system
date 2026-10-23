@@ -116,6 +116,14 @@ async function main() {
       if (!asset.ok || !(await asset.arrayBuffer()).byteLength)
         throw new Error("Installed web asset cannot be served: " + match[1]);
     }
+    // Lazy chunks are not referenced by the entry HTML; verify the entire installed asset set.
+    for (const name of await fs.readdir(path.join(installed, "dist", "web", "assets"))) {
+      if (!/\.(js|css)$/.test(name)) continue;
+      const asset = await fetch(`${url}/assets/${name}`);
+      const local = await fs.readFile(path.join(installed, "dist", "web", "assets", name));
+      if (!asset.ok || !Buffer.from(await asset.arrayBuffer()).equals(local))
+        throw new Error(`Installed lazy asset is missing or incorrect: ${name}`);
+    }
     const bootstrap = await (await fetch(url + "/api/bootstrap")).json();
     if (
       bootstrap.graphs[0]?.version !== 2 ||

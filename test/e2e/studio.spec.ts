@@ -83,6 +83,9 @@ test("graph editing, model connection, plan editing/approval and complete execut
   const area = page.getByLabel("계획 문서");
   const body = await area.inputValue();
   await area.fill(body + "\nOperator acceptance review complete.");
+  await page.getByRole("button", { name: "CLI 연결", exact: false }).click();
+  await page.getByRole("button", { name: "실행 기록", exact: false }).click();
+  await expect(area).toHaveValue(body + "\nOperator acceptance review complete.");
   await page.getByRole("button", { name: "문서 저장", exact: true }).click();
   await expect(page.getByText(/문서 rev 2/)).toBeVisible();
   await page.screenshot({
@@ -620,4 +623,91 @@ test("reported Kilo QA log events proceed to final approval through the GUI", as
   expect(qa.attempts).toHaveLength(1);
   expect(qa.attempts[0].failureKind).toBeNull();
   expect(run.visits.at(-1).nodeId).toBe("approval");
+});
+
+test("view changes preserve a pending graph save and unfinished connection input", async ({ page }) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: "새 그래프", exact: true }).click();
+  await expect(page.getByText("저장됨", { exact: true })).toBeVisible();
+  let release!: () => void;
+  const pending = new Promise<void>(resolve => { release = resolve; });
+  await page.route("**/api/graphs/*", async route => {
+    if (route.request().method() === "PUT") await pending;
+    await route.continue();
+  });
+  try {
+    const saving = page.waitForRequest(request => request.method() === "PUT" && request.url().includes("/api/graphs/"));
+    await page.getByLabel("그래프 이름").fill("전환 중 보존하는 초안");
+    await saving;
+    await page.getByRole("button", { name: "CLI 연결", exact: false }).click();
+    await page.getByLabel("연결 이름").fill("아직 등록하지 않은 연결");
+    await page.getByRole("button", { name: "그래프 편집", exact: false }).click();
+    await expect(page.getByLabel("그래프 이름")).toHaveValue("전환 중 보존하는 초안");
+    await page.getByRole("button", { name: "CLI 연결", exact: false }).click();
+    await expect(page.getByLabel("연결 이름")).toHaveValue("아직 등록하지 않은 연결");
+  } finally { release(); }
+  await page.getByRole("button", { name: "그래프 편집", exact: false }).click();
+  await expect(page.getByText("저장됨", { exact: true })).toBeVisible();
+});
+
+test("view changes keep one SSE subscription and cancel inactive log polling", async ({ page }) => {
+  await page.addInitScript(() => {
+    const probe = { streams: 0, createdStreams: 0, activeLogs: 0, maxLogs: 0 };
+    (window as any).__studioProbe = probe;
+    const NativeEventSource = window.EventSource;
+    window.EventSource = class extends NativeEventSource {
+      closed = false;
+      constructor(url: string | URL, init?: EventSourceInit) { super(url, init); probe.streams++; probe.createdStreams++; }
+      close() { if (!this.closed) { probe.streams--; this.closed = true; } super.close(); }
+    };
+    const nativeFetch = window.fetch.bind(window);
+    window.fetch = async (input, init) => {
+      if (!String(input).includes("/logs?")) return nativeFetch(input, init);
+      let finished = false;
+      const finish = () => { if (!finished) { finished = true; probe.activeLogs--; } };
+      probe.activeLogs++; probe.maxLogs = Math.max(probe.maxLogs, probe.activeLogs);
+      init?.signal?.addEventListener("abort", finish, { once: true });
+      try { return await nativeFetch(input, init); } finally { finish(); init?.signal?.removeEventListener("abort", finish); }
+    };
+  });
+  await page.route("**/api/sessions/*/logs?*", async route => {
+    await new Promise(resolve => setTimeout(resolve, 500));
+    await route.continue().catch(() => {});
+  });
+  await startQaFixture(page, "fixture:qa-auth-once");
+  for (let i = 0; i < 3; i++) {
+    await expect.poll(() => page.evaluate(() => (window as any).__studioProbe.activeLogs)).toBe(1);
+    await page.getByRole("button", { name: "CLI 연결", exact: false }).click();
+    await expect.poll(() => page.evaluate(() => (window as any).__studioProbe.activeLogs)).toBe(0);
+    await page.getByRole("button", { name: "실행 기록", exact: false }).click();
+  }
+  const probe = await page.evaluate(() => (window as any).__studioProbe);
+  expect(probe.streams).toBe(1); expect(probe.createdStreams).toBe(1); expect(probe.maxLogs).toBe(1);
+});
+
+test("a failed lazy view reports the error and reload recovers", async ({ page }) => {
+  await page.route("**/assets/ConnectionsView-*.js", route => route.abort());
+  await page.goto("/");
+  await expect(page.getByTestId("graph-canvas")).toBeVisible();
+  await page.getByRole("button", { name: "CLI 연결", exact: false }).click();
+  await expect(page.getByRole("heading", { name: "화면을 불러오지 못했습니다" })).toBeVisible();
+  await page.unroute("**/assets/ConnectionsView-*.js");
+  await page.getByRole("button", { name: "새로고침", exact: true }).click();
+  await expect(page.getByTestId("graph-canvas")).toBeVisible();
+  await page.getByRole("button", { name: "CLI 연결", exact: false }).click();
+  await expect(page.getByLabel("연결 이름")).toBeVisible();
+});
+
+test("initial graph JavaScript stays under 500 kB and defers other screens and Markdown", async ({ page }) => {
+  const scripts = new Map<string, Promise<number>>();
+  page.on("response", response => {
+    if (/\/assets\/[^?]+\.js$/.test(response.url())) scripts.set(response.url(), response.body().then(body => body.length));
+  });
+  await page.goto("/");
+  await expect(page.getByTestId("graph-canvas")).toBeVisible();
+  const bytes = (await Promise.all(scripts.values())).reduce((sum, value) => sum + value, 0);
+  expect(bytes).toBeGreaterThan(0); expect(bytes).toBeLessThanOrEqual(500_000);
+  expect([...scripts.keys()].some(url => /Markdown-|RunsView-|ConnectionsView-/.test(url))).toBe(false);
+  await fs.mkdir("artifacts/verification", { recursive: true });
+  await fs.writeFile("artifacts/verification/browser-bundle.json", JSON.stringify({ decodedJavaScriptBytes: bytes, limit: 500_000, assets: [...scripts.keys()].map(url => new URL(url).pathname) }, null, 2));
 });

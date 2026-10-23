@@ -24,3 +24,7 @@ fs.writeFileSync(
   "**/*.test.js\n**/*.map\n",
   "utf8",
 );
+for (const name of fs.readdirSync(path.join(root, "dist", "web", "assets"))) {
+  if (name.endsWith(".js") && fs.statSync(path.join(root, "dist", "web", "assets", name)).size > 500_000)
+    throw new Error(`Web JavaScript chunk exceeds 500 kB: ${name}`);
+}
