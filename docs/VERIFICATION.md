@@ -1,5 +1,27 @@
 # 구현 검증 및 수정 기록
 
+## 2026-10-24 전역 성공 조건 강제
+
+검증한 제품·검사 커밋: `8bd02a1a39d7f5b2d8d8222b86c1e608832e8cbb` (`codex/verified-completion`). 깨끗한 커밋 상태에서 아래 검사를 순차 실행했다. 현재 규칙은 [EXECUTION_CONDITIONS.md](EXECUTION_CONDITIONS.md)에 기록했다.
+
+- 편집 화면·실행 API에서 구현 단독 완료, 실패 간선의 SUCCESS 연결, 테스트 생략 경로를 차단한다. 초안 저장은 유지한다.
+- 종단에서도 필수 REQ 충족, 현재 테스트 방문의 네이티브 성공 명령과 CHECK_COMMAND 일치, 마지막 최종 승인 역할의 정상 APPROVED를 검사한다. 과거 snapshot·실패 경로·수락 정보가 없는 과거 검증은 자동 성공으로 올리지 않는다.
+- 성공 조건 미충족은 원인을 보존하고 PAUSED로 끝낸다. 실패 뒤 수동 재개하여 수정·새 테스트·최종 승인을 거치면 성공할 수 있다. 계획·접근 승인, 기존 비용·복구·STOP 정책은 유지한다.
+- 내부 attempt 메타데이터만 추가했다. graph v2 / connection v1 / session stateVersion 3, REST/SSE 및 공개 CLI 옵션은 유지했다. 과거 완료 결과를 소급 변경하지 않는다. 이전 검증 전용 그래프의 SUCCESS는 새 전역 조건의 통과 증거가 아니다.
+
+| 검사 | 확인 결과 |
+| --- | --- |
+| macOS arm64 / Node 25.2.1 코어·서버·CLI | 165 통과, Windows 전용 1 제외, 0 실패 |
+| 개발 도구 / macOS 실행기 | 8/8 / 4/4, 실행기 빌드 통과 |
+| Chromium GUI | 19/19, 완료 경로 오류·실행 차단 추가 |
+| 타입 검사·웹 빌드 | 통과, 초기 JavaScript 443,784 bytes / 500,000 bytes |
+| 패키지 내용·설치 smoke / 운영 audit | 46개 파일 정상, 설치 통과 / 취약점 0 |
+| 실제 모델 추론 / Windows·Linux·Node 24 CI | 이번 변경에서는 미실행, 새 Actions 링크 없음 |
+
+코어·GUI는 fake CLI 네이티브 이벤트 fixture 회귀다. 실제 GPT-6 Luna·Kilo 실행이나 테스트의 의미적 완전성을 검증한 결과와 혼동하지 않는다. 초기 회귀에서 기존 구현 단독 완료를 가정한 fixture 2건이 실패했고 필수 테스트·승인을 포함하도록 수정했다. 로컬 검증 래퍼 인자 누락 오류도 기록한 뒤 수정하여 순차 검사 전체를 통과했다.
+
+증거: `/Users/supercent/Desktop/agent graph test/verified-success-20261024001015/TEST_RESULTS.md` 및 `checks/summary.json`. 로그·초기 실패·스크린샷·JS 측정·결과 JSON을 함께 보존했으며 사용자 홈 인증 정보나 실제 CLI 원시 로그는 수집하지 않았다. 이후 커밋은 검증 문서만 갱신한다.
+
 ## 2026-10-23 무료·유료 모델 재시도 분리
 
 제품 코드와 검사 커밋: `ac97f223dac80fc0c160c53e8669e3dc333a19c1` (`codex/verified-completion`). 성공·실패·보류 조건 전체와 기본 한도는 [EXECUTION_CONDITIONS.md](EXECUTION_CONDITIONS.md)에 기록했다.
