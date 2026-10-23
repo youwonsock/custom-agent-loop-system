@@ -89,12 +89,13 @@ agent-loop resume --session SESSION_ID
 
 ```sh
 npm run verify:platform
+npx playwright install chromium
 npm run verify:browser
 
 # 개별 검사
 npm run typecheck
 npm test
-npx playwright install chromium
+npm run test:tooling
 npm run test:e2e
 npm run coverage
 npm run smoke
