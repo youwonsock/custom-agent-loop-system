@@ -1,3 +1,4 @@
+import { applyApproval } from "./session_transitions";
 import { SessionSummary, sessionSummary } from "../shared/session_updates";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
@@ -233,6 +234,8 @@ export class StudioStore {
   async writeSession(state: SessionState): Promise<void> {
     await withShortFileLock(path.join(this.sessionDir(state.id), "state.lock"), async () => {
       const current = await readJsonFile<SessionState>(path.join(this.sessionDir(state.id), "state.json"));
+      if (current && (current.revision ?? 0) !== (state.revision ?? 0))
+        throw new AppError(409, "더 새로운 세션 상태가 저장되어 이전 상태를 덮어쓸 수 없습니다.", "stale_session");
       state.revision = (current?.revision ?? 0) + 1;
       state.updatedAt = new Date().toISOString();
       await atomicWriteJsonFile(path.join(this.sessionDir(state.id), "state.json"), state);
@@ -274,68 +277,7 @@ export class StudioStore {
     if (!safeId(action.requestId))
       throw new AppError(400, "요청 ID가 필요합니다.");
     const state = await this.mutateSession(id, (s) => {
-      if (s.processedRequests.includes(action.requestId)) return;
-      if (s.status === "RUNNING" || s.status === "RECOVERING")
-        throw new AppError(
-          409,
-          "실행 중인 세션의 계획과 설정을 변경할 수 없습니다.",
-        );
-      if (["select_plan", "edit_plan", "approve_plan"].includes(action.type)) {
-        const pending = s.pendingApproval;
-        if (
-          !pending ||
-          pending.nodeId !== action.nodeId ||
-          pending.visitId !== action.visitId
-        )
-          throw new AppError(
-            409,
-            "현재 승인 대기 중인 방문과 일치하지 않습니다.",
-            "stale_approval",
-          );
-        const visit = s.visits.find((v) => v.id === pending.visitId)!;
-        const plan = visit.plans.find((p) => p.id === action.choiceId);
-        if (!plan || plan.revision !== action.expectedRevision)
-          throw new AppError(
-            409,
-            "계획 문서 버전이 변경되었습니다.",
-            "stale_plan",
-          );
-        if (action.type === "edit_plan") {
-          if (
-            typeof action.body !== "string" ||
-            !action.body.trim() ||
-            action.body.length > 512_000
-          )
-            throw new AppError(400, "계획 문서를 입력하세요.");
-          plan.body = action.body;
-          plan.revision++;
-        }
-        visit.selectedPlanId = plan.id;
-        if (action.type === "approve_plan") {
-          s.approvedPlanRef = {
-            visitId: visit.id,
-            choiceId: plan.id,
-            revision: plan.revision,
-          };
-          visit.status = "succeeded";
-          visit.completedAt = new Date().toISOString();
-          s.pendingApproval = null;
-        }
-      } else if (action.type === "approve_access") {
-        if (
-          !s.pendingAccess ||
-          s.pendingAccess.nodeId !== action.nodeId ||
-          s.pendingAccess.visitId !== action.visitId
-        )
-          throw new AppError(409, "현재 접근 요청과 일치하지 않습니다.");
-        if (action.decision === "full_access") s.accessMode = "full_access";
-        else if (action.decision === "allow_requested")
-          s.additionalAllowedPaths.push(...s.pendingAccess.paths);
-        else throw new AppError(400, "접근 승인 결정을 선택하세요.");
-        s.pendingAccess = null;
-      } else throw new AppError(400, "지원되지 않는 요청입니다.");
-      s.processedRequests.push(action.requestId);
-      s.processedRequests = s.processedRequests.slice(-500);
+      applyApproval(s, action);
     });
     const visit = state.visits.find((v) => v.id === action.visitId);
     if (visit) await this.savePlans(id, visit.id, visit.plans);

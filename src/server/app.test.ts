@@ -419,6 +419,7 @@ test("recovered terminal snapshots fail closed without current test evidence and
     if (mode === "missing-tests") snapshot.visits = snapshot.visits.filter(v => v.nodeId !== "test");
     if (mode === "failed-approval") snapshot.visits.at(-1)!.status = "failed";
     if (mode === "legacy-metadata") for (const v of snapshot.visits) for (const a of v.attempts) delete a.completionAccepted;
+    snapshot.revision = (await s.store.readSession(id)).revision;
     await s.store.writeSession(snapshot);
     await new GraphRuntime(s.store, id).run("manual");
     const held = await s.store.readSession(id);
@@ -445,6 +446,7 @@ test("legacy failure edges cannot turn test FAIL or approval REJECTED into SUCCE
     const snapshot = structuredClone(completed);
     snapshot.status = "PAUSED"; snapshot.currentNodeId = nodeId; snapshot.visits = [];
     snapshot.graph.edges.find(e => e.source === nodeId && e.outcome === "failure")!.target = "SUCCESS";
+    snapshot.revision = (await s.store.readSession(id)).revision;
     await s.store.writeSession(snapshot);
     await new GraphRuntime(s.store, id).run("manual");
     const held = await s.store.readSession(id);
@@ -1098,4 +1100,14 @@ test("summary API preserves full API compatibility and unchanged completed recor
   assert.equal(reads, 0, "summary cache decodes only changed snapshots");
   await s.store.mutateSession(id, state => { state.statusReason = "updated"; });
   assert.equal((await s.store.sessionSummaries())[0]!.statusReason, "updated");
+});
+
+test("stale runtime snapshot cannot overwrite a newer STOP decision", async t => {
+  const s = await setup(); t.after(s.cleanup);
+  const id = await launch(s, await minimal(s), "write ownership acceptance");
+  const stale = await wait(() => s.store.readSession(id), "SUCCESS"); await delay(100);
+  const current = await s.store.mutateSession(id, state => { state.status = "STOPPED"; state.statusReason = "new controller decision"; });
+  stale.status = "RUNNING";
+  await assert.rejects(s.store.writeSession(stale), (e: unknown) => (e as {code?:string}).code === "stale_session");
+  assert.deepEqual(await s.store.readSession(id), current);
 });

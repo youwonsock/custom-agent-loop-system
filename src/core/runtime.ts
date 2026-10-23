@@ -1,3 +1,4 @@
+import { advanceVisit, interruptSession, prepareManualResume, stopSession } from "./session_transitions";
 import { randomUUID } from "node:crypto";
 import * as path from "node:path";
 import { AgentNode, AttemptRecord, ModelPricing, NodeVisit, SessionState } from "../shared/domain";
@@ -24,14 +25,12 @@ import { AgentAttemptRunner } from "./agent_attempt_runner";
 import { queryModels } from "./catalog";
 import { buildInvocation, isReadOnly } from "./invocation";
 import { buildNodePrompt, buildRecoveryMessage } from "./prompt";
-import { transition } from "./graph";
 import {
   parseRequirementEvidence,
   retainRequirementEvidence,
-  advanceConvergence,
 } from "./requirement_ledger";
 import { validateCompletion, Completion } from "./completion";
-import { messageOf } from "./errors";
+import { AppError, messageOf } from "./errors";
 import { outsidePaths } from "./access_paths";
 import { currentTestProof, mergeReceipts } from "./verification_evidence";
 import { modelPricing } from "./model_pricing";
@@ -121,24 +120,9 @@ export class GraphRuntime {
   }
   private async finishControl(request: ClaimedControlRequest): Promise<void> {
     if (request.request.type === "STOP") {
-      this.state.status = "STOPPED";
-      this.state.statusReason = "사용자가 실행을 중지했습니다.";
-      this.state.automaticRecovery = null;
-      const visit = this.state.visits.find(
-        (v) => v.id === this.state.activeVisitId,
-      );
-      if (visit && visit.status === "running") visit.status = "paused";
+      stopSession(this.state);
       this.stopRequested = true;
-    } else {
-      const visit = this.state.visits.find(
-        (v) => v.id === this.state.activeVisitId,
-      );
-      if (visit && visit.status === "running") visit.status = "paused";
-      this.state.interruptMessage =
-        request.request.message ?? "사용자가 중단 분석을 요청했습니다.";
-      this.state.currentNodeId = this.state.graph.entrypoints.interrupt;
-      this.state.activeVisitId = null;
-    }
+    } else interruptSession(this.state, request.request.message);
     await this.save();
     await completeControlRequest(
       this.controls(),
@@ -198,32 +182,7 @@ export class GraphRuntime {
           activeAttempt.pid = null;
         }
       }
-      if (mode === "manual") {
-        if (this.state.currentNodeId === "PAUSED") {
-          this.state.currentNodeId = this.state.graph.entrypoints.reentry;
-          this.state.activeVisitId = null;
-          this.state.convergence.stagnantCycles = 0;
-        }
-        if (this.state.visits.length >= this.state.visitLimit)
-          this.state.visitLimit +=
-            settings.maxIterations *
-            Math.max(1, this.state.graph.nodes.length) *
-            2;
-        if (this.state.completedIterations >= this.state.iterationLimit)
-          this.state.iterationLimit += settings.maxIterations;
-        const active = this.state.visits.find(
-          (v) => v.id === this.state.activeVisitId,
-        );
-        if (active && ["paused", "running"].includes(active.status)) {
-          active.status = "running";
-          active.recoveryCount++;
-          active.automaticCycles = 0;
-          active.cycleStartedAt = new Date().toISOString();
-          active.cycleDeadlineAt = new Date(
-            Date.now() + settings.phaseRecoveryBudgetMs,
-          ).toISOString();
-        }
-      }
+      if (mode === "manual") prepareManualResume(this.state);
       this.state.status = "RUNNING";
       this.state.statusReason = "실행 연결과 모델 목록을 확인하고 있습니다.";
       this.state.automaticRecovery = null;
@@ -441,6 +400,11 @@ export class GraphRuntime {
         await this.advance(node, visit);
       }
     } catch (error) {
+      if (error instanceof AppError && error.code === "stale_session") {
+        // A newer controller decision owns the persisted state; never overwrite it.
+        this.state = await this.store.readSession(this.sessionId);
+        return;
+      }
       this.state.status =
         this.activePid && checkProcessLiveness(this.activePid) !== "dead"
           ? "BLOCKED"
@@ -469,25 +433,7 @@ export class GraphRuntime {
     ]);
   }
   private async advance(node: AgentNode, visit: NodeVisit): Promise<void> {
-    if (!visit.transitionCommitted) {
-      if (node.id === this.state.graph.entrypoints.cycleCompletion) {
-        this.state.completedIterations++;
-        this.state.convergence = advanceConvergence(
-          this.state.convergence,
-          this.state.requirements,
-          this.state.completedIterations,
-        );
-      }
-      visit.transitionCommitted = true;
-    }
-    const failed = visit.status === "failed";
-    this.state.currentNodeId =
-      failed &&
-      ["review", "approval"].includes(node.type) &&
-      this.state.convergence.stagnantCycles >= 1
-        ? this.state.graph.entrypoints.interrupt
-        : transition(this.state.graph, node.id, failed ? "failure" : "success");
-    this.state.activeVisitId = null;
+    advanceVisit(this.state, node, visit);
     await this.save();
   }
   private async execute(

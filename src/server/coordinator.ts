@@ -1,3 +1,4 @@
+import { beginResume, interruptSession, stopSession } from "../core/session_transitions";
 import { isNewerSession, sessionSummary, SessionSummary } from "../shared/session_updates";
 import { fork, ChildProcess } from "node:child_process";
 import * as fs from "node:fs/promises";
@@ -228,8 +229,7 @@ export class SessionCoordinator extends EventEmitter {
     )
       return state;
     await this.store.mutateSession(id, (s) => {
-      s.status = "RUNNING";
-      s.statusReason = "저장된 실행 설정으로 재개하고 있습니다.";
+      beginResume(s);
     });
     this.spawn(id, automatic ? "automatic" : "manual");
     return this.store.readSession(id);
@@ -259,16 +259,8 @@ export class SessionCoordinator extends EventEmitter {
         lease && checkProcessLiveness(lease.ownerPid) !== "dead";
       if (!this.children.has(id) && !ownerAlive) {
         const updated = await this.store.mutateSession(id, (s) => {
-          s.automaticRecovery = null;
-          if (action.type === "stop") {
-            s.status = "STOPPED";
-            s.statusReason = "사용자가 실행을 중지했습니다.";
-          } else {
-            s.currentNodeId = s.graph.entrypoints.interrupt;
-            s.activeVisitId = null;
-            s.interruptMessage =
-              action.message ?? "사용자가 중단 분석을 요청했습니다.";
-          }
+          if (action.type === "stop") stopSession(s);
+          else interruptSession(s, action.message);
         });
         this.emitStudio({ type: "session", sessionId: id, data: updated });
         if (action.type === "interrupt") return this.resume(id);
@@ -312,9 +304,7 @@ export class SessionCoordinator extends EventEmitter {
           });
         } else
           await this.store.mutateSession(id, (s) => {
-            s.status = "STOPPED";
-            s.statusReason = "중지 요청 응답 한도를 넘겨 워커를 종료했습니다.";
-            s.automaticRecovery = null;
+            stopSession(s, "중지 요청 응답 한도를 넘겨 워커를 종료했습니다.");
           });
       }
       return this.store.readSession(id);
