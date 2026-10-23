@@ -18,6 +18,12 @@ const model = {
   ],
   supportedEffortLevels: ["low", "high"],
 };
+// Explicit native metadata lets acceptance tests exercise pricing without model calls.
+try {
+  const metadata = JSON.parse(fs.readFileSync(path.join(process.cwd(), ".fixture-model-metadata.json"), "utf8"));
+  model.isFree = metadata.isFree;
+  model.cost = metadata.cost;
+} catch {}
 if (args.includes("app-server")) {
   const input = readline.createInterface({ input: process.stdin });
   input.on("line", (line) => {
@@ -162,7 +168,8 @@ if (args.includes("app-server")) {
       process.exit(1);
     }
   }
-  if (prompt.includes("fixture:spent-network")) {
+  if (prompt.includes("fixture:spent-network") &&
+      (!prompt.includes("fixture:spent-network-once") || calls[type] === 1)) {
     emit({
       type: "item.completed",
       item: {
@@ -173,12 +180,25 @@ if (args.includes("app-server")) {
     console.error("temporary network connection lost");
     process.exit(7);
   }
+  if (prompt.includes("fixture:quota") &&
+      (!prompt.includes("fixture:quota-once") || calls[type] === 1)) {
+    emit({ type: "error", error: { code: "insufficient_quota", statusCode: 429, message: "Provider quota exhausted" } });
+    process.exit(1);
+  }
   if (
     prompt.includes("fixture:auth") &&
     (!prompt.includes("fixture:auth-once") || calls[type] === 1)
   ) {
     console.error("authentication required: sign in");
     process.exit(1);
+  }
+  if (
+    prompt.includes("fixture:progress-budget-once") && calls[type] === 1
+  ) {
+    emit({ type: "thread.started", thread_id: "fixture-session" });
+    let progress = 0;
+    setInterval(() => emit({ type: "item.completed", item: { id: `progress-${++progress}`, type: "agent_message", text: `Completed work item ${progress}.` } }), 100);
+    return;
   }
   if (
     prompt.includes("fixture:hang") &&

@@ -490,7 +490,7 @@ test("graph removal uses its identity while completed execution snapshots remain
   await expect(page.locator(".page-heading .status-pill")).toHaveText("완료");
 });
 
-async function startQaFixture(page: Page, goal: string) {
+async function startQaFixture(page: Page, goal: string, pricing?: Record<string, unknown>, settings: Record<string, unknown> = {}) {
   await page.goto("/");
   await expect(page.getByLabel("그래프 이름")).toBeVisible();
   const headers = { Origin: "http://127.0.0.1:4379" };
@@ -499,6 +499,7 @@ async function startQaFixture(page: Page, goal: string) {
     `artifacts/qa-error-project-${crypto.randomUUID()}`,
   );
   await fs.mkdir(project, { recursive: true });
+  if (pricing) await fs.writeFile(path.join(project, ".fixture-model-metadata.json"), JSON.stringify(pricing));
   const connectionResponse = await page.request.post("/api/connections", {
     headers,
     data: {
@@ -551,6 +552,7 @@ async function startQaFixture(page: Page, goal: string) {
         maxCompletionRecoveryAttempts: 1,
         maxAutomaticRecoveryCycles: 0,
         retryBackoffMs: [10],
+        ...settings,
       },
     },
   });
@@ -559,6 +561,28 @@ async function startQaFixture(page: Page, goal: string) {
   await page.getByRole("button", { name: "실행 기록", exact: false }).click();
   await page.getByLabel("실행 세션").selectOption(run.id);
   return { id: run.id, project };
+}
+
+for (const isFree of [true, false]) {
+  test(`${isFree ? "free recovery" : "paid limit"} displays the pricing evidence and stop reason`, async ({ page }) => {
+    const { id } = await startQaFixture(page, "fixture:spent-network", { isFree }, {
+      maxAutomaticRecoveryCycles: 1, automaticRecoveryBackoffMs: [60000],
+    });
+    try {
+      await expect(page.locator(".page-heading .status-pill")).toHaveText(isFree ? "복구 예약" : "일시정지");
+      await expect(page.locator(".run-reason")).toContainText(isFree ? "무료로 확인된 모델" : "유료 모델이므로");
+      await expect(page.locator(".attempt-detail").first()).toContainText(isFree ? "무료 확인" : "유료");
+      const state = await (await page.request.get(`/api/sessions/${id}`)).json();
+      expect(state.visits[0].attempts).toHaveLength(1);
+      expect(state.visits[0].attempts[0].pricing.status).toBe(isFree ? "free" : "paid");
+      await page.screenshot({ path: `artifacts/screenshots/${isFree ? "free-model-recovery" : "paid-model-limit"}.png`, fullPage: true });
+    } finally {
+      expect((await page.request.post(`/api/sessions/${id}/actions`, {
+        headers: { Origin: "http://127.0.0.1:4379" },
+        data: { requestId: crypto.randomUUID(), type: "stop" },
+      })).status()).toBe(200);
+    }
+  });
 }
 
 test("QA auth displays the real CLI/node cause and manual resume preserves prior stages", async ({

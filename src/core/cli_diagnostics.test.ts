@@ -50,6 +50,21 @@ test("Kilo tool argument aborts, capacity errors and cancelled requests retain a
   collector.observeLine('timestamp=2026-10-22T16:51:13Z level=ERROR run=fixture message="stream error" error.error="AI_APICallError: The request limited providers for this model and they are currently at capacity. Providers considered: reflection."');
   assert.equal(collector.diagnostics.plainError?.kind, "rate_limited");
 });
+test("billing and exhausted quotas are distinct from temporary capacity and rate limits", () => {
+  for (const error of [
+    { statusCode: 402, message: "Payment required" },
+    { statusCode: 429, code: "insufficient_quota", message: "Request rejected" },
+    { code: "billing_error" },
+    "Provider quota exhausted", "Insufficient credits", "Credit balance is too low",
+    "You exceeded your current quota", "You've hit your usage limit", "You have reached your usage limit",
+  ]) assert.equal(cliDiagnostic(error).kind, "quota_exhausted", JSON.stringify(error));
+  assert.equal(cliDiagnostic({ statusCode: 429, message: "Too many requests" }).kind, "rate_limited");
+  assert.equal(cliDiagnostic({ statusCode: 503, message: "Providers are at capacity" }).kind, "rate_limited");
+  assert.equal(cliDiagnostic("Review the usage limit and credits UI").kind, "process_exit");
+  const collector = new CliDiagnosticCollector();
+  collector.observeLine("Insufficient credits");
+  assert.equal(collector.diagnostics.plainError?.kind, "quota_exhausted");
+});
 
 test("only execution-level failures are collected; assistant/tool/embedded errors are ignored", () => {
   const collector = new CliDiagnosticCollector();

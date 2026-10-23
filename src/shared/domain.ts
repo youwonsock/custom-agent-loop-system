@@ -60,6 +60,13 @@ export interface ModelInfo {
   label: string;
   variants: string[];
   resolvedModelId?: string;
+  pricing?: ModelPricing;
+}
+export interface ModelPricing {
+  status: "free" | "paid" | "unknown";
+  source: "native_flag" | "native_cost" | "unavailable";
+  checkedAt: string;
+  reason: string;
 }
 export interface ModelCatalog {
   connectionId: string;
@@ -115,6 +122,7 @@ export interface CommandReceipt {
   environmentError: string | null;
 }
 export interface AttemptRecord {
+  pricing?: ModelPricing;
   commands?: CommandReceipt[];
   id: string;
   number: number;

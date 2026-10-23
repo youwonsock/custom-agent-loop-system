@@ -405,6 +405,9 @@ async function resumeHeld(s: Awaited<ReturnType<typeof setup>>, id: string) {
   });
   assert.equal(response.statusCode, 200, response.body);
 }
+async function setModelPricing(s: Awaited<ReturnType<typeof setup>>, metadata: Record<string, unknown>) {
+  await fs.writeFile(path.join(s.target, ".fixture-model-metadata.json"), JSON.stringify(metadata));
+}
 
 test("auth failure waits without replacing model and manual resume continues the same visit", async (t) => {
   const s = await setup();
@@ -559,9 +562,10 @@ test("malformed Kilo tool calls recover with schema feedback in a fresh attempt 
   assert.equal(attempts[1]!.reconnectUsed, false);
   assert.ok(attempts.every(a => a.requestedModelId === "fixture/fixture-model"));
 });
-test("token-free transport exhaustion schedules recovery then resumes automatically", async (t) => {
+test("provider-confirmed free transport exhaustion schedules recovery then resumes automatically", async (t) => {
   const s = await setup(true);
   t.after(s.cleanup);
+  await setModelPricing(s, { isFree: true, cost: { input: 0, output: 0 } });
   const graph = await minimal(s),
     id = await launch(s, graph, "fixture:network-once", {
       maxAutomaticRecoveryCycles: 1,
@@ -573,7 +577,7 @@ test("token-free transport exhaustion schedules recovery then resumes automatica
   assert.equal(state.visits.length, 1);
   assert.equal(state.visits[0]!.attempts.length, 2);
 });
-test("observed model spend pauses instead of scheduling a new automatic cycle", async (t) => {
+test("unknown pricing with observed model usage pauses instead of scheduling a new automatic cycle", async (t) => {
   const s = await setup(true);
   t.after(s.cleanup);
   const graph = await minimal(s),
@@ -587,6 +591,113 @@ test("observed model spend pauses instead of scheduling a new automatic cycle", 
   await delay(200);
   assert.equal((await s.store.readSession(id)).status, "PAUSED");
 });
+test("free models retry after observed usage and keep the same model and visit", async (t) => {
+  const s = await setup(true);
+  t.after(s.cleanup);
+  await setModelPricing(s, { isFree: true, cost: { input: 0, output: 0 } });
+  const id = await launch(s, await minimal(s), "fixture:spent-network-once", {
+    maxAutomaticRecoveryCycles: 1, automaticRecoveryBackoffMs: [100],
+  });
+  const recovering = await wait(() => s.store.readSession(id), "RECOVERING");
+  assert.match(recovering.statusReason!, /무료.*자동 복구 1\/1/);
+  const state = await wait(() => s.store.readSession(id), "SUCCESS");
+  assert.equal(state.visits.length, 1);
+  assert.equal(state.visits[0]!.attempts.length, 2);
+  assert.ok(state.visits[0]!.attempts[0]!.assistantTextBytes > 0);
+  assert.ok(state.visits[0]!.attempts.every(a => a.pricing?.status === "free" && a.requestedModelId === "fixture-model"));
+});
+for (const metadata of [{ isFree: false, cost: { input: 1, output: 1 } }, { cost: { input: 0, output: 0 } }]) {
+  test(`${metadata.isFree === false ? "paid" : "unknown"} models stop at attempt limit even without observed tokens`, async (t) => {
+    const s = await setup(true);
+    t.after(s.cleanup);
+    await setModelPricing(s, metadata);
+    const id = await launch(s, await minimal(s), "fixture:network", {
+      maxAutomaticRecoveryCycles: 2, automaticRecoveryBackoffMs: [50],
+    });
+    const state = await wait(() => s.store.readSession(id), "PAUSED");
+    assert.equal(state.automaticRecovery, null);
+    assert.equal(state.visits[0]!.attempts.length, 1);
+    assert.equal(state.visits[0]!.attempts[0]!.assistantTextBytes, 0);
+    assert.match(state.statusReason!, /유료|가격 미확인/);
+    await delay(150);
+    assert.equal((await s.store.readSession(id)).visits[0]!.attempts.length, 1);
+  });
+}
+test("free models still obey the automatic recovery cycle cap", async (t) => {
+  const s = await setup(true);
+  t.after(s.cleanup);
+  await setModelPricing(s, { isFree: true });
+  const id = await launch(s, await minimal(s), "fixture:spent-network", {
+    maxAutomaticRecoveryCycles: 1, automaticRecoveryBackoffMs: [50],
+  });
+  const state = await wait(() => s.store.readSession(id), "PAUSED");
+  assert.equal(state.visits[0]!.automaticCycles, 1);
+  assert.equal(state.visits[0]!.attempts.length, 2);
+  assert.match(state.statusReason!, /무료 모델의 자동 복구 한도/);
+  assert.equal(state.automaticRecovery, null);
+});
+for (const metadata of [{ isFree: false, cost: { input: 1, output: 1 } }, {}]) {
+  test(`automatic recovery rechecks pricing and stops when free changes to ${"isFree" in metadata ? "paid" : "unknown"}`, async (t) => {
+    const s = await setup(true);
+    t.after(s.cleanup);
+    await setModelPricing(s, { isFree: true });
+    const id = await launch(s, await minimal(s), "fixture:spent-network-once", {
+      maxAutomaticRecoveryCycles: 1, automaticRecoveryBackoffMs: [1500],
+    });
+    await wait(() => s.store.readSession(id), "RECOVERING");
+    await setModelPricing(s, metadata);
+    const state = await wait(() => s.store.readSession(id), "PAUSED");
+    assert.match(state.statusReason!, /무료 모델임을 다시 확인하지 못/);
+    assert.equal(state.visits[0]!.attempts.length, 1);
+    assert.equal(state.automaticRecovery, null);
+  });
+}
+test("stop cancels a free-model automatic recovery without another model call", async (t) => {
+  const s = await setup(true);
+  t.after(s.cleanup);
+  await setModelPricing(s, { isFree: true });
+  const id = await launch(s, await minimal(s), "fixture:spent-network-once", {
+    maxAutomaticRecoveryCycles: 1, automaticRecoveryBackoffMs: [1500],
+  });
+  await wait(() => s.store.readSession(id), "RECOVERING");
+  const stopped = await s.request("POST", `/api/sessions/${id}/actions`, { requestId: randomUUID(), type: "stop" });
+  assert.equal(stopped.statusCode, 200);
+  const state = await wait(() => s.store.readSession(id), "STOPPED");
+  assert.equal(state.automaticRecovery, null);
+  await delay(1700);
+  assert.equal((await s.store.readSession(id)).visits[0]!.attempts.length, 1);
+});
+for (const isFree of [true, false]) {
+  test(`provider quota exhaustion ${isFree ? "retries a free model" : "stops a paid model before remaining attempts"}`, async (t) => {
+    const s = await setup(true);
+    t.after(s.cleanup);
+    await setModelPricing(s, { isFree });
+    const id = await launch(s, await minimal(s), "fixture:quota-once", {
+      maxAgentAttempts: isFree ? 1 : 2,
+      phaseRecoveryBudgetMs: 7000,
+      maxAutomaticRecoveryCycles: 1, automaticRecoveryBackoffMs: [50],
+    });
+    const state = await wait(() => s.store.readSession(id), isFree ? "SUCCESS" : "PAUSED");
+    assert.equal(state.visits[0]!.attempts.length, isFree ? 2 : 1);
+    assert.equal(state.visits[0]!.attempts[0]!.failureKind, "quota_exhausted");
+    if (!isFree) assert.match(state.statusReason!, /공급자 사용 한도/);
+  });
+}
+for (const isFree of [true, false]) {
+  test(`absolute recovery budget exhaustion ${isFree ? "retries a free model" : "pauses a paid model"}`, async (t) => {
+    const s = await setup(true);
+    t.after(s.cleanup);
+    await setModelPricing(s, { isFree });
+    const id = await launch(s, await minimal(s), "fixture:progress-budget-once", {
+      phaseTimeoutMs: 1000, phaseRecoveryBudgetMs: 1200,
+      transportTimeoutMs: 600, idleTimeoutMs: 600, toolTimeoutMs: 600,
+      maxAutomaticRecoveryCycles: 1, automaticRecoveryBackoffMs: [100],
+    });
+    const state = await wait(() => s.store.readSession(id), isFree ? "SUCCESS" : "PAUSED");
+    assert.equal(state.visits[0]!.attempts[0]!.failureKind, "phase_timeout");
+    assert.equal(state.visits[0]!.attempts.length, isFree ? 2 : 1);
+  });
+}
 test("interrupt briefing reaches PAUSED and manual resume uses the reentry node", async (t) => {
   const s = await setup();
   t.after(s.cleanup);
@@ -647,6 +758,7 @@ test("iteration budget pauses a loop and only manual resume grants another budge
 test("normal server close stops active workers and cancels scheduled recovery", async (t) => {
   const s = await setup();
   t.after(s.cleanup);
+  await setModelPricing(s, { isFree: true });
   const graph = await minimal(s),
     id = await launch(s, graph, "fixture:network", {
       maxAutomaticRecoveryCycles: 1,

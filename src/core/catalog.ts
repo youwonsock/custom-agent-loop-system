@@ -10,6 +10,7 @@ import {
 import { cliDiagnostic, CliDiagnosticError } from "./cli_diagnostics";
 import { checkProcessLiveness, delay } from "./resilience";
 import { terminateProcessTreeBounded } from "./process_supervisor";
+import { modelPricing } from "./model_pricing";
 
 export interface Executable {
   file: string;
@@ -165,6 +166,7 @@ export function normalizeModels(
       {
         id,
         label: String(m.displayName ?? m.name ?? value).slice(0, 300),
+        pricing: modelPricing(m),
         variants: [
           ...new Set(
             [...efforts, ...variants].filter(

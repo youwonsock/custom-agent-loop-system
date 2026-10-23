@@ -84,12 +84,18 @@ function kindOf(
   )
     return "model_unavailable";
   if (
-    /^(ratelimit|ratelimiterror|ratelimitexceeded|quotaexceeded|insufficientquota|billingerror|creditsrequired)$/.test(
+    /^(quotaexceeded|insufficientquota|billingerror|creditsrequired|insufficientcredits|usagelimitreached)$/.test(normalized) ||
+    status === 402 ||
+    /\b(?:quota|credits?|credit balance|usage limit|spending limit) (?:is |are |has been )?(?:exceeded|exhausted|insufficient|reached|depleted|too low)\b|\b(?:insufficient|exhausted|depleted) (?:quota|credits?|credit balance)\b|\bexceeded (?:your |the )?(?:current )?quota\b|\b(?:hit|reached|exceeded) (?:your |the )?(?:usage|spending) limit\b/i.test(message)
+  )
+    return "quota_exhausted";
+  if (
+    /^(ratelimit|ratelimiterror|ratelimitexceeded)$/.test(
       normalized,
     ) ||
     status === 429 || status === 503 ||
     /\bproviders? (?:for this model )?.*\b(?:at capacity|overloaded)\b/i.test(message) ||
-    /\brate[ _-]?limit(?:ed| exceeded)?\b|\b(?:quota|credits?) (?:is )?(?:exceeded|exhausted|insufficient)\b/i.test(
+    /\brate[ _-]?limit(?:ed| exceeded)?\b/i.test(
       message,
     )
   )
@@ -126,7 +132,7 @@ export function cliDiagnostic(error: unknown): CliDiagnostic {
     data.statusCode ??
     data.status ??
     response.status ??
-    (typeof rawCode === "number" && [401, 403, 429].includes(rawCode)
+    (typeof rawCode === "number" && [401, 402, 403, 429].includes(rawCode)
       ? rawCode
       : null);
   const statusMatch = message.match(
@@ -222,6 +228,10 @@ export class CliDiagnosticCollector {
       if (value) {
         try { this.diagnostics.plainError = cliDiagnostic(JSON.parse(value[1]!)); } catch { /* keep raw log */ }
       }
+      return;
+    }
+    if (/^(?:insufficient credits?\b|credit balance\b|(?:your )?(?:usage|spending) limit\b|you(?:'ve| have)? (?:hit|reached|exceeded) (?:your |the )?(?:usage|spending) limit\b)/i.test(line)) {
+      this.diagnostics.plainError = cliDiagnostic(line);
       return;
     }
     if (

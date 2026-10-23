@@ -18,6 +18,7 @@ export const statusNames: Record<string, string> = {
   SUCCESS: "완료",
   FAILED: "실패",
 };
+export const pricingNames = { free: "무료 확인", paid: "유료", unknown: "가격 미확인" };
 export const stamp = (value: string) =>
   new Date(value).toLocaleString("ko-KR", {
     month: "short",

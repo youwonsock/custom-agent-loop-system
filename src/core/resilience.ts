@@ -29,6 +29,7 @@ export type FailureKind =
   | "network"
   | "tool_arguments"
   | "rate_limited"
+  | "quota_exhausted"
   | "auth"
   | "model_unavailable"
   | "permission"

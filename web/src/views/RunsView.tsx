@@ -1,5 +1,5 @@
 import { api } from "../api";
-import { statusNames, stamp } from "../studioTypes";
+import { statusNames, pricingNames, stamp } from "../studioTypes";
 import type { StudioController } from "../hooks/useStudioController";
 import { Canvas } from "../Canvas";
 import { lazy } from "react";
@@ -250,6 +250,10 @@ export default function RunsView({ controller }: { controller: StudioController 
                                     실제 모델: {a.actualModelId}
                                   </small>
                                 )}
+                                <small title={a.pricing?.reason}>
+                                  {pricingNames[a.pricing?.status ?? "unknown"]}
+                                  {a.pricing && ` · 조회 ${stamp(a.pricing.checkedAt)}`}
+                                </small>
                                 {a.lastProgressAt && (
                                   <small>
                                     최근 진행 {stamp(a.lastProgressAt)}

@@ -60,7 +60,7 @@ export class AgentAttemptRunner {
         input.failure.kind,
       );
     const configured =
-      input.failure.kind === "rate_limited"
+      ["rate_limited", "quota_exhausted"].includes(input.failure.kind)
         ? (input.retryAfterMs ?? 30_000)
         : (this.settings.retryBackoffMs[
             Math.min(
@@ -73,7 +73,7 @@ export class AgentAttemptRunner {
       Math.round(configured * (0.8 + this.random() * 0.4)),
     );
     const capped =
-      input.failure.kind === "rate_limited"
+      ["rate_limited", "quota_exhausted"].includes(input.failure.kind)
         ? Math.min(120_000, jittered)
         : jittered;
     return {

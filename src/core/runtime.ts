@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import * as path from "node:path";
-import { AgentNode, AttemptRecord, NodeVisit, SessionState } from "../shared/domain";
+import { AgentNode, AttemptRecord, ModelPricing, NodeVisit, SessionState } from "../shared/domain";
 import { StudioStore } from "./store";
 import {
   SessionOwnership,
@@ -34,6 +34,7 @@ import { validateCompletion, Completion } from "./completion";
 import { messageOf } from "./errors";
 import { outsidePaths } from "./access_paths";
 import { currentTestProof, mergeReceipts } from "./verification_evidence";
+import { modelPricing } from "./model_pricing";
 
 export interface RuntimeHooks {
   onState?: (state: SessionState) => void;
@@ -85,7 +86,7 @@ export function classifyFailure(
       "role_violation",
       "orphaned_process",
       "cancelled",
-    ].includes(kind),
+    ].includes(kind) && !["auth", "permission", "model_unavailable"].includes(diagnostic?.kind ?? ""),
     occurredAt: new Date().toISOString(),
     attemptId: null,
     role: null,
@@ -101,6 +102,7 @@ export class GraphRuntime {
   private abort = new AbortController();
   private stopRequested = false;
   private activePid: number | null = null;
+  private readonly pricing = new Map<string, ModelPricing>();
   constructor(
     private readonly store: StudioStore,
     private readonly sessionId: string,
@@ -152,6 +154,8 @@ export class GraphRuntime {
   }
   async run(mode: "start" | "manual" | "automatic" = "start"): Promise<void> {
     this.state = await this.store.readSession(this.sessionId);
+    const automaticRecoveryVisitId = mode === "automatic" && this.state.automaticRecovery
+      ? this.state.activeVisitId : null;
     const settings = this.state.settings;
     this.owner = new SessionOwnership({
       sessionDir: this.store.sessionDir(this.sessionId),
@@ -267,10 +271,27 @@ export class GraphRuntime {
             await this.save();
             return;
           }
+          for (const [nodeId, binding] of Object.entries(this.state.bindings)) {
+            if (binding.connectionId !== connection.id) continue;
+            const model = catalog.models.find(m => m.id === binding.modelId)!;
+            this.pricing.set(nodeId, model.pricing ?? modelPricing());
+          }
           break;
         }
       }
       this.abort = new AbortController();
+      if (automaticRecoveryVisitId && this.state.activeVisitId === automaticRecoveryVisitId) {
+        if (this.pricing.get(this.state.currentNodeId ?? "")?.status !== "free") {
+          this.state.status = "PAUSED";
+          this.state.statusReason = "자동 복구 전에 무료 모델임을 다시 확인하지 못했습니다. 추가 모델 호출 없이 정지했습니다.";
+          await this.save();
+          return;
+        }
+        const visit = this.state.visits.find(v => v.id === automaticRecoveryVisitId)!;
+        // Scheduler latency and metadata lookup must not consume the next attempt's budget.
+        visit.cycleStartedAt = new Date().toISOString();
+        visit.cycleDeadlineAt = new Date(Date.now() + settings.phaseRecoveryBudgetMs).toISOString();
+      }
       this.state.statusReason = null;
       await this.save();
       while (this.state.status === "RUNNING" && !this.stopRequested) {
@@ -499,10 +520,6 @@ export class GraphRuntime {
         (a) => a.mode === "completion_recovery",
       ).length;
       const completionRecovery = normal >= normalLimit;
-      const spentInCycle = () =>
-        cycleAttempts().some(
-          (a) => (a.assistantTextBytes ?? 0) > 0 || (a.maxTokens ?? 0) > 0,
-        );
       if (
         Date.now() >= deadline ||
         (completionRecovery && extra >= completionLimit)
@@ -510,7 +527,6 @@ export class GraphRuntime {
         await this.exhausted(
           node,
           visit,
-          spentInCycle(),
           "단계 복구 예산 또는 attempt 한도를 소진했습니다.",
         );
         return null;
@@ -549,6 +565,7 @@ export class GraphRuntime {
         ).toISOString(),
         requestedModelId: binding.modelId,
         actualModelId: null as string | null,
+        pricing: this.pricing.get(node.id) ?? modelPricing(),
         assistantTextBytes: 0,
         maxTokens: 0,
       };
@@ -696,6 +713,17 @@ export class GraphRuntime {
         await this.save();
         return null;
       }
+      const providerFailure = result.diagnostics.terminalError ?? result.diagnostics.plainError;
+      if (
+        (failure.kind === "quota_exhausted" || providerFailure?.kind === "quota_exhausted") &&
+        attempt.pricing?.status !== "free"
+      ) {
+        visit.status = "paused";
+        this.state.status = "PAUSED";
+        this.state.statusReason = `${failure.message} ${attempt.pricing?.status === "paid" ? "유료" : "가격 미확인"} 모델의 공급자 사용 한도에 도달해 추가 호출 없이 정지했습니다.`;
+        await this.save();
+        return null;
+      }
       recoveryMessage = buildRecoveryMessage(failure.kind, failure.message, result.assistantText, result.events);
       const decision = runner.decideRetry({
         failure,
@@ -725,7 +753,7 @@ export class GraphRuntime {
       ) {
         nextResume = undefined;
       } else {
-        await this.exhausted(node, visit, spentInCycle(), failure.message);
+        await this.exhausted(node, visit, failure.message);
         return null;
       }
     }
@@ -733,12 +761,12 @@ export class GraphRuntime {
   private async exhausted(
     node: AgentNode,
     visit: NodeVisit,
-    spent: boolean,
     reason: string,
   ): Promise<void> {
-    const s = this.state.settings;
+    const s = this.state.settings,
+      pricing = this.pricing.get(node.id) ?? modelPricing();
     if (
-      !spent &&
+      pricing.status === "free" &&
       node.type !== "interrupt" &&
       visit.automaticCycles < s.maxAutomaticRecoveryCycles
     ) {
@@ -760,11 +788,12 @@ export class GraphRuntime {
         Date.now() + delayMs + s.phaseRecoveryBudgetMs,
       ).toISOString();
       this.state.status = "RECOVERING";
-      this.state.statusReason = `${reason} 토큰 사용이 관측되지 않아 재연결을 예약했습니다.`;
+      this.state.statusReason = `${reason} 무료로 확인된 모델이므로 자동 복구 ${visit.automaticCycles}/${s.maxAutomaticRecoveryCycles}회를 예약했습니다. 재개 전에 무료 여부를 다시 확인합니다.`;
     } else {
       visit.status = "paused";
       this.state.status = "PAUSED";
-      this.state.statusReason = `${reason} 비용 차단을 위해 정지했습니다. 확인 후 수동 재개하세요.`;
+      this.state.automaticRecovery = null;
+      this.state.statusReason = `${reason} ${pricing.status === "free" ? "무료 모델의 자동 복구 한도 또는 중단 처리 제한에 도달했습니다." : `${pricing.status === "paid" ? "유료" : "가격 미확인"} 모델이므로 추가 자동 복구를 중지했습니다.`} 확인 후 수동 재개하세요.`;
     }
     await this.save();
   }

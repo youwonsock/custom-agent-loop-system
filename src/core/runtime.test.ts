@@ -47,6 +47,15 @@ test("a provider capacity retry timeout keeps its timeout cause and provider exp
   assert.equal(failure.kind, "idle_timeout");
   assert.match(failure.message, /Providers are at capacity/);
 });
+test("a timed-out native authentication error remains non-retryable even for a free model", () => {
+  const r = result();
+  r.timedOut = true;
+  r.failureKind = "idle_timeout";
+  r.diagnostics.plainError = cliDiagnostic("Invalid credential");
+  const failure = classifyFailure(r, { reason: "Idle", failureKind: null });
+  assert.equal(failure.kind, "idle_timeout");
+  assert.equal(failure.retryable, false);
+});
 test("completion failures retain their typed cause despite auth/status strings in ordinary output", () => {
   const r = result();
   r.output =

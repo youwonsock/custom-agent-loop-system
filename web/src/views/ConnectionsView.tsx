@@ -1,6 +1,6 @@
 import { SERVICE_TYPES, type LocalConnection } from "../../../src/shared/domain";
 import { api, id } from "../api";
-import { stamp } from "../studioTypes";
+import { pricingNames, stamp } from "../studioTypes";
 import type { StudioController } from "../hooks/useStudioController";
 
 export default function ConnectionsView({ controller }: { controller: StudioController }) {
@@ -201,8 +201,8 @@ export default function ConnectionsView({ controller }: { controller: StudioCont
                   {cat?.error && <p className="field-error">{cat.error}</p>}
                   <div className="model-tags">
                     {cat?.models.slice(0, 8).map((m) => (
-                      <span key={m.id} title={m.id}>
-                        {m.label}
+                      <span key={m.id} title={`${m.id}\n${m.pricing?.reason ?? "가격 정보가 없습니다."}`}>
+                        {m.label} · {pricingNames[m.pricing?.status ?? "unknown"]}
                       </span>
                     ))}
                     {cat && cat.models.length > 8 && (
