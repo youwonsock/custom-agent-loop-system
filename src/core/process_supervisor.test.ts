@@ -14,6 +14,7 @@ interface CaseResult {
     completedSearches: number;
     maxTokens: number;
     actualModelId: string | null;
+    commands: { command: string; exitCode: number | null }[];
   };
   outcome: string;
   failureKind: string | null;
@@ -30,6 +31,7 @@ test("file mutation, search and spend survive eviction from the recent event rin
   assert.equal(result.evidence.fileMutation, true);
   assert.equal(result.evidence.completedSearches, 1);
   assert.equal(result.evidence.maxTokens, 123);
+  assert.deepEqual(result.evidence.commands.map(c => [c.command, c.exitCode]), [["npm test", 0]]);
   assert.ok(result.eventBytes <= 1024);
 });
 test("pipe JSON preserves long Unicode records while stderr arrives inside a stdout record", async () => {

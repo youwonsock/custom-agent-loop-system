@@ -102,11 +102,13 @@ export function parseRequirementEvidence(output: string): Array<{
   requirementId: string;
   status: RequirementEvidenceStatus;
   summary: string;
+  checkCommand?: string;
 }> {
   const records: Array<{
     requirementId: string;
     status: RequirementEvidenceStatus;
     summary: string;
+    checkCommand?: string;
   }> = [];
   const blockPattern =
     /\[REQUIREMENT_EVIDENCE\]([\s\S]*?)\[\/REQUIREMENT_EVIDENCE\]/gi;
@@ -125,6 +127,7 @@ export function parseRequirementEvidence(output: string): Array<{
         requirementId: id,
         status,
         summary: summary.slice(0, 2_000),
+        ...(block.match(/^\s*CHECK_COMMAND:\s*(.+)$/im)?.[1]?.trim() ? { checkCommand: block.match(/^\s*CHECK_COMMAND:\s*(.+)$/im)![1]!.trim() } : {}),
       });
     }
   }

@@ -175,6 +175,7 @@ switch (mode) {
         item: { id: "searched", type: "web_search" },
       });
       emit({ type: "turn.completed", usage: { output_tokens: 123 } });
+      emit({ type: "item.completed", item: { id: "check", type: "command_execution", command: "npm test", exit_code: 0, status: "completed", aggregated_output: "pass 1" } });
     }
     for (let index = 0; index < 20; index++) {
       emit({

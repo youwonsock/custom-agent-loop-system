@@ -1,6 +1,7 @@
 import { AgentNode, NodeVisit, SessionState } from "../shared/domain";
 import { requiresResearch } from "./completion";
 import { FailureKind } from "./resilience";
+import { currentTestProof } from "./verification_evidence";
 export function buildRecoveryMessage(
   kind: FailureKind, message: string, assistantText: string,
   events: Record<string, unknown>[],
@@ -25,7 +26,7 @@ const responsibilities: Record<AgentNode["type"], string> = {
     "Inspect requirements and existing files without writing files. Propose complete, materially different strategies. Do not implement or invoke native plan approval tools; return the options as assistant text.",
   implementation:
     "Inspect existing work first. Implement cumulatively. Do not weaken, delete or skip tests to make the implementation appear complete. Run focused checks and report observed results.",
-  test: "Run existing tests, add missing acceptance coverage and execute it. You may edit tests but never production code. Report blocked, skipped or inconclusive required checks as FAIL.",
+  test: "Run existing tests, add missing acceptance coverage and execute it. You may edit tests but never production code. Report product failures as FAIL. If required checks cannot run because of environment permissions, unavailable network or tooling, report VERDICT: BLOCKED and the exact command, observed error and operator action. Never repair production code to work around an execution sandbox.",
   review:
     "Independently inspect the code, original goal and test evidence using read-only tools. Reject missing or contradictory evidence. Never repair files or conceal failing tests.",
   approval:
@@ -75,6 +76,8 @@ export function buildNodePrompt(
       (v) =>
         `[${v.nodeId} / ${v.id}] ${v.verdict ?? v.status}\n${v.output.slice(-6000)}`,
     ),
+    "=== NATIVE VERIFICATION RECEIPTS (execution evidence, not proof of coverage) ===",
+    JSON.stringify(node.type === "test" ? visit.verifiedCommands ?? [] : currentTestProof(state, visit)),
     "=== REQUIREMENT EVIDENCE FORMAT ===",
     "For each requirement report: [REQUIREMENT_EVIDENCE]\nREQ_ID: REQ-001\nSTATUS: SATISFIED|PARTIAL|FAILED|BLOCKED\nEVIDENCE: concrete observed check or artifact\n[/REQUIREMENT_EVIDENCE]. Never invent a passed check.",
   ];
@@ -89,7 +92,7 @@ export function buildNodePrompt(
     );
   if (node.type === "test")
     lines.push(
-      "PASS requires concrete SATISFIED evidence for every REQ. Finish with VERDICT: PASS or VERDICT: FAIL.",
+      "PASS requires concrete SATISFIED evidence for every REQ and a CHECK_COMMAND: exact executed command line inside EACH requirement block. Execute a real test runner (for example npm test or node --test); exit zero is required. Do not use cat/echo, pipelines or masked exits as proof. Prior native verification receipts from this same visit may be cited when only repairing report format. A single suite may cover several requirements, but explain the actual assertions for each. Finish with VERDICT: PASS, VERDICT: FAIL or VERDICT: BLOCKED. Missing coverage is FAIL; unavailable execution environment is BLOCKED. Do not claim browser/device testing without actually performing it.",
     );
   if (node.type === "review" || node.type === "approval")
     lines.push(

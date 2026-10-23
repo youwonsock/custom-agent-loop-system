@@ -195,7 +195,7 @@ if (args.includes("app-server")) {
     let evidence = reqs
       .map(
         (r) =>
-          `[REQUIREMENT_EVIDENCE]\nREQ_ID: ${r}\nSTATUS: ${rejected ? "PARTIAL" : "SATISFIED"}\nEVIDENCE: fixture observed acceptance artifact\n[/REQUIREMENT_EVIDENCE]`,
+          `[REQUIREMENT_EVIDENCE]\nREQ_ID: ${r}\nSTATUS: ${rejected ? "PARTIAL" : "SATISFIED"}\nEVIDENCE: fixture observed acceptance artifact\nCHECK_COMMAND: node --test acceptance.test.cjs\n[/REQUIREMENT_EVIDENCE]`,
       )
       .join("\n");
     if (prompt.includes("fixture:evidence-typo-once") && ["test", "review", "approval"].includes(type) && calls[type] === 1)
@@ -234,6 +234,10 @@ if (args.includes("app-server")) {
       text =
         "Failure evidence reviewed. Inspect the last attempt and fix the cause before resuming.";
     emit({ type: "thread.started", thread_id: "fixture-session" });
+    if (type === "test") {
+      const blocked = prompt.includes("fixture:environment-once") && calls[type] === 1;
+      emit({ type: "item.completed", item: { id: "acceptance", type: "command_execution", command: "node --test acceptance.test.cjs", exit_code: blocked ? 1 : 0, status: "completed", aggregated_output: blocked ? "Error: listen EPERM: operation not permitted 127.0.0.1" : "# pass 1\n# fail 0" } });
+    }
     if (prompt.includes("인터넷 검색")) {
       emit({
         type: "item.completed",

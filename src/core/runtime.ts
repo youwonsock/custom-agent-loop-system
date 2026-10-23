@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import * as path from "node:path";
-import { AgentNode, NodeVisit, SessionState } from "../shared/domain";
+import { AgentNode, AttemptRecord, NodeVisit, SessionState } from "../shared/domain";
 import { StudioStore } from "./store";
 import {
   SessionOwnership,
@@ -32,6 +32,8 @@ import {
 } from "./requirement_ledger";
 import { validateCompletion, Completion } from "./completion";
 import { messageOf } from "./errors";
+import { outsidePaths } from "./access_paths";
+import { currentTestProof, mergeReceipts } from "./verification_evidence";
 
 export interface RuntimeHooks {
   onState?: (state: SessionState) => void;
@@ -92,30 +94,7 @@ export function classifyFailure(
     cliSessionId: result.cliSessionId,
   };
 }
-export function outsidePaths(text: string, roots: string[]): string[] {
-  const found = [
-    ...text.matchAll(/(?:^|[\s"'`(])((?:[A-Za-z]:[\\/]|\/)[^\s"'`),;]+)/gm),
-  ].map((m) => m[1]!.replace(/[.:]+$/, ""));
-  return [
-    ...new Set(
-      found.filter(
-        (value) =>
-          !roots.some((root) => {
-            const relative = path.relative(
-              path.resolve(root),
-              path.resolve(value),
-            );
-            return (
-              relative === "" ||
-              (!relative.startsWith(`..${path.sep}`) &&
-                relative !== ".." &&
-                !path.isAbsolute(relative))
-            );
-          }),
-      ),
-    ),
-  ];
-}
+export { outsidePaths } from "./access_paths";
 export class GraphRuntime {
   private state!: SessionState;
   private owner!: SessionOwnership;
@@ -396,7 +375,7 @@ export class GraphRuntime {
         if (this.state.status !== "RUNNING") return;
         if (this.state.activeVisitId !== visit.id) continue; // interrupt control changed traversal
         if (!completion) continue;
-        visit.output = completion.output;
+        visit.output = completion.output + (completion.reason ? `\n\n[ORCHESTRATOR] ${completion.reason}` : "");
         visit.verdict = completion.verdict;
         if (completion.researchBlocked) {
           visit.status = "paused";
@@ -548,7 +527,7 @@ export class GraphRuntime {
           this.store.visitDir(this.state.id, visit.id),
           `${id}.log`,
         );
-      const attempt = {
+      const attempt: AttemptRecord = {
         id,
         number: visit.attempts.length + 1,
         status: "running",
@@ -645,6 +624,9 @@ export class GraphRuntime {
       attempt.pid = this.activePid;
       attempt.cliSessionId = result.cliSessionId;
       attempt.actualModelId = result.evidence.actualModelId;
+      attempt.commands = result.evidence.commands;
+      if (result.evidence.fileMutation) visit.verifiedCommands = [];
+      if (node.type === "test") visit.verifiedCommands = mergeReceipts(visit.verifiedCommands, result.evidence.commands);
       attempt.assistantTextBytes = result.evidence.assistantTextBytes;
       attempt.maxTokens = result.evidence.maxTokens;
       if (orphaned) {
@@ -674,7 +656,19 @@ export class GraphRuntime {
         result,
         this.state.goal,
         this.state.requirements.items,
+        visit.verifiedCommands ?? result.evidence.commands,
+        currentTestProof(this.state, visit),
       );
+      if (completion.environmentBlocked) {
+        visit.output = completion.output;
+        visit.verdict = "BLOCKED";
+        visit.status = "paused";
+        this.state.status = "WAITING_USER";
+        this.state.statusReason = completion.environmentBlocked;
+        attempt.message = completion.environmentBlocked;
+        await this.save();
+        return null;
+      }
       if (completion.valid) {
         await this.save();
         return completion;

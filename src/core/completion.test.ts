@@ -124,7 +124,7 @@ test("missing markers and read-only mutations expose typed failure causes", () =
 });
 test("missing or malformed positive evidence uses bounded report recovery while real negative evidence stays a verdict", () => {
   const requirements = deriveRequirementLedger("one\ntwo").items;
-  const block = (id: string, status = "SATISFIED") => `[REQUIREMENT_EVIDENCE]\nREQ_ID: ${id}\nSTATUS: ${status}\nEVIDENCE: observed check\n[/REQUIREMENT_EVIDENCE]`;
+  const block = (id: string, status = "SATISFIED") => `[REQUIREMENT_EVIDENCE]\nREQ_ID: ${id}\nSTATUS: ${status}\nEVIDENCE: observed check\nCHECK_COMMAND: npm test\n[/REQUIREMENT_EVIDENCE]`;
   for (const type of ["test", "review", "approval"] as const) {
     const node = createGraph().nodes.find(n => n.type === type)!;
     const verdict = type === "test" ? "VERDICT: PASS" : "APPROVED";
@@ -132,7 +132,9 @@ test("missing or malformed positive evidence uses bounded report recovery while 
     assert.equal(malformed.valid, false);
     assert.equal(malformed.failureKind, "incomplete_response");
     assert.match(malformed.reason!, /REQ-002/);
-    const repaired = validateCompletion(node, result(`${block("REQ-001")}\n${block("REQ-002")}\n${verdict}\n[PHASE_DONE]`), "goal", requirements);
+    const repairedResult = result(`${block("REQ-001")}\n${block("REQ-002")}\n${verdict}\n[PHASE_DONE]`);
+    const receipts = [{ id: "check", command: "npm test", exitCode: 0, environmentError: null }];
+    const repaired = validateCompletion(node, repairedResult, "goal", requirements, receipts, receipts);
     assert.equal(repaired.valid, true);
     assert.equal(repaired.verdict, type === "test" ? "PASS" : "APPROVED");
     const negative = validateCompletion(node, result(`${block("REQ-001")}\n${block("REQ-002", "FAILED")}\n${verdict}\n[PHASE_DONE]`), "goal", requirements);
@@ -142,4 +144,27 @@ test("missing or malformed positive evidence uses bounded report recovery while 
     assert.equal(mixed.valid, true);
     assert.equal(mixed.verdict, type === "test" ? "FAIL" : "REJECTED");
   }
+});
+
+test("prose PASS cannot replace native command execution and approval needs current test proof", () => {
+  const graph = createGraph(), requirements = deriveRequirementLedger("pointer swipes").items;
+  const report = "[REQUIREMENT_EVIDENCE]\nREQ_ID: REQ-001\nSTATUS: SATISFIED\nEVIDENCE: pointer swipes are implemented\nCHECK_COMMAND: npm test\n[/REQUIREMENT_EVIDENCE]\n";
+  const r = result(report + "VERDICT: PASS\n[PHASE_DONE]");
+  assert.equal(validateCompletion(graph.nodes[2]!, r, "goal", requirements).valid, false);
+  r.evidence.commands = [{ id: "real", command: "npm test", exitCode: 1, environmentError: null }];
+  assert.equal(validateCompletion(graph.nodes[2]!, r, "goal", requirements).verdict, "FAIL");
+  r.evidence.commands[0]!.exitCode = 0;
+  assert.equal(validateCompletion(graph.nodes[2]!, r, "goal", requirements).verdict, "PASS");
+  const approval = result(report + "APPROVED\n[PHASE_DONE]");
+  assert.equal(validateCompletion(graph.nodes[4]!, approval, "goal", requirements).verdict, "REJECTED");
+  assert.equal(validateCompletion(graph.nodes[4]!, approval, "goal", requirements, [], r.evidence.commands).verdict, "APPROVED");
+});
+
+test("observed environment failure holds even a claimed PASS without retrying report formatting", () => {
+  const r = result("VERDICT: PASS");
+  r.evidence.commands = [{ id: "native", command: "npm test", exitCode: 1, environmentError: "listen EPERM" }];
+  const completion = validateCompletion(createGraph().nodes[2]!, r, "goal", []);
+  assert.equal(completion.verdict, "BLOCKED");
+  assert.match(completion.environmentBlocked!, /listen EPERM/);
+  assert.equal(completion.valid, true);
 });

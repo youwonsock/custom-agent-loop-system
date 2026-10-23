@@ -4,6 +4,7 @@ import * as fsp from "node:fs/promises";
 import * as path from "node:path";
 import * as pty from "node-pty";
 import { OutputStream, SupervisedChild, spawnPipeChild } from "./process_transport";
+import { CommandTracker } from "./verification_evidence";
 import {
   EventEvidence,
   emptyEvidence,
@@ -838,7 +839,10 @@ export class ProcessSupervisor {
       notifyProgress();
     };
 
+    const commands = new CommandTracker();
     const processEvent = (event: AnyObj): void => {
+      commands.observe(event);
+      evidence.commands = commands.receipts;
       mutations.observe(event);
       evidence.fileMutation ||= mutations.hasMutation;
       diagnosticCollector.observeEvent(event);

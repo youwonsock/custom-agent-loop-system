@@ -507,6 +507,25 @@ test("positive verdicts with malformed requirement blocks recover in the same ro
     assert.equal(visit.attempts[1]!.reconnectUsed, false);
   }
 });
+
+test("environment-blocked checks wait without repairing implementation and resume the same test visit", async (t) => {
+  const s = await setup();
+  t.after(s.cleanup);
+  const graph = await automaticPlans(s);
+  const id = await launch(s, graph, "fixture:environment-once");
+  let state = await wait(() => s.store.readSession(id), "WAITING_USER");
+  const visit = state.visits.at(-1)!;
+  assert.equal(visit.nodeId, "test");
+  assert.equal(visit.verdict, "BLOCKED");
+  assert.equal(visit.attempts.length, 1);
+  assert.match(state.statusReason!, /listen EPERM/);
+  await delay(150);
+  assert.equal((await s.store.readSession(id)).visits.length, 3);
+  await resumeHeld(s, id);
+  state = await wait(() => s.store.readSession(id), "SUCCESS");
+  assert.equal(state.visits.filter(v => v.nodeId === "implementation").length, 1);
+  assert.equal(state.visits.find(v => v.id === visit.id)!.attempts.length, 2);
+});
 test("transport retry reconnects once within the same visit with the saved CLI session", async (t) => {
   const s = await setup();
   t.after(s.cleanup);

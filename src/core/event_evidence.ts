@@ -1,6 +1,8 @@
 import { shellMutation } from "./shell_mutation";
+import { CommandReceipt } from "../shared/domain";
 type Event = Record<string, unknown>;
 export interface EventEvidence {
+  commands: CommandReceipt[];
   fileMutation: boolean;
   completedSearches: number;
   maxTokens: number;
@@ -8,6 +10,7 @@ export interface EventEvidence {
   actualModelId: string | null;
 }
 export const emptyEvidence = (): EventEvidence => ({
+  commands: [],
   fileMutation: false,
   completedSearches: 0,
   maxTokens: 0,

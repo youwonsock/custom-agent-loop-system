@@ -108,7 +108,14 @@ export interface ExecutionSettings {
   maxAutomaticRecoveryCycles: number;
   automaticRecoveryBackoffMs: number[];
 }
+export interface CommandReceipt {
+  id: string;
+  command: string;
+  exitCode: number | null;
+  environmentError: string | null;
+}
 export interface AttemptRecord {
+  commands?: CommandReceipt[];
   id: string;
   number: number;
   status: string;
@@ -136,6 +143,7 @@ export interface PlanChoice {
   revision: number;
 }
 export interface NodeVisit {
+  verifiedCommands?: CommandReceipt[];
   id: string;
   nodeId: string;
   number: number;
