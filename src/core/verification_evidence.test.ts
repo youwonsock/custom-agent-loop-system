@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { outsidePaths } from "./access_paths";
-import { CommandTracker, currentTestProof, isVerificationCommand, mergeReceipts } from "./verification_evidence";
+import { CommandTracker, currentTestProof, isVerificationCommand, mergeReceipts, projectCommandKey, isBrowserVerificationCommand, mergeProjectReceipts } from "./verification_evidence";
 import { SessionState, NodeVisit } from "../shared/domain";
 import { createGraph } from "./graph";
 import { buildNodePrompt } from "./prompt";
@@ -100,4 +100,26 @@ test("the latest real rerun replaces a failed receipt across log redirects, whil
   assert.equal(mergeReceipts(failed, tracker.receipts)[0]!.exitCode, 0);
   tracker.observe(codex("npm test || true", 0));
   assert.equal(tracker.receipts.length, 1);
+});
+
+
+test("same-project cwd normalization preserves actual checks and rejects other cwd, pipes, flags and masked exits", () => {
+  const cwd = "/Users/me/Desktop/agent graph test/game", command = "node tests/verify-acceptance.mjs";
+  for (const prefix of [`cd '${cwd}'`, 'cd .', `cd "${cwd}/."`]) assert.equal(projectCommandKey(`${prefix} && ${command}`,cwd),command);
+  for (const bad of [`cd '${cwd}/..' && ${command}`,`cd '${cwd}-other' && ${command}`,`cd '${cwd}' && ${command} | tail -5`,`cd '${cwd}' && ${command} || true`,`cd '${cwd}' && ${command} --skip`]) assert.notEqual(projectCommandKey(bad,cwd),command,bad);
+  const browser = require("./browser_command").browserVerificationCommand();
+  const actual = `cd '${cwd}' && ${browser}`;
+  assert.equal(isBrowserVerificationCommand(actual,cwd),true);
+  assert.equal(isBrowserVerificationCommand(actual,cwd+"-other"),false);
+  const tracker = new CommandTracker(cwd);tracker.observe(codex(actual,0));assert.equal(tracker.receipts.length,1);
+  tracker.observe(codex(actual+" | tail -5",0));assert.equal(tracker.receipts.length,1);
+  assert.equal(projectCommandKey('cd "C:\\work space\\game" && npm test','C:\\work space\\game'),"npm test");
+});
+
+
+test("latest same-project reruns replace failed receipts, without accepting a different project", () => {
+ const cwd="/tmp/owned game", a={id:"failed",command:"npm test",exitCode:1,environmentError:null}, b={...a,id:"rerun",command:`cd '${cwd}' && npm test`,exitCode:0};
+ const tracker=new CommandTracker(cwd);tracker.observe(codex(a.command,1));tracker.observe(codex(b.command,0));assert.equal(tracker.receipts.length,1);assert.equal(tracker.receipts[0]!.exitCode,0);
+ assert.deepEqual(mergeProjectReceipts(cwd,[a],[b]),[b]);
+ assert.equal(mergeProjectReceipts(cwd,[a],[{...b,command:"cd /tmp/other && npm test"}]).length,2);
 });

@@ -14,7 +14,7 @@ export function successBlockers(state: SessionState): string[] {
   if (state.pendingApproval || state.pendingAccess || state.activeVisitId)
     blockers.push("미완료 방문 또는 사용자 승인 요청이 남아 있습니다.");
   if (!final || state.graph.nodes.find(n => n.id === final.nodeId)?.type !== "approval" ||
-      !acceptedVisit(final) || final.verdict !== "APPROVED" || !final.transitionCommitted ||
+      !acceptedVisit(final,state.targetProjectPath) || final.verdict !== "APPROVED" || !final.transitionCommitted ||
       !state.graph.edges.some(e => e.source === final.nodeId && e.outcome === "success" && e.target === "SUCCESS")) {
     blockers.push("최종 승인 역할의 정상 APPROVED와 성공 경로가 필요합니다.");
   }

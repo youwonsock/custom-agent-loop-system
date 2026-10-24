@@ -78,6 +78,7 @@ export function validateCompletion(
   priorTestProof: CommandReceipt[] = [],
   automation?: AgentGraphDocument["automation"],
   contract?: VerificationContract,
+  cwd?: string,
 ): Completion {
   let output = result.assistantText.replace(/\r\n/g, "\n").trim();
   const answer: Completion = {
@@ -110,7 +111,7 @@ export function validateCompletion(
       "role_violation",
     );
   try {
-    const rendered = renderStructuredReport(output, node, requirements, node.type === "test" ? commands : priorTestProof, contract);
+    const rendered = renderStructuredReport(output, node, requirements, node.type === "test" ? commands : priorTestProof, contract, cwd);
     if (automation?.verificationContract && contract?.status === "locked" && ["test","review","approval"].includes(node.type) && rendered === null) return fail("고정 검증 계약은 AGENT_REPORT JSON v1 보고가 필요합니다.");
     if (rendered !== null) { output = rendered; answer.output = rendered; }
   } catch (error) { return fail(`구조화 보고 보완 필요: ${error instanceof Error ? error.message : String(error)}`); }
@@ -239,9 +240,9 @@ export function validateCompletion(
     }
   }
   if (answer.verdict === "PASS" || answer.verdict === "APPROVED") {
-    const missing = missingContractReceipts(contract, node.type === "test" ? commands : priorTestProof, !!automation?.verificationContract);
+    const missing = missingContractReceipts(contract, node.type === "test" ? commands : priorTestProof, !!automation?.verificationContract, cwd);
     if (missing.length) {
-      if (node.type === "test") return fail(`검증 계약의 실제 성공 기록이 필요합니다: ${missing.join(", ")}. 계약의 해당 명령만 단독 foreground 호출로 실행하세요.`);
+      if (node.type === "test") return fail(`검증 계약의 실제 성공 기록이 필요합니다: ${missing.join(", ")}. 계약의 해당 명령만 단독 foreground 호출로 실행하세요. Missing native receipts: execute EVERY missing registry command literally, without | tail, | head, semicolon, echo, status wrappers or extra flags; read saved reports separately. Native tools may truncate displayed output without changing exit status.`);
       answer.verdict = "REJECTED"; answer.reason = `검증 계약의 테스트 기록이 부족합니다: ${missing.join(", ")}`; return answer;
     }
   }
@@ -249,7 +250,7 @@ export function validateCompletion(
     if (
       automation?.browserVerification &&
       !commands.some(
-        (c) => c.exitCode === 0 && isBrowserVerificationCommand(c.command),
+        (c) => c.exitCode === 0 && isBrowserVerificationCommand(c.command, cwd),
       )
     )
       return fail(
@@ -267,13 +268,13 @@ export function validateCompletion(
             checkCommandKey(c.command) === checkCommandKey(command) &&
             c.exitCode === 0 &&
             !c.environmentError &&
-            isVerificationCommand(c.command),
+            isVerificationCommand(c.command, cwd),
         )
       );
     });
     if (
       !commands.some(
-        (c) => c.exitCode === 0 && isVerificationCommand(c.command),
+        (c) => c.exitCode === 0 && isVerificationCommand(c.command, cwd),
       ) ||
       unverified.length
     )
@@ -287,7 +288,7 @@ export function validateCompletion(
       (c) =>
         c.exitCode === 0 &&
         !c.environmentError &&
-        isVerificationCommand(c.command),
+        isVerificationCommand(c.command, cwd),
     )
   ) {
     answer.verdict = "REJECTED";

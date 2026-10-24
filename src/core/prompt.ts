@@ -6,6 +6,7 @@ import {
   currentTestProof,
   failedVerificationCommand,
   checkCommandKey,
+  projectCommandKey,
   isVerificationCommand,
 } from "./verification_evidence";
 import { parseRequirementEvidence } from "./requirement_ledger";
@@ -133,7 +134,7 @@ export function buildNodePrompt(
   if (node.type === "implementation" || node.type === "test")
     lines.push(
       "=== VERIFICATION EXECUTION CONTRACT ===",
-      (structured ? "Report only JSON judgments; receipt commands are attached by the engine. " : "") + "The working directory is already the target. Run npm test directly without a cd prefix. Native tool metadata contains the exit code: do not rerun merely to echo it. Run the check as a single foreground command. For Node projects use npm test, or npm test > verification/model-tests.txt 2>&1 after creating the log directory in a SEPARATE tool call. Read the saved log in another tool call. Do not append echo, cat, tail, sed, exit, pipelines, background &, or shell status wrappers to the test command. Registered commands must match the actual native command (the trailing log redirect may be omitted). A failed assertion must remain a nonzero native exit, including inside package.json scripts; never use || fallback runners, exit-zero overrides, --passWithNoTests or --if-present for required checks. After changing files, rerun the affected checks; prior receipts are stale.",
+      (structured ? "Report only JSON judgments; receipt commands are attached by the engine. " : "") + "The working directory is already the target. Run npm test directly; an explicit cd to this exact target is equivalent, while another working directory is not. Native tool metadata contains the exit code: do not rerun merely to echo it. Run the check as a single foreground command. For Node projects use npm test, or npm test > verification/model-tests.txt 2>&1 after creating the log directory in a SEPARATE tool call. Read the saved log in another tool call. Do not append echo, cat, tail, sed, exit, pipelines, background &, or shell status wrappers to the test command. Registered commands must match the actual native command (the trailing log redirect may be omitted). A failed assertion must remain a nonzero native exit, including inside package.json scripts; never use || fallback runners, exit-zero overrides, --passWithNoTests or --if-present for required checks. After changing files, rerun the affected checks; prior receipts are stale.",
       "Test externally observable behavior and adversarial boundaries, not just implementation helpers. For a served browser app, assert actual HTTP status/content for the entrypoint and assets, a missing file, traversal rejection and malformed URL handling. Close only servers the test started. Verify input blocking in overlays, persisted restart/continue state after reload, large safe-integer storage boundaries and visible controls at required viewport sizes. Do not claim actual browser testing from a DOM mock or source inspection.",
     );
   else
@@ -189,7 +190,7 @@ export function buildNodePrompt(
     else if (missingChecks.length)
       lines.push(
         "Only SOME checks have accepted native receipts. This is missing execution evidence, not report-only formatting. Execute each missing real runner as a standalone foreground command, then the platform browser command last. Never relabel a unit/engine requirement as covered only by a browser report. Do not repeat accepted checks solely for formatting, weaken tests or copy a rejected compound/masked command; use its underlying runner directly (npm test for Node). Missing accepted receipts:",
-        ...missingChecks.filter(isVerificationCommand).map(c => `CHECK_COMMAND: ${c}`),
+        ...missingChecks.filter(c=>isVerificationCommand(c)).map(c => `CHECK_COMMAND: ${c}`),
       );
     else
       lines.push(
@@ -199,11 +200,11 @@ export function buildNodePrompt(
   }
   if (structured) {
     const receipts=node.type === "test" ? visit.verifiedCommands??[] : currentTestProof(state,visit);
-    const missing=state.verificationContract!.manifest!.checks.filter(check=>!receipts.some(r=>r.exitCode===0&&!r.environmentError&&checkCommandKey(r.command)===checkCommandKey(check.command)));
+    const missing=state.verificationContract!.manifest!.checks.filter(check=>!receipts.some(r=>r.exitCode===0&&!r.environmentError&&projectCommandKey(r.command,state.targetProjectPath)===projectCommandKey(check.command,state.targetProjectPath)));
     lines.push("=== JSON REPORT v1 ===",
       "Return one [AGENT_REPORT] JSON [/AGENT_REPORT] with version:1, verdict and requirements. Each requirement has id, status (SATISFIED/PARTIAL/FAILED/BLOCKED), evidence (concrete observed fact, max 2000 chars). Do NOT type CHECK_COMMAND, combine command strings, quote receipts, write a report file or add PHASE_DONE. The engine attaches check IDs, actual receipt IDs and commands. Every fixed ID is mandatory for PASS/APPROVED; omitted/duplicate/unknown IDs are rejected. Never infer a pass from an unexecuted/failed check. FAIL/REJECTED may return only failed items; an external blocker uses verdict:BLOCKED, blockedKind:external, and concrete evidence. Product/test setup blockers use blockedKind:product/test_setup. Existing access/auth gates always win.",
       `[AGENT_REPORT]\n${JSON.stringify({version:1,verdict:node.type==="test"?"PASS":"APPROVED",requirements:state.requirements.items.map(r=>({id:r.id,status:"SATISFIED",evidence:"replace with observed facts; use FAILED/BLOCKED when unproved"}))})}\n[/AGENT_REPORT]`,
-      node.type==="test" ? (missing.length ? `Actual successful receipts still missing; execute THESE checks separately, browser last:\n${missing.map(c=>`${c.id}: ${c.command}`).join("\n")}` : "All frozen checks already have successful current receipts. Return JSON only without edits or repeated execution.") : "Read-only: inspect current test receipts and reports; reject missing, failed, skipped or stale evidence. Do not execute checks.");
+      node.type==="test" ? (missing.length ? `Actual successful receipts still missing; execute THESE checks separately, browser last. Copy each command literally: never append | tail, | head, echo, status output or a second command. Read the output/report separately:\n${missing.map(c=>`${c.id}: ${c.command}`).join("\n")}` : "All frozen checks already have successful current receipts. Return JSON only without edits or repeated execution.") : "Read-only: inspect current test receipts and reports; reject missing, failed, skipped or stale evidence. Do not execute checks.");
   }
   if (recovery)
     lines.push(

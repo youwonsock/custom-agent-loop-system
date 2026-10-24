@@ -486,7 +486,7 @@ export class ProcessSupervisor {
       return true;
     };
 
-    const commands = new CommandTracker();
+    const commands = new CommandTracker(options.cwd);
     const processEvent = (event: AnyObj): void => {
       commands.observe(event);
       evidence.commands = commands.receipts;

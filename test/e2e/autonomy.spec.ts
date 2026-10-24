@@ -64,7 +64,7 @@ test("real browser failure is autonomously repaired through final approval with 
       requestId: crypto.randomUUID(),
       graphId: graph.id,
       expectedRevision: graph.revision,
-      goal: "Build a web app with a responsive 16-cell board and persisted button score.",
+      goal: "fixture:browser-cwd Build a web app with a responsive 16-cell board and persisted button score.",
       targetProjectPath: target,
       settings: {
         maxAgentAttempts: 1,
@@ -90,6 +90,7 @@ test("real browser failure is autonomously repaired through final approval with 
     expect(state.status).toBe("SUCCESS");
     expect(states).not.toContain("WAITING_USER");
     expect(state.pendingApproval).toBeNull();
+    expect(state.visits.filter(v=>v.nodeId==="test").at(-1)!.verifiedCommands!.some(c=>c.command.startsWith("cd ")&&c.exitCode===0)).toBe(true);
     expect(state.verificationContract?.status).toBe("locked");
     expect(state.verificationContract?.origin).toBe("implementation");
     expect(state.visits.at(-1)?.output).toContain("[REPORT_PROTOCOL: json-v1]");

@@ -86,12 +86,13 @@ if (type === "implementation") {
 }
 if (type === "test") {
   const cli = path.resolve(__dirname, "../dist/src/server/cli.js");
+  const observedCheck = prompt.includes("fixture:browser-cwd") ? 'cd "'+process.cwd()+'" && '+check : check;
   emit({
     type: "item.started",
     item: {
       id: "real-browser",
       type: "command_execution",
-      command: check,
+      command: observedCheck,
       status: "in_progress",
     },
   });
@@ -105,7 +106,7 @@ if (type === "test") {
     item: {
       id: "real-browser",
       type: "command_execution",
-      command: check,
+      command: observedCheck,
       exit_code: r.status,
       status: "completed",
       aggregated_output: r.stdout + r.stderr,

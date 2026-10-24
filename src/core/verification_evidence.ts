@@ -1,3 +1,4 @@
+import * as path from "node:path";
 import { CommandReceipt, NodeVisit, SessionState } from "../shared/domain";
 import { browserVerificationCommand } from "./browser_command";
 import { fileMutation } from "./event_evidence";
@@ -80,19 +81,32 @@ export function checkCommandKey(command: string): string {
     .trim();
 }
 
-export function isBrowserVerificationCommand(command: string): boolean {
+/** Ignore only an explicit cd to the already-owned project, never another cwd. */
+export function projectCommandKey(command: string, cwd?: string): string {
+  const key = checkCommandKey(command);
+  if (!cwd) return key;
+  const segments = key.split(/\s*&&\s*/);
+  if (segments.length !== 2) return key;
+  const words = literalShellWords(segments[0]!);
+  if (words?.length !== 2 || words[0] !== "cd") return key;
+  const api = /^[A-Za-z]:[\\/]/.test(cwd) ? path.win32 : path.posix;
+  if (api.relative(api.resolve(cwd), api.resolve(cwd, words[1]!)) !== "") return key;
+  return segments[1]!.trim();
+}
+
+export function isBrowserVerificationCommand(command: string, cwd?: string): boolean {
   const native = canonicalCommand(command);
   return (
     !/[`$]/.test(native) &&
-    checkCommandKey(native) === browserVerificationCommand()
+    projectCommandKey(native, cwd) === browserVerificationCommand()
   );
 }
 
 // Fail closed for report-only commands (cat/echo), pipelines and masked exits.
 // This proves execution, not the adequacy or honesty of model-authored tests.
-export function isVerificationCommand(command: string): boolean {
+export function isVerificationCommand(command: string, cwd?: string): boolean {
   const c = canonicalCommand(command);
-  if (isBrowserVerificationCommand(c)) return true;
+  if (isBrowserVerificationCommand(c, cwd)) return true;
   // Do not accept a backgrounded test whose shell exits before the test does.
   if (c.replace(/2>&1/g, "").replace(/&&/g, "").includes("&")) return false;
   if (/[\n;|`]/.test(c) || /\$\(/.test(c)) return false;
@@ -109,6 +123,7 @@ export function isVerificationCommand(command: string): boolean {
 
 /** Receipts come only from native completed tool events, after redaction. */
 export class CommandTracker {
+  constructor(private readonly cwd?: string) {}
   readonly receipts: CommandReceipt[] = [];
   private readonly pending = new Map<string, string>();
   private record(
@@ -121,7 +136,7 @@ export class CommandTracker {
     if (
       typeof command !== "string" ||
       command.length > 4096 ||
-      !isVerificationCommand(command)
+      !isVerificationCommand(command, this.cwd)
     )
       return;
     const code =
@@ -142,7 +157,7 @@ export class CommandTracker {
       exitCode: code,
       environmentError: blocked ? blocked[0].slice(0, 300) : null,
     };
-    const old = this.receipts.findIndex((r) => checkCommandKey(r.command) === checkCommandKey(receipt.command));
+    const old = this.receipts.findIndex((r) => projectCommandKey(r.command, this.cwd) === projectCommandKey(receipt.command, this.cwd));
     if (old >= 0) this.receipts.splice(old, 1);
     this.receipts.push(receipt);
     if (this.receipts.length > 64) this.receipts.shift();
@@ -210,12 +225,15 @@ export class CommandTracker {
 export function mergeReceipts(
   ...groups: (CommandReceipt[] | undefined)[]
 ): CommandReceipt[] {
+  return mergeProjectReceipts(undefined,...groups);
+}
+export function mergeProjectReceipts(cwd: string|undefined,...groups: (CommandReceipt[]|undefined)[]): CommandReceipt[] {
   const latest = new Map<string, CommandReceipt>();
-  for (const r of groups.flatMap((g) => g ?? [])) latest.set(checkCommandKey(r.command), r);
+  for (const r of groups.flatMap((g) => g ?? [])) latest.set(projectCommandKey(r.command,cwd), r);
   return [...latest.values()].slice(-64);
 }
 
-export function acceptedVisit(visit: NodeVisit): boolean {
+export function acceptedVisit(visit: NodeVisit, cwd?: string): boolean {
   const attempt = visit.attempts?.at(-1);
   return (
     visit.status === "succeeded" &&
@@ -225,7 +243,7 @@ export function acceptedVisit(visit: NodeVisit): boolean {
     !attempt.failureKind &&
     !!attempt.endedAt &&
     !attempt.pid &&
-    !failedVerificationCommand(visitCommands(visit)) &&
+    !failedVerificationCommand(visitCommands(visit,cwd)) &&
     visit.output.trim().split("\n").at(-1)?.trim() === "[PHASE_DONE]"
   );
 }
@@ -237,11 +255,11 @@ export function failedVerificationCommand(
   return commands.find((c) => c.exitCode !== 0 || !!c.environmentError);
 }
 
-export function visitCommands(visit: NodeVisit): CommandReceipt[] {
+export function visitCommands(visit: NodeVisit,cwd?:string): CommandReceipt[] {
   let commands: CommandReceipt[] = [];
   for (const attempt of visit.attempts ?? []) {
     if (attempt.fileMutation) commands = [];
-    commands = mergeReceipts(commands, attempt.commands);
+    commands = mergeProjectReceipts(cwd,commands, attempt.commands);
   }
   return commands;
 }
@@ -249,20 +267,21 @@ export function visitCommands(visit: NodeVisit): CommandReceipt[] {
 export function verifiedTestCommands(
   visit: NodeVisit,
   requirements: RequirementItem[],
+  cwd?: string,
 ): CommandReceipt[] {
   if (
     !requirements.length ||
-    !acceptedVisit(visit) ||
+    !acceptedVisit(visit,cwd) ||
     visit.verdict !== "PASS" ||
     !evaluateRequirementCoverage(visit.output, requirements).allSatisfied
   )
     return [];
   // Reconstruct from observed attempt receipts, never from prose or a saved verdict.
-  const commands = visitCommands(visit);
+  const commands = visitCommands(visit,cwd);
   if (
     !commands.length ||
     failedVerificationCommand(commands) ||
-    commands.some((c) => !isVerificationCommand(c.command))
+    commands.some((c) => !isVerificationCommand(c.command, cwd))
   )
     return [];
   const records = new Map(
@@ -298,16 +317,16 @@ export function currentTestProof(
     const type = state.graph.nodes.find((n) => n.id === visit.nodeId)?.type;
     if (type !== "review" && type !== "approval") proof = [];
     if (type === "test") {
-      proof = verifiedTestCommands(visit, state.requirements.items);
+      proof = verifiedTestCommands(visit, state.requirements.items, state.targetProjectPath);
       if (
         state.graph.automation?.browserVerification &&
-        !proof.some((c) => isBrowserVerificationCommand(c.command))
+        !proof.some((c) => isBrowserVerificationCommand(c.command, state.targetProjectPath))
       )
         proof = [];
     }
     if (
       (type === "review" || type === "approval") &&
-      (!acceptedVisit(visit) ||
+      (!acceptedVisit(visit,state.targetProjectPath) ||
         visit.verdict !== "APPROVED" ||
         !evaluateRequirementCoverage(visit.output, state.requirements.items)
           .allSatisfied)

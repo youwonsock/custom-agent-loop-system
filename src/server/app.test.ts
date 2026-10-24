@@ -1590,3 +1590,12 @@ test("masked npm scripts return to implementation and repair autonomously withou
   assert.equal(done.visits[2]!.attempts.length, 0, "a bad runner does not spend a test-agent call");
   assert.ok(done.visits[4]!.attempts[0]!.commands!.some(c => c.command === "npm test" && c.exitCode === 0));
 });
+
+test("same-target cd commands retain native receipts through JSON binding and the final success gate", async t => {
+  const s = await setup(); t.after(s.cleanup);
+  const id = await launch(s, await contracted(s), "fixture:contract-cwd");
+  const done = await wait(() => s.store.readSession(id), "SUCCESS");
+  assert.equal(done.processedRequests.length, 0);
+  assert.ok(done.visits.find(v=>v.nodeId==="test")!.verifiedCommands!.every(c=>c.command.startsWith("cd ")&&c.exitCode===0));
+  assert.match(done.visits.at(-1)!.output,/CHECK_COMMAND: cd /);
+});

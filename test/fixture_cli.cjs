@@ -285,8 +285,10 @@ if (args.includes("app-server")) {
         const manifest = JSON.parse(fs.readFileSync(".agent-graph/verification.json", "utf8"));
         for (const check of manifest.checks) {
           if (prompt.includes("fixture:contract-omit-check") && check.id === "second") continue;
-          const executed = spawnSync(check.command, { shell: true, cwd: process.cwd(), encoding: "utf8" });
-          emit({ type: "item.completed", item: { id: check.id, type: "command_execution", command: check.command, exit_code: executed.status, status: "completed", aggregated_output: executed.stdout + executed.stderr } });
+          const cwd = process.platform === "win32" ? '"'+process.cwd()+'"' : "'"+process.cwd().replace(/'/g, "'\\''")+"'";
+          const observedCommand = prompt.includes("fixture:contract-cwd") ? "cd "+cwd+" && "+check.command : check.command;
+          const executed = spawnSync(observedCommand, { shell: true, cwd: process.cwd(), encoding: "utf8" });
+          emit({ type: "item.completed", item: { id: check.id, type: "command_execution", command: observedCommand, exit_code: executed.status, status: "completed", aggregated_output: executed.stdout + executed.stderr } });
         }
       }
       text = "[AGENT_REPORT]\n" + JSON.stringify({ version: 1, verdict: type === "test" ? "PASS" : "APPROVED", requirements: reqs.map(id => ({ id, status: "SATISFIED", evidence: "inspected actual acceptance artifact and receipts" })) }) + "\n[/AGENT_REPORT]";

@@ -43,7 +43,7 @@ import {
 import { validateCompletion, Completion } from "./completion";
 import { AppError, messageOf } from "./errors";
 import { outsidePaths } from "./access_paths";
-import { currentTestProof, mergeReceipts } from "./verification_evidence";
+import { currentTestProof, mergeProjectReceipts } from "./verification_evidence";
 import { modelPricing } from "./model_pricing";
 import { productionHashes } from "./verification_sources";
 import { successBlockers } from "./success_gate";
@@ -679,7 +679,8 @@ export class GraphRuntime {
       attempt.fileMutation = result.evidence.fileMutation;
       if (result.evidence.fileMutation) visit.verifiedCommands = [];
       if (["test", "review", "approval"].includes(node.type))
-        visit.verifiedCommands = mergeReceipts(
+        visit.verifiedCommands = mergeProjectReceipts(
+          this.state.targetProjectPath,
           visit.verifiedCommands,
           result.evidence.commands,
         );
@@ -741,6 +742,7 @@ export class GraphRuntime {
         currentTestProof(this.state, visit),
         this.state.graph.automation,
         this.state.verificationContract,
+        this.state.targetProjectPath,
       );
       if (completion.environmentBlocked) {
         visit.output = completion.output;

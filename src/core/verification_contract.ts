@@ -3,7 +3,7 @@ import * as path from "node:path";
 import { createHash } from "node:crypto";
 import { CommandReceipt, SessionState, VerificationContract, VerificationManifest } from "../shared/domain";
 import { inside } from "./verification_sources";
-import { isVerificationCommand, isBrowserVerificationCommand, checkCommandKey, canonicalCommand } from "./verification_evidence";
+import { isVerificationCommand, isBrowserVerificationCommand, checkCommandKey, canonicalCommand, projectCommandKey } from "./verification_evidence";
 export const CONTRACT_FILE = ".agent-graph/verification.json";
 const sha = (data: string | Buffer) => createHash("sha256").update(data).digest("hex");
 const plain = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
@@ -67,14 +67,14 @@ export async function contractViolation(state: SessionState): Promise<string|nul
   catch(error){return `고정 검증 파일을 읽을 수 없습니다: ${error instanceof Error?error.message:String(error)}`;}
   return null;
 }
-export function missingContractReceipts(c: VerificationContract | undefined, commands: CommandReceipt[], required: boolean): string[] {
+export function missingContractReceipts(c: VerificationContract | undefined, commands: CommandReceipt[], required: boolean, cwd?: string): string[] {
   if (!required) return [];
   if (c?.status!=="locked" || !validContractSnapshot(c)) return ["locked verification contract"];
-  return c.manifest!.checks.filter(check=>!commands.some(r=>r.exitCode===0&&!r.environmentError&&isVerificationCommand(r.command)&&checkCommandKey(r.command)===checkCommandKey(check.command))).map(c=>c.id);
+  return c.manifest!.checks.filter(check=>!commands.some(r=>r.exitCode===0&&!r.environmentError&&isVerificationCommand(r.command,cwd)&&projectCommandKey(r.command,cwd)===projectCommandKey(check.command,cwd))).map(c=>c.id);
 }
 
 export function contractProofMissing(state: SessionState, commands: CommandReceipt[]): string[] {
-  return missingContractReceipts(state.verificationContract, commands, !!state.graph.automation?.verificationContract);
+  return missingContractReceipts(state.verificationContract, commands, !!state.graph.automation?.verificationContract, state.targetProjectPath);
 }
 
 /** Reject observable shell failure masking in registered package runners before testing. */

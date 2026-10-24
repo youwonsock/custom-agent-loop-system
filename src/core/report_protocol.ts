@@ -1,10 +1,10 @@
 import { AgentNode, CommandReceipt, VerificationContract } from "../shared/domain";
 import { RequirementItem } from "./requirement_ledger";
-import { checkCommandKey } from "./verification_evidence";
+import { projectCommandKey } from "./verification_evidence";
 type Obj=Record<string,unknown>;
 const object=(v:unknown):v is Obj=>!!v&&typeof v==="object"&&!Array.isArray(v);
 /** Model-authored judgments; receipt facts are attached by the engine only. */
-export function renderStructuredReport(text:string,node:AgentNode,requirements:RequirementItem[],commands:CommandReceipt[],contract?:VerificationContract):string|null {
+export function renderStructuredReport(text:string,node:AgentNode,requirements:RequirementItem[],commands:CommandReceipt[],contract?:VerificationContract,cwd?:string):string|null {
   const start=text.lastIndexOf("[AGENT_REPORT]");
   if(start<0)return null;
   const end=text.indexOf("[/AGENT_REPORT]",start);
@@ -23,7 +23,7 @@ export function renderStructuredReport(text:string,node:AgentNode,requirements:R
     if(!object(item)||typeof item.id!=="string"||!requirements.some(r=>r.id===item.id)||seen.has(item.id)||!["SATISFIED","PARTIAL","FAILED","BLOCKED"].includes(String(item.status))||typeof item.evidence!=="string"||!item.evidence.trim()||item.evidence.length>2000)throw Error("요구사항 JSON의 id/status/evidence를 확인하세요. 중복·알 수 없는 ID·빈 근거는 허용하지 않습니다.");
     seen.add(item.id);
     const checks=contract.manifest!.checks.filter(c=>c.requirements.includes(item.id as string));
-    const observed=checks.flatMap(c=>{const r=commands.find(r=>checkCommandKey(r.command)===checkCommandKey(c.command));return r?[{check:c.id,receipt:r}]:[];});
+    const observed=checks.flatMap(c=>{const r=commands.find(r=>projectCommandKey(r.command,cwd)===projectCommandKey(c.command,cwd));return r?[{check:c.id,receipt:r}]:[];});
     const evidence=item.evidence.replace(/[\r\n]+/g," ").replace(/\[(\/?(?:REQUIREMENT_EVIDENCE|PHASE_DONE|AGENT_REPORT))\]/gi,"〈$1〉");
     const effectiveStatus=observed.some(o=>o.receipt.exitCode!==0||o.receipt.environmentError)?"FAILED":item.status;
     lines.push(`[REQUIREMENT_EVIDENCE]\nREQ_ID: ${item.id}\nSTATUS: ${effectiveStatus}\nEVIDENCE: ${evidence}${observed.length?` | Native receipts: ${observed.map(r=>`${r.check}=${r.receipt.id} (exit ${r.receipt.exitCode ?? "unknown"})`).join(", ")}`:""}${observed.length?`\nCHECK_COMMAND: ${observed[0]!.receipt.command}`:""}\n[/REQUIREMENT_EVIDENCE]`);
