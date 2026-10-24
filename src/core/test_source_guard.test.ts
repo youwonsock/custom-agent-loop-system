@@ -36,3 +36,16 @@ test("source guard includes authored tests/package and ignores verification outp
  const before=await testSources(root);await fs.writeFile(path.join(root,"verification/report.json"),"{}");assert.deepEqual(sourceDifference(before,await testSources(root)),[]);
  await fs.writeFile(path.join(root,"test/own.test.mjs"),"weakened");await fs.rm(path.join(root,"app.mjs"));assert.deepEqual(sourceDifference(before,await testSources(root)).sort(),["app.mjs","test/own.test.mjs"]);
 });
+
+test("observed harmless diagnostics and owned absolute preparation are allowed without accepting repair or masking",async()=>{
+ const cwd=path.resolve("owned target"),command="npm test > verification/model-tests.txt 2>&1",hooks=kiloCheckHooks({cwd,commands:[command],testSourcesReadOnly:true});
+ const absolute=path.join(cwd,"verification"),quoted=JSON.stringify(absolute),escaped=absolute.replaceAll("\\","/").replace(/ /g,"\\ ");
+ for(const input of [`mkdir -p ${quoted}`,`mkdir -p ${escaped}`,`ls '${cwd}/package.json' && node --version`,`ls verification/node-tests/ 2>/dev/null; echo '---'; ls verification/browser/ 2>/dev/null`]){
+  const output={args:{command:input}};await hooks["tool.execute.before"]({tool:"bash"},output);assert.equal(testCommandAllowed(output.args.command,cwd,[command]),true,input);
+ }
+ for(const input of [`mkdir -p ${quoted} && npm test > '${absolute}/model-tests.txt' 2>&1`,`cd '${cwd}' && mkdir -p verification && npm test > ${escaped}/model-tests.txt 2>&1`]){
+  const output={args:{command:input}};await hooks["tool.execute.before"]({tool:"bash"},output);assert.match(output.args.command,/&& npm test > verification\/model-tests.txt 2>&1$/);
+ }
+ for(const input of [`mkdir -p '${cwd}/outside'`,`mkdir -p verification/../test`,`mkdir -p verification && npm test > app.mjs`,`ls; node -e 'repair()'`,`cat app.mjs > verification/copy`,`rg --pre=touch text .`,`npm test || true`,`ls 2>/dev/null; touch app.mjs`])
+  await assert.rejects(hooks["tool.execute.before"]({tool:"bash"},{args:{command:input}}),/AGENT_GRAPH_TEST_POLICY|standalone foreground/,input);
+});

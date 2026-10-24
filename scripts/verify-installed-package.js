@@ -99,6 +99,10 @@ async function main() {
       try { await guarded["tool.execute.before"]({tool:"write"},{args:{filePath:path.join(project,"app.mjs"),content:"unexpected"}}); }
       catch(error) { prevented=String(error).includes("[AGENT_GRAPH_TEST_POLICY]"); }
       if(!prevented)throw Error("Installed test source guard did not prevent a native write.");
+      const prepared={args:{command:`mkdir -p ${JSON.stringify(path.join(project,"verification"))} && npm test`}};
+      await guarded["tool.execute.before"]({tool:"bash"},prepared);
+      if(!prepared.args.command.endsWith(" && npm test"))throw Error("Installed owned output preparation failed.");
+      await guarded["tool.execute.before"]({tool:"bash"},{args:{command:'ls verification/ 2>/dev/null; echo "---"; node --version'}});
       process.env.AGENT_GRAPH_KILO_CHECKS = JSON.stringify({cwd:project,commands:[],guardOwnedProcesses:true});
       const processGuard=await plugin.server();let processPrevented=false;
       try { await processGuard["tool.execute.before"]({tool:"bash"},{args:{command:'pkill -9 -f "node.*server"'}}); }

@@ -1,6 +1,6 @@
 import * as path from "node:path";
 import { CommandReceipt, SessionState, NodeVisit } from "../shared/domain";
-import { canonicalCommand, checkCommandKey, literalShellWords, projectCommandKey, currentTestProof } from "./verification_evidence";
+import { canonicalCommand, checkCommandKey, literalShellWords, projectCommandKey, currentTestProof, verificationMkdir, verificationSetupParts } from "./verification_evidence";
 import { sourceHashes } from "./verification_sources";
 
 export const TEST_POLICY = "[AGENT_GRAPH_TEST_POLICY]";
@@ -11,16 +11,18 @@ const obj=(v:unknown):Obj=>v&&typeof v==="object"&&!Array.isArray(v)?v as Obj:{}
 /** Test sources are immutable; only registered checks and inspection/preparation are allowed. */
 export function testCommandAllowed(command:string,cwd:string,registered:string[]):boolean {
   let text=canonicalCommand(command).trim();
-  const segments=text.split(/\s*&&\s*/);
-  if(segments.length===2){const cd=literalShellWords(segments[0]!);if(cd?.length!==2||cd[0]!=="cd"||path.resolve(cwd,cd[1]!)!==path.resolve(cwd))return false;text=segments[1]!;}
-  else if(segments.length!==1)return false;
-  if(registered.some(c=>text===c||text===checkCommandKey(c)))return true;
-  const prep=literalShellWords(text);
-  if(prep?.[0]==="mkdir")return prep.slice(1).filter(w=>w!=="-p").every(w=>/^verification(?:\/[a-zA-Z0-9_-]+)*\/?$/.test(w))&&prep.some(w=>w==="verification"||w.startsWith("verification/"));
-  if(/[\n;`$<>]/.test(text))return false;
-  return text.split(/\s*\|\s*/).every(segment=>{
+  const setup=verificationSetupParts(text,cwd);
+  if(setup){text=setup.body;if(registered.some(c=>text===c||text===checkCommandKey(c)))return true;if(verificationMkdir(text,cwd))return true;}
+  // These chains contain inspection only, never checks or writes. Their exit
+  // statuses cannot become verification receipts (the receipt gate stays strict).
+  if(/[\r\n`$]/.test(text))return false;
+  text=text.replace(/\s+2>\s*\/dev\/null(?=\s|$|;|&|\|)/g,"").replace(/\s+2>&1(?=\s|$|;|&|\|)/g,"");
+  if(/[<>]/.test(text))return false;
+  return text.split(/\s*(?:&&|;|\|)\s*/).every(segment=>{
     const words=literalShellWords(segment);if(!words?.length)return false;
     const name=words[0]!.split(/[\\/]/).at(-1)!.toLowerCase();
+    if(name==="node"||name==="npm")return words.length===2&&words[1]==="--version";
+    if(name==="echo")return !words.slice(1).some(w=>w.startsWith("-"))||words.length===2&&/^[-=]+$/.test(words[1]!);
     if(name==="sed")return words.length===4&&words[1]==="-n"&&/^\d+(?:,\d+)?p$/.test(words[2]!);
     if(!["cat","type","head","tail","pwd","ls","rg","grep","wc","stat","get-content","get-childitem"].includes(name))return false;
     return !words.slice(1).some(w=>/^--pre(?:=|$)|^--files-without-match=/.test(w));

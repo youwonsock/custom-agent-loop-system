@@ -78,21 +78,49 @@ export function checkCommandKey(command: string): string {
   // Output capture does not alter the check's exit status; never strip pipes,
   // command chaining, substitutions or a failure-masking suffix.
   return canonicalCommand(command.trim().replace(/^`([^`]+)`$/, "$1"))
-    .replace(/\s+>\s*(?:'[^']*'|"[^"$`]*"|[^\s;&|$`]+)(?:\s+2>&1)?\s*$/, "")
+    .replace(/\s+>\s*(?:'[^']*'|"[^"$`]*"|(?:\\[^\r\n]|[^\s;&|$`\\])+)(?:\s+2>&1)?\s*$/, "")
     .trim();
 }
 
-/** Ignore only an explicit cd to the already-owned project, never another cwd. */
+export function ownedVerificationCapture(command:string,cwd:string):boolean {
+  const match=command.match(/\s+>\s*((?:'[^']*'|"[^"$`]*"|(?:\\[^\r\n]|[^\s;&|$`\\])+))(?:\s+2>&1)?\s*$/);
+  const words=match?literalShellWords(match[1]!):null;
+  if(words?.length!==1)return false;
+  const api=/^[A-Za-z]:[\\/]/.test(cwd)?path.win32:path.posix;
+  return /^[a-zA-Z0-9_.-]+$/.test(api.basename(words[0]!))&&verificationDirectory(api.dirname(words[0]!),cwd);
+}
+
+/** Literal preparation may create only output directories owned by this check. */
+export function verificationDirectory(name:string,cwd?:string):boolean {
+  if (/[\r\n\0]/.test(name) || name.split(/[\\/]/).includes("..")) return false;
+  const api=cwd&&/^[A-Za-z]:[\\/]/.test(cwd)?path.win32:path.posix;
+  const relative=cwd?api.relative(api.resolve(cwd,"verification"),api.resolve(cwd,name)):name.replace(/^verification\/?/,"");
+  if(!cwd&&!/^verification(?:\/|$)/.test(name))return false;
+  return relative===""||/^[a-zA-Z0-9_-]+(?:[\\/][a-zA-Z0-9_-]+)*[\\/]?$/.test(relative);
+}
+export function verificationMkdir(command:string,cwd?:string):boolean {
+  if(/[\r\n]/.test(command))return false;
+  const words=literalShellWords(command);
+  return !!words&&words.length>=3&&words[0]==="mkdir"&&words[1]==="-p"&&words.slice(2).every(name=>verificationDirectory(name,cwd));
+}
+export function verificationSetupParts(command:string,cwd?:string):{preparation:string[];body:string}|null {
+  const segments=command.split(/\s*&&\s*/);
+  if(segments.length>4)return null;
+  const preparation:string[]=[];
+  for(const segment of segments.slice(0,-1)){
+    const words=literalShellWords(segment);
+    const api=cwd&&/^[A-Za-z]:[\\/]/.test(cwd)?path.win32:path.posix;
+    if(cwd&&words?.length===2&&words[0]==="cd"&&!/[\r\n]/.test(segment)&&api.relative(api.resolve(cwd),api.resolve(cwd,words[1]!))==="")continue;
+    if(!verificationMkdir(segment,cwd))return null;
+    preparation.push(segment);
+  }
+  return {preparation,body:segments.at(-1)!.trim()};
+}
+
+/** Ignore owned output setup and cd to the already-owned project only. */
 export function projectCommandKey(command: string, cwd?: string): string {
   const key = checkCommandKey(command);
-  if (!cwd) return key;
-  const segments = key.split(/\s*&&\s*/);
-  if (segments.length !== 2) return key;
-  const words = literalShellWords(segments[0]!);
-  if (words?.length !== 2 || words[0] !== "cd") return key;
-  const api = /^[A-Za-z]:[\\/]/.test(cwd) ? path.win32 : path.posix;
-  if (api.relative(api.resolve(cwd), api.resolve(cwd, words[1]!)) !== "") return key;
-  return segments[1]!.trim();
+  return verificationSetupParts(key,cwd)?.body??key;
 }
 
 export function isBrowserVerificationCommand(command: string, cwd?: string): boolean {
@@ -112,14 +140,13 @@ export function isVerificationCommand(command: string, cwd?: string): boolean {
   // Do not accept a backgrounded test whose shell exits before the test does.
   if (c.replace(/2>&1/g, "").replace(/&&/g, "").includes("&")) return false;
   if (/[\n;|`]/.test(c) || /\$\(/.test(c)) return false;
-  const segments = c.split(/\s*&&\s*/);
-  if (
-    segments.length > 2 ||
-    (segments.length === 2 && !/^cd\s+/.test(segments[0]!))
-  )
-    return false;
+  let parts=verificationSetupParts(c,cwd);
+  // Historical callers without a known project may recognize a literal cd;
+  // runtime receipts always supply cwd and still reject a different project.
+  if(!parts&&!cwd){const segments=c.split(/\s*&&\s*/),words=literalShellWords(segments[0]!);if(segments.length===2&&words?.length===2&&words[0]==="cd")parts={preparation:[],body:segments[1]!};}
+  if(!parts)return false;
   return /^(?:(?:[A-Za-z_][\w]*=[^\s]+)\s+)*(?:(?:\S*[\\/])?)(?:(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?(?:test|check|verify)(?:[:\s]|$)|node\s+(?:--test(?:[=\s]|$)|["']?(?:[^\s]*[\\/])?(?:test|verify|check)[^\s]*\.[cm]?js\b)|(?:npx\s+)?(?:vitest|jest|playwright\s+test)\b|(?:python[\d.]*\s+-m\s+)?pytest\b|(?:cargo|go|dotnet)\s+test\b)/i.test(
-    segments.at(-1)!,
+    parts.body,
   );
 }
 

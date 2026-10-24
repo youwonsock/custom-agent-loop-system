@@ -1,4 +1,4 @@
-import { projectCommandKey } from "./verification_evidence";
+import { projectCommandKey, verificationSetupParts, checkCommandKey, ownedVerificationCapture } from "./verification_evidence";
 import { TEST_POLICY, testCommandAllowed } from "./test_source_guard";
 import { broadProcessTermination, UNSCOPED_TERMINATION } from "./process_command_policy";
 
@@ -21,15 +21,24 @@ export function registeredCheckCommand(command: string, protocol: KiloCheckProto
   const boundary = command.search(/[|;]/);
   const aliasBase=(boundary<0?command:command.slice(0,boundary)).trim().replace(/\s+2>&1\s*$/,"");
   const alias=Object.entries(protocol.aliases??{}).find(([from,to])=>protocol.commands.includes(to)&&projectCommandKey(from,protocol.cwd)===projectCommandKey(aliasBase,protocol.cwd));
-  if(alias){if(boundary>=0&&!displayPipeline.test(command.slice(boundary).trim())&&!statusEcho.test(command.slice(boundary).trim()))throw Error("Registered verification aliases require a standalone foreground command.");return alias[1];}
-  if (boundary < 0) return command;
+  const setup=verificationSetupParts(aliasBase,protocol.cwd);
+  const prepared=(check:string)=>setup?.preparation.length?[...setup.preparation,check].join(" && "):check;
+  if(setup&&checkCommandKey(setup.body)!==setup.body&&!ownedVerificationCapture(setup.body,protocol.cwd))return command;
+  if(alias){if(boundary>=0&&!displayPipeline.test(command.slice(boundary).trim())&&!statusEcho.test(command.slice(boundary).trim()))throw Error("Registered verification aliases require a standalone foreground command.");return prepared(alias[1]);}
+  if (boundary < 0) {
+    const registered=protocol.commands.find(c=>projectCommandKey(c,protocol.cwd)===projectCommandKey(command,protocol.cwd));
+    // Preserve only the check's configured output capture, including when the
+    // CLI spells that same destination with a quoted/escaped absolute path.
+    if(registered&&setup&&(setup.preparation.length||checkCommandKey(setup.body)!==setup.body))return prepared(registered);
+    return command;
+  }
   const base = command.slice(0, boundary).trim().replace(/\s+2>&1\s*$/, "");
   const registered = protocol.commands.find(c => projectCommandKey(c, protocol.cwd) === projectCommandKey(base, protocol.cwd));
   if (!registered) return command;
   const suffix = command.slice(boundary).trim();
   if (!displayPipeline.test(suffix) && !statusEcho.test(suffix))
     throw new Error("Registered verification checks require a standalone foreground command; remove shell chaining and read logs separately.");
-  return registered;
+  return prepared(registered);
 }
 
 export function kiloCheckHooks(protocol: KiloCheckProtocol) {
