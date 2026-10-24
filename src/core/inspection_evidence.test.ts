@@ -23,3 +23,14 @@ test("Claude inspection requires the matching successful native Read result",()=
  t.observe({type:"user",message:{content:[{type:"tool_result",tool_use_id:"read",is_error:false,content:"actual source"}]}});
  assert.deepEqual(t.files,[file]);
 });
+test("Kilo and OpenCode shell inspection needs a completed exit-zero standalone read",()=>{
+ const t=new InspectionTracker(cwd);
+ const event=(command:string,status:string,exit:number)=>({type:"tool_use",part:{tool:"bash",state:{status,input:{command},metadata:{exit}}}});
+ t.observe(event(`cat ${file}`,"error",0));
+ t.observe(event(`cat ${file}`,"completed",1));
+ t.observe(event(`cat ${file} | head -100`,"completed",0));
+ assert.deepEqual(t.files,[]);
+ t.observe(event(`cd "${cwd}" && cat ${file}`,"completed",0));
+ t.observe(event("Get-Content -literalpath verification/node-tests/report.json -raw","completed",0));
+ assert.deepEqual(t.files,[file,"verification/node-tests/report.json"]);
+});

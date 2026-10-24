@@ -146,7 +146,7 @@ export async function runNodeTestVerification(options:{target:string;manifest:Ve
         evidence.control=await job(scope,challenge,false);
         const controlProblem=baselineProblem(evidence.control,scope);if(controlProblem)throw Error(`${challenge.id} control: ${controlProblem}`);
         evidence.mutant=await job(scope,challenge,true);
-        if(evidence.mutant.error||!evidence.mutant.stopped||!evidence.mutant.summary||evidence.mutant.summary.counts.cancelled||evidence.mutant.summary.counts.skipped||evidence.mutant.summary.counts.todo)throw Error(`${challenge.id}: invalid/unfinished mutant execution; never a kill.`);
+        if(evidence.mutant.error||!evidence.mutant.stopped||!evidence.mutant.summary||evidence.mutant.summary.counts.cancelled||evidence.mutant.summary.counts.skipped||evidence.mutant.summary.counts.todo)throw Error(`${challenge.id}: invalid/unfinished mutant execution; never a kill. ${evidence.mutant.error??JSON.stringify(evidence.mutant.summary?.counts??{})}. Await assertions through rejected promises and close owned servers/handles in after/finally even when assertions fail.`);
         evidence.killedBy=[...new Set(evidence.mutant.cases.filter(c=>scope.cases.includes(c.name)&&!c.passed&&!c.skip&&!c.todo&&c.errors.some(e=>e.code==="ERR_ASSERTION")).map(c=>c.name))];
         if(evidence.mutant.summary.success||!evidence.killedBy.length){evidence.error="Required authored assertions did not detect this production defect.";throw Error(`${scope.id}/${challenge.id}: ${evidence.error}`);}
         evidence.status="passed";
@@ -164,6 +164,19 @@ export async function runNodeTestVerification(options:{target:string;manifest:Ve
     report.endedAt=new Date().toISOString();await atomicWriteJsonFile(path.join(out,"report.json"),report);await atomicWriteJsonFile(path.join(output,"report.json"),report);
   }
   return report;
+}
+
+/** Keep repair feedback visible even when native tools truncate a large report. */
+export function summarizeNodeTestReport(report:NodeTestReport) {
+  const job=(value:NodeJob|undefined)=>value?{
+    stopped:value.stopped,error:value.error,counts:value.summary?.counts,
+    failures:value.cases.filter(c=>!c.passed).slice(0,12).map(c=>({name:c.name,skip:c.skip,todo:c.todo,errors:c.errors.map(e=>({code:e.code,message:e.message.slice(0,200)}))})),
+  }:undefined;
+  return {
+    version:report.version,runId:report.runId,allPassed:report.allPassed,error:report.error,
+    reportFile:"verification/node-tests/report.json",processesStopped:report.processesStopped,workspacesRemoved:report.workspacesRemoved,
+    scopes:report.scopes.map(s=>({id:s.id,file:s.file,status:s.status,baseline:job(s.baseline),challenges:s.challenges.map(c=>({id:c.id,status:c.status,killedBy:c.killedBy,error:c.error,control:job(c.control),mutant:job(c.mutant)}))})),
+  };
 }
 
 /** Revalidate both production and authored tests before accepting a report/audit. */

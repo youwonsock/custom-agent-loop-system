@@ -7,7 +7,7 @@ import { StudioStore } from "../core/store";
 import { SessionCoordinator } from "./coordinator";
 import { readJsonFile } from "../core/resilience";
 import { runBrowserVerification } from "../core/browser_verification";
-import { runNodeTestVerification } from "../core/node_test_verification";
+import { runNodeTestVerification, summarizeNodeTestReport } from "../core/node_test_verification";
 import { validateManifest } from "../core/verification_contract";
 import { inside } from "../core/verification_sources";
 import { queryModels } from "../core/catalog";
@@ -41,7 +41,7 @@ async function main(): Promise<void> {
       const reqs=[...new Set<string>(raw.checks.flatMap((c:{requirements:string[]})=>c.requirements))];
       const manifest=validateManifest(raw,reqs,false);
       const report=await runNodeTestVerification({target,manifest,signal:controller.signal});
-      process.stdout.write(JSON.stringify(report,null,2)+"\n");
+      process.stdout.write(JSON.stringify(summarizeNodeTestReport(report),null,2)+"\n");
       process.exitCode=report.allPassed?0:1;
     } finally {process.off("SIGINT",abort);process.off("SIGTERM",abort);}
     return;

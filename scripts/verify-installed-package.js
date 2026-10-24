@@ -77,7 +77,9 @@ async function main() {
     await fs.writeFile(path.join(qualityProject, "test/value.test.mjs"), "import test from 'node:test';import a from 'node:assert/strict';import {value} from '../value.mjs';test('value:correct',()=>a.equal(value,1));\n");
     await fs.writeFile(path.join(qualityProject, "probes/value.mjs"), "export async function mutate({enabled}){return {'value.mjs':'export const value='+ (enabled?2:1)+';\\n'}}\n");
     await fs.writeFile(path.join(qualityProject, ".agent-graph", "verification.json"), JSON.stringify({ version: 1, protectedFiles: ["probes/value.mjs"], checks: [{ id: "node", command: "npm test", requirements: ["REQ-001"] }, { id: "quality", command: nodeTestVerificationCommand(), requirements: ["REQ-001"] }], nodeTests }));
-    execFileSync(process.execPath, [cli, "verify-node-tests", "--target", qualityProject], { encoding: "utf8", stdio: "pipe" });
+    const ownSummary = JSON.parse(execFileSync(process.execPath, [cli, "verify-node-tests", "--target", qualityProject], { encoding: "utf8", stdio: "pipe" }));
+    if (ownSummary.reportFile !== "verification/node-tests/report.json" || !ownSummary.allPassed || ownSummary.scopes[0]?.challenges[0]?.killedBy[0] !== "value:correct")
+      throw new Error("Installed own Node verifier compact feedback failed.");
     const ownProof = await readNodeTestProof(qualityProject, nodeTests);
     const ownReport = JSON.parse(await fs.readFile(path.join(qualityProject, "verification/node-tests/report.json"), "utf8"));
     if (ownProof.scopes.length !== 1 || !ownReport.allPassed || !ownReport.processesStopped || !ownReport.workspacesRemoved || ownReport.workers.length !== 3 || ownReport.workers.some(w => !w.stopped))

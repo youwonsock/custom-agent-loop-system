@@ -21,13 +21,14 @@ export class InspectionTracker {
     const words=literalShellWords(segments.at(-1)!);if(!words?.length)return;
     const name=words.shift()!.split(/[\\/]/).at(-1)!.toLowerCase();
     if(!["cat","type","get-content"].includes(name))return;
-    const files=words.filter(w=>!['--','-Path','-LiteralPath','-Raw'].includes(w));
+    const files=words.filter(w=>!['--','-path','-literalpath','-raw'].includes(w.toLowerCase()));
     if(files.some(w=>w.startsWith('-')))return;
     for(const file of files)this.add(file);
   }
   observe(event:Obj):void{
     const part=obj(event.part),state=obj(part.state),item=obj(event.item);
     if(event.type==="tool_use"&&String(part.tool).toLowerCase()==="read"&&state.status==="completed")this.add(obj(state.input).filePath??obj(state.input).file_path);
+    if(event.type==="tool_use"&&part.tool==="bash"&&state.status==="completed"&&obj(state.metadata).exit===0)this.command(obj(state.input).command);
     if(event.type==="item.completed"&&item.type==="command_execution"&&item.exit_code===0&&item.status!=="failed")this.command(item.command);
     const content=obj(event.message).content;
     if(Array.isArray(content))for(const value of content){const b=obj(value);
