@@ -151,10 +151,13 @@ export function validateCompletion(
       !answer.plans.every((p, i) => p.id === i + 1 && p.body.length > 0)
     )
       return fail(`완전한 계획 선택지 ${count}개가 순서대로 필요합니다.`);
-    if (
-      answer.plans.some((p) => requirements.some((r) => !p.body.includes(r.id)))
-    )
-      return fail("모든 계획 선택지에서 각 REQ ID를 다뤄야 합니다.");
+    const missing = answer.plans.flatMap((p) => {
+      const ids = new Set(p.body.match(/\bREQ-\d+\b/g) ?? []);
+      const absent = requirements.filter((r) => !ids.has(r.id));
+      return absent.length ? [`OPTION ${p.id}: ${absent.map((r) => r.id).join(", ")}`] : [];
+    });
+    if (missing.length)
+      return fail(`계획별 필수 REQ ID 누락: ${missing.join("; ")}. 각 ID를 전체 표기로 작성하세요 (예: REQ-006, REQ-007). REQ-006/007 같은 축약은 허용하지 않습니다. 구현이나 도구 재실행 없이 전체 계획 보고만 보완하세요.`);
   }
   if (node.type === "test") {
     const testOutput = repairableBlocker

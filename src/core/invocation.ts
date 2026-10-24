@@ -116,8 +116,8 @@ export async function buildInvocation(
         ? ""
         : "\n\nNative tool protocol: use the exact schema supplied by this CLI. Never send an empty tool input. After a schema error, correct the missing fields before trying again; do not repeat the same invalid call. " +
           (readonly
-            ? "Use only permitted read-only tools and inspect prior actual test evidence. Never request write or shell execution permissions."
-            : "The write tool requires both filePath (absolute path) and content (string). Preserve existing tests and use bash to run them before deciding whether additional coverage is necessary. " +
+            ? "Use only permitted read-only tools: read(filePath), glob(pattern), grep(pattern) to inspect target files and prior actual test evidence. exec, exec_command, execute, bash, write and edit are unavailable in this read-only role; never call them or request shell/write permissions. For planning, use the supplied browser command/schema contract without reading the platform implementation."
+            : "Use bash with command (string) and description (string) for shell commands, never exec or exec_command. The write tool requires both filePath (absolute path) and content (string). Preserve existing tests and use bash to run them before deciding whether additional coverage is necessary. " +
               (process.platform === "win32"
                 ? "The tool shell is Windows PowerShell: use npm.cmd and npx.cmd to avoid npm.ps1 execution policy errors, or invoke node.exe directly. Use PowerShell syntax, not Bash for/do/done loops or &&. Do not change the host execution policy."
                 : ""));

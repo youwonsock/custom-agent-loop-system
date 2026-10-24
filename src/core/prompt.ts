@@ -29,7 +29,7 @@ export function buildRecoveryMessage(
       })
       .slice(-3);
     lines.push(
-      "The preceding CLI aborted repeated malformed tool input. This is a fresh bounded attempt. Follow the native tool schema, supply all required fields, never submit {} and never repeat the same invalid call. Run existing checks first; add coverage only when missing. The Kilo write tool requires filePath and content. Do not weaken checks or switch models.",
+      "The preceding CLI aborted repeated unavailable tools or malformed tool input. This is a fresh bounded attempt. Follow the current role and native tool schema, supply all required fields, never submit {} and never repeat the same invalid call. Kilo read-only roles use read/glob/grep, never exec/exec_command/bash/write/edit. Writable roles use bash(command, description) for checks and write(filePath, content) for files. Never run checks in a read-only role. Do not weaken checks or switch models.",
       ...errors,
     );
   }
@@ -37,7 +37,7 @@ export function buildRecoveryMessage(
 }
 const responsibilities: Record<AgentNode["type"], string> = {
   planning:
-    "Inspect requirements and existing files without writing files. Propose complete, materially different strategies. Do not implement or invoke native plan approval tools; return the options as assistant text.",
+    "Inspect requirements and existing files without writing files. Return the requested number of complete strategies; when only one option is requested, propose one strategy without alternatives. Do not implement or invoke native plan approval tools; return the options as assistant text.",
   implementation:
     "Inspect existing work first. Implement cumulatively. Do not weaken, delete or skip tests to make the implementation appear complete. Run focused checks and report observed results.",
   test: "Run existing tests, add missing acceptance coverage and execute it. You may edit tests but never production code. Report product failures as FAIL. If required checks cannot run because of environment permissions, unavailable network or tooling, report VERDICT: BLOCKED and the exact command, observed error and operator action. Never repair production code or change sandbox settings to work around an execution sandbox. If the native CLI supports per-command approval, request approval for the exact required local test command; a denied request remains BLOCKED.",
@@ -131,7 +131,9 @@ export function buildNodePrompt(
     );
   if (node.type === "planning")
     lines.push(
-      `Return exactly ${node.planning?.optionsCount ?? 3} complete options. Use "## OPTION 1: Title" etc. Every option must include each REQ ID, files, ordered implementation steps, verification and risks.`,
+      `Return exactly ${node.planning?.optionsCount ?? 3} complete options. Use "## OPTION 1: Title" etc. Every option must include each full REQ ID, files, ordered implementation steps, verification and risks. Never compress IDs: write REQ-006, REQ-007 separately, not REQ-006/007. A format-only recovery needs only a corrected complete plan; do not inspect the platform source or repeat tools when existing evidence is sufficient.`,
+      "In EACH option include a concrete plan entry for EVERY ID below, replacing each placeholder:",
+      ...state.requirements.items.map(r => `${r.id}: planned implementation and verification`),
     );
   if (node.type === "test")
     lines.push(

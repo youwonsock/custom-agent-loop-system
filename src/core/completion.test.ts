@@ -194,3 +194,17 @@ for (const type of ["review", "approval"] as const) test(`${type} cannot approve
   assert.equal(blocked.verdict, "BLOCKED");
   assert.ok(blocked.environmentBlocked);
 });
+
+
+test("planning recovery identifies missing full IDs per option without accepting shorthand or prefixes", () => {
+  const requirements = deriveRequirementLedger("one\ntwo").items;
+  const node = createGraph().nodes[0]!;
+  node.planning = { requiresApproval: false, optionsCount: 1 };
+  for (const text of ["REQ-001/002", "REQ-001 REQ-0020"]) {
+    const c = validateCompletion(node, result(`## OPTION 1: Plan\n${text}\n[PHASE_DONE]`), "goal", requirements);
+    assert.equal(c.valid, false);
+    assert.match(c.reason!, /OPTION 1: REQ-002/);
+    assert.match(c.reason!, /REQ-006, REQ-007/);
+  }
+  assert.equal(validateCompletion(node, result("## OPTION 1: Plan\nREQ-001 first check\nREQ-002 second check\n[PHASE_DONE]"), "goal", requirements).valid, true);
+});
