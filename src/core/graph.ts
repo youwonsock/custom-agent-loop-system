@@ -62,7 +62,8 @@ export function validateGraphDocument(input: unknown): AgentGraphDocument {
       (g.automation.verificationContract !== undefined && typeof g.automation.verificationContract !== "boolean") ||
       (g.automation.authoredNodeTests !== undefined && typeof g.automation.authoredNodeTests !== "boolean") ||
       (g.automation.testSourceGuard !== undefined && typeof g.automation.testSourceGuard !== "boolean") ||
-      (g.automation.reserveFinalizationBudget !== undefined && typeof g.automation.reserveFinalizationBudget !== "boolean"))
+      (g.automation.reserveFinalizationBudget !== undefined && typeof g.automation.reserveFinalizationBudget !== "boolean") ||
+      (g.automation.guardOwnedProcesses !== undefined && typeof g.automation.guardOwnedProcesses !== "boolean"))
   )
     throw new AppError(
       400,
@@ -178,6 +179,7 @@ export function validateGraphDocument(input: unknown): AgentGraphDocument {
             ...(g.automation.authoredNodeTests !== undefined ? { authoredNodeTests:g.automation.authoredNodeTests } : {}),
             ...(g.automation.testSourceGuard !== undefined ? {testSourceGuard:g.automation.testSourceGuard} : {}),
             ...(g.automation.reserveFinalizationBudget !== undefined ? {reserveFinalizationBudget:g.automation.reserveFinalizationBudget} : {}),
+            ...(g.automation.guardOwnedProcesses !== undefined ? {guardOwnedProcesses:g.automation.guardOwnedProcesses} : {}),
           },
         }
       : {}),
@@ -280,6 +282,7 @@ export function createAutonomousGraph(
     authoredNodeTests: true,
     testSourceGuard: true,
     reserveFinalizationBudget: true,
+    guardOwnedProcesses:true,
   };
   graph.nodes.find((n) => n.type === "planning")!.planning = {
     requiresApproval: false,

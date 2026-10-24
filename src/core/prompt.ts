@@ -23,6 +23,7 @@ export function buildRecoveryMessage(
     `[${kind}] ${message}`,
     `Previous observed output:\n${assistantText.slice(-5000)}`,
   ];
+  if(message.includes("[AGENT_GRAPH_UNSCOPED_TERMINATION]"))return "A broad process termination was blocked BEFORE execution. Preserve existing work; close only the server objects/child handles this task created. Never use pkill/killall, process-name searches for killing, taskkill /IM or Stop-Process -Name. Fix lifecycle cleanup in implementation and execute registered checks as standalone foreground commands. No permission expansion or operator approval is needed for this correction.";
   if (kind === "tool_arguments") {
     const errors = events
       .flatMap((event) => {
@@ -109,6 +110,7 @@ export function buildNodePrompt(
     ),
     structured ? "The engine binds JSON judgments to frozen check IDs and observed native receipts. Never invent a passed check." : "For each requirement report: [REQUIREMENT_EVIDENCE]\nREQ_ID: REQ-001\nSTATUS: SATISFIED|PARTIAL|FAILED|BLOCKED\nEVIDENCE: concrete observed check or artifact\n[/REQUIREMENT_EVIDENCE]. Never invent a passed check.",
   ];
+  if(state.graph.automation?.guardOwnedProcesses)lines.push("PROCESS OWNERSHIP: Broad process-name termination is blocked before execution in implementation and test. Never use pkill/killall/taskkill /IM/Stop-Process -Name or kill via pgrep. Close only owned server objects/child handles or recorded owned PIDs. Keep HTTP tests isolated with PORT=0 and cleanup registered before assertions; never kill another listener to make a test pass.");
   if(visit.stageDeadlineAt)lines.push("=== FIXED ROLE BUDGET ===",JSON.stringify({roleDeadlineAt:visit.stageDeadlineAt,remainingSeconds:Math.max(0,Math.floor((Date.parse(visit.stageDeadlineAt)-Date.now())/1000))}),"This deadline survives retries and automatic recovery and preserves time/calls for verification and approval. Do not restart or expand it.");
   if(state.graph.automation?.testSourceGuard&&node.type==="implementation")lines.push("Implementation owns ALL source and authored-test repairs. Read the last failed verification diagnostics FIRST and repair that concrete cause; preserve completed work. Use targeted checks for feedback, then hand off promptly with the final standalone [PHASE_DONE]. Do not spend the entire role budget re-running every frozen check or polishing a final test report here. The test role will execute the complete registered suite against frozen sources; known failures may be handed off honestly and will return to implementation. Never claim final success from implementation.");
   if (state.executionBudget) lines.push("=== WHOLE SESSION BUDGET (never resets on retries/resume) ===",JSON.stringify({deadlineAt:state.executionBudget.deadlineAt,maxNativeAttempts:state.executionBudget.maxAttempts,usedNativeAttempts:state.visits.reduce((n,v)=>n+v.attempts.length,0)}),"The engine enforces this wall-clock and native-agent-invocation budget. Provider-internal model turns are not counted as separate native attempts. Do not edit budget files or create another session to evade the limits.");

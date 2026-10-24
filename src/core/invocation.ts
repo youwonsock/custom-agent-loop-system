@@ -20,6 +20,8 @@ export async function buildInvocation(
     verificationCommands?: string[];
     disableWrite?: boolean;
     testSourcesReadOnly?: boolean;
+    guardOwnedProcesses?: boolean;
+    verificationAliases?: Record<string,string>;
   },
 ): Promise<{
   binary: string;
@@ -110,8 +112,8 @@ export async function buildInvocation(
       ? (JSON.parse(env[key]) as Record<string, unknown>)
       : {};
     delete env.AGENT_GRAPH_KILO_CHECKS;
-    const guardedChecks = c.type === "kilo" && !readonly && opts.verificationCommands?.length;
-    if (guardedChecks) env.AGENT_GRAPH_KILO_CHECKS = JSON.stringify({cwd: opts.cwd, commands: opts.verificationCommands,...(opts.testSourcesReadOnly?{testSourcesReadOnly:true}:{})});
+    const guardedChecks = c.type === "kilo" && !readonly && (opts.verificationCommands?.length||opts.guardOwnedProcesses);
+    if (guardedChecks) env.AGENT_GRAPH_KILO_CHECKS = JSON.stringify({cwd: opts.cwd, commands: opts.verificationCommands??[],...(opts.testSourcesReadOnly?{testSourcesReadOnly:true}:{}),...(opts.guardOwnedProcesses?{guardOwnedProcesses:true}:{}),...(opts.verificationAliases?{aliases:opts.verificationAliases}:{})});
     const recoveryAgents: Record<string, {tools?: Record<string, unknown>}> = Object.create(null);
     if (c.type === "kilo" && !readonly && opts.disableWrite) {
       // Kilo resolves effective agents before plugin config hooks; write=false

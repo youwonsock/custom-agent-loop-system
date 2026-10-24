@@ -123,6 +123,7 @@ if (args[0] === "debug" && args[1] === "config") {
     path.join(process.cwd(), prompt.includes("=== AUTONOMOUS WORKFLOW ===") ? "verification/.fixture-arguments.jsonl" : ".fixture-arguments.jsonl"),
     JSON.stringify({ type, args }) + "\n",
   );
+  if(type==="implementation"&&prompt.includes("fixture:contract-owned-process")&&calls.implementation===1){emit({type:"tool_use",part:{id:"owned-policy",tool:"bash",state:{status:"error",input:{command:'pkill -9 -f "node.*server"'},error:"Error: [AGENT_GRAPH_UNSCOPED_TERMINATION] Broad process-name termination blocked BEFORE execution"}}});setInterval(()=>{},1000);return;}
   if (type === "review" && prompt.includes("fixture:qa-regression")) {
     for (const line of fs
       .readFileSync(

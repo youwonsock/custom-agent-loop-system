@@ -1469,6 +1469,11 @@ for(const mode of ["fixture:contract-early-fail","fixture:contract-hidden-guard"
  if(mode.includes("hidden"))assert.ok(tests[0]!.attempts[0]!.verificationInvalidation!.files.includes("artifact.txt"));
  if(mode.includes("policy"))assert.equal(tests[0]!.attempts[0]!.fileMutation,false);
 });
+test("blocked broad process termination is corrected within implementation without operator approval or proof reuse",async t=>{
+ const s=await setup();t.after(s.cleanup);const graph=await contracted(s),id=await launch(s,graph,"fixture:contract-owned-process",{maxAgentAttempts:2,phaseRecoveryBudgetMs:9000});
+ const done=await wait(()=>s.store.readSession(id),"SUCCESS"),impl=done.visits.find(v=>v.nodeId==="implementation")!;
+ assert.equal(impl.attempts.length,2);assert.equal(impl.attempts[0]!.failureKind,"tool_arguments");assert.match(impl.attempts[0]!.message!,/UNSCOPED_TERMINATION/);assert.equal(impl.attempts[1]!.completionAccepted,true);assert.equal(done.visits.at(-1)!.verdict,"APPROVED");assert.deepEqual(done.processedRequests,[]);
+});
 test("supplied frozen contract executes a real protected assertion and JSON reports through final approval", async t => {
   const s = await setup(); t.after(s.cleanup);
   const graph = await contracted(s), id = await launch(s, graph, "fixture:contract-workflow");

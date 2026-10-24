@@ -52,6 +52,8 @@ import { successBlockers } from "./success_gate";
 import { lockContract, contractViolation, verificationRunnerProblem } from "./verification_contract";
 import { sessionBudgetReason, pauseForBudget } from "./session_budget";
 import { stageDeadline, stageBudgetReason } from "./stage_budget";
+import { unscopedTerminationEvent } from "./process_command_policy";
+import { nodeTestScript } from "./node_test_policy";
 import { TEST_POLICY, TEST_FAILED, testSources, sourceDifference, testPolicyEvent, failedRegisteredCheck, currentVerificationSources } from "./test_source_guard";
 
 export interface RuntimeHooks {
@@ -591,6 +593,8 @@ export class GraphRuntime {
         allowedPaths: this.state.additionalAllowedPaths,
         nativeApprovalReview: this.state.graph.automation?.nativeApprovalReview,
         testSourcesReadOnly:sourceGuard&&node.type==="test",
+        guardOwnedProcesses:this.state.graph.automation?.guardOwnedProcesses,
+        ...(this.state.verificationContract?.manifest?.nodeTests?{verificationAliases:{[nodeTestScript(this.state.verificationContract.manifest.nodeTests)]:this.state.verificationContract.manifest.checks.find(c=>c.id===this.state.verificationContract!.manifest!.nodeTests!.suiteCheckId)!.command}}:{}),
         ...(this.state.graph.automation?.verificationContract && this.state.verificationContract?.status === "locked"
           ? {verificationCommands: this.state.verificationContract.manifest!.checks.map(c => c.command)} : {}),
         disableWrite: this.state.visits.some(v =>
@@ -670,6 +674,7 @@ export class GraphRuntime {
           )
           .map(([, value]) => value!),
         pollControl: () => claimNextControlRequest(this.controls()),
+        ...(this.state.graph.automation?.guardOwnedProcesses?{eventPolicy:(event:Record<string,unknown>)=>{policyReason=unscopedTerminationEvent(event);return policyReason;}}:{}),
         ...(sourceGuard&&node.type==="test"&&testInputs?{
           sourcesGuarded:true,
           pollPolicy:async()=>{
@@ -679,7 +684,7 @@ export class GraphRuntime {
             return policyReason;
           },
           eventPolicy:(event:Record<string,unknown>,evidence:SupervisorResult["evidence"])=>{
-            policyReason??=testPolicyEvent(event);
+            policyReason??=unscopedTerminationEvent(event)??testPolicyEvent(event);
             const failed=failedRegisteredCheck(evidence.commands,this.state.targetProjectPath,registered);
             if(!policyReason&&failed){const part=event.part as {state?:{output?:unknown;error?:unknown}}|undefined,item=event.item as {aggregated_output?:unknown}|undefined;
               const output=part?.state?.output??part?.state?.error??item?.aggregated_output;

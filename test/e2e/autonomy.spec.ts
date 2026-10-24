@@ -18,6 +18,7 @@ test("autonomous preset UI persists browser checks, repair budget and native rev
   await expect(page.getByLabel("자동 수정 루프")).toBeChecked();
   await expect(page.getByLabel("테스트 소스 수정 차단")).toBeChecked();
   await expect(page.getByLabel("검토 승인 예산 보존")).toBeChecked();
+  await expect(page.getByLabel("일괄 프로세스 종료 차단")).toBeChecked();
   await expect(page.getByLabel("실제 브라우저 검증 필수")).toBeChecked();
   await expect(page.getByLabel("네이티브 자동 승인 검토")).toBeChecked();
   await page.getByLabel("자동 수정 횟수").fill("2");

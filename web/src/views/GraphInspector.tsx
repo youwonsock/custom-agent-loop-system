@@ -295,7 +295,7 @@ export default function GraphInspector({
                           nativeApprovalReview: false,
                           browserVerification: true,
                           verificationContract: true,
-                          authoredNodeTests: true, testSourceGuard: true, reserveFinalizationBudget: true,
+                          authoredNodeTests: true, testSourceGuard: true, reserveFinalizationBudget: true, guardOwnedProcesses: true,
                         };
                       else delete g.automation;
                     })
@@ -320,6 +320,7 @@ export default function GraphInspector({
                     <input type="checkbox" aria-label="검토 승인 예산 보존" checked={Boolean(draft.automation.reserveFinalizationBudget)} onChange={e=>change(g=>{g.automation!.reserveFinalizationBudget=e.target.checked;})}/>
                     단계별 마감으로 후속 검토·승인 시간 보존
                   </label>
+                  <label className="checkbox"><input type="checkbox" aria-label="일괄 프로세스 종료 차단" checked={Boolean(draft.automation.guardOwnedProcesses)} onChange={e=>change(g=>{g.automation!.guardOwnedProcesses=e.target.checked;})}/>프로세스 이름에 의한 일괄 종료 차단</label>
                   <label>
                     자동 수정 횟수
                     <input

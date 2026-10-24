@@ -34,6 +34,7 @@ for (const required of [
   "dist/src/core/inspection_evidence.js",
   "dist/src/core/test_source_guard.js",
   "dist/src/core/stage_budget.js",
+  "dist/src/core/process_command_policy.js",
   "dist/web/index.html",
   "dist/runtime_defaults.json",
   "scripts/fix-pty-permissions.js",

@@ -99,6 +99,11 @@ async function main() {
       try { await guarded["tool.execute.before"]({tool:"write"},{args:{filePath:path.join(project,"app.mjs"),content:"unexpected"}}); }
       catch(error) { prevented=String(error).includes("[AGENT_GRAPH_TEST_POLICY]"); }
       if(!prevented)throw Error("Installed test source guard did not prevent a native write.");
+      process.env.AGENT_GRAPH_KILO_CHECKS = JSON.stringify({cwd:project,commands:[],guardOwnedProcesses:true});
+      const processGuard=await plugin.server();let processPrevented=false;
+      try { await processGuard["tool.execute.before"]({tool:"bash"},{args:{command:'pkill -9 -f "node.*server"'}}); }
+      catch(error) { processPrevented=String(error).includes("[AGENT_GRAPH_UNSCOPED_TERMINATION]"); }
+      if(!processPrevented)throw Error("Installed implementation process guard failed.");
     } finally {
       if (previousProtocol === undefined) delete process.env.AGENT_GRAPH_KILO_CHECKS;
       else process.env.AGENT_GRAPH_KILO_CHECKS = previousProtocol;

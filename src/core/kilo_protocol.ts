@@ -1,10 +1,13 @@
 import { projectCommandKey } from "./verification_evidence";
 import { TEST_POLICY, testCommandAllowed } from "./test_source_guard";
+import { broadProcessTermination, UNSCOPED_TERMINATION } from "./process_command_policy";
 
 export interface KiloCheckProtocol {
   cwd: string;
   commands: string[];
   testSourcesReadOnly?: boolean;
+  guardOwnedProcesses?: boolean;
+  aliases?: Record<string,string>;
 }
 
 // Only display-only wrappers around an exact registered check are repaired.
@@ -16,6 +19,9 @@ const statusEcho = /^;\s*echo\s+(["'])exit:\s*\$\?\1\s*$/;
 
 export function registeredCheckCommand(command: string, protocol: KiloCheckProtocol): string {
   const boundary = command.search(/[|;]/);
+  const aliasBase=(boundary<0?command:command.slice(0,boundary)).trim().replace(/\s+2>&1\s*$/,"");
+  const alias=Object.entries(protocol.aliases??{}).find(([from,to])=>protocol.commands.includes(to)&&projectCommandKey(from,protocol.cwd)===projectCommandKey(aliasBase,protocol.cwd));
+  if(alias){if(boundary>=0&&!displayPipeline.test(command.slice(boundary).trim())&&!statusEcho.test(command.slice(boundary).trim()))throw Error("Registered verification aliases require a standalone foreground command.");return alias[1];}
   if (boundary < 0) return command;
   const base = command.slice(0, boundary).trim().replace(/\s+2>&1\s*$/, "");
   const registered = protocol.commands.find(c => projectCommandKey(c, protocol.cwd) === projectCommandKey(base, protocol.cwd));
@@ -29,6 +35,8 @@ export function registeredCheckCommand(command: string, protocol: KiloCheckProto
 export function kiloCheckHooks(protocol: KiloCheckProtocol) {
   return {
     "tool.execute.before": async (input: { tool: string }, output: { args: Record<string, unknown> }) => {
+      if(protocol.guardOwnedProcesses&&input.tool==="bash"&&typeof output.args.command==="string"&&broadProcessTermination(output.args.command,protocol.cwd))
+        throw Error(`${UNSCOPED_TERMINATION} Broad process-name termination is blocked BEFORE execution. Never use pkill, killall, taskkill /IM, Stop-Process -Name or kill with pgrep. Close server objects or the child processes this task actually started; use recorded owned PIDs only.`);
       if(protocol.testSourcesReadOnly&&/^(?:write|edit|multiedit|apply_patch|delete|move|rename)$/i.test(input.tool))
         throw Error(`${TEST_POLICY} Test role cannot edit product, test, package or frozen files. Return FAIL; implementation owns repairs.`);
       if (input.tool === "bash" && typeof output.args.command === "string")

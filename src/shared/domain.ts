@@ -41,7 +41,7 @@ export interface AgentGraphDocument {
   nodes: AgentNode[];
   edges: GraphEdge[];
   defaultBinding?: ExecutionBinding;
-  automation?: { maxRepairCycles: number; nativeApprovalReview: boolean; browserVerification?: boolean; verificationContract?: boolean; authoredNodeTests?:boolean; testSourceGuard?:boolean; reserveFinalizationBudget?:boolean };
+  automation?: { maxRepairCycles: number; nativeApprovalReview: boolean; browserVerification?: boolean; verificationContract?: boolean; authoredNodeTests?:boolean; testSourceGuard?:boolean; reserveFinalizationBudget?:boolean; guardOwnedProcesses?:boolean };
   entrypoints: {
     start: string | null;
     reentry: string | null;

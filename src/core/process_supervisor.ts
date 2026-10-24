@@ -502,7 +502,7 @@ export class ProcessSupervisor {
       mutations.observe(event);
       evidence.fileMutation ||= mutations.hasMutation;
       const policyReason=options.eventPolicy?.(event,evidence);
-      if(policyReason)void terminate("process_exit",policyReason.startsWith("[AGENT_GRAPH_TEST_FAILED]")?"process_exit":"role_violation",policyReason,false);
+      if(policyReason)void terminate("process_exit",policyReason.includes("[AGENT_GRAPH_UNSCOPED_TERMINATION]")?"tool_arguments":policyReason.startsWith("[AGENT_GRAPH_TEST_FAILED]")?"process_exit":"role_violation",policyReason,false);
       diagnosticCollector.observeEvent(event);
       const search =
         completedSearch(event) ??
