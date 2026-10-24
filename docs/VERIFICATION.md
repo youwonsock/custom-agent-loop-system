@@ -1,5 +1,28 @@
 # 구현 검증 및 수정 기록
 
+## 2026-10-24 의존성 취약점 수정과 전체 설치 회귀
+
+검증한 코드·lockfile·검사 커밋: `fe08bf2c9e8e1aff3270146f7a63ee93e4414747` (`codex/verified-completion`). Node 24.21.0 / npm 11.19.0 / macOS arm64의 깨끗한 커밋 상태에서 `verify:platform`과 `verify:browser`를 순차 실행했고 모두 exit 0이다. 이후 변경은 이 검증 기록뿐이다.
+
+- 운영 의존성 audit의 high 1(body-parser), moderate 1(fast-uri)을 해소했다. `body-parser 2.3.0 → 2.4.0`, SDK/MCP/Ajv의 `fast-uri 3.1.8 → 3.1.9`, Fastify의 두 소비 경로는 `4.2.2 → 4.2.3`으로 갱신했다. body-parser가 요구하는 `qs 6.16.0 → 6.16.1`을 포함해 lockfile의 패키지 경로 5개만 바뀌었으며 package.json·직접 의존성 버전은 유지했다.
+- 기존 fast-uri의 인코딩된 scheme 우회와 body-parser의 압축 요청 뒤 추가 데이터에 의한 프로세스 종료를 실제 재현했다. 수정 후 URI 소비 경로 3개와 gzip/deflate/br 요청·정상 JSON·공격 후 health 검사를 통과했다. 보안 검사는 개발 도구 suite와 새로 설치한 배포 패키지의 실제 의존성 모두에 적용하며 검사 fixture는 배포에 포함하지 않는다.
+- 별도 쓰기 가능한 npm 캐시로 `npm ci`를 성공시켰다. 취약점 숨김·audit 제외·강제 major 업데이트 없이 수정했으며 공개 API·저장 형식·실행 정책은 변경하지 않았다.
+
+| 검사 | 결과 |
+|---|---|
+| 운영 / 전체 의존성 audit | 각각 high 0, moderate 0, low 0, 전체 취약점 0 |
+| 코어·서버·CLI | 239 통과, Windows ConPTY 전용 1 제외, 실패 0 |
+| 개발 도구 / macOS 실행기 | 10/10(보안 회귀 2개 포함) / 4/4; 실행기 빌드 통과 |
+| Chromium GUI | 25/25; 기존 자동 복구·계획/승인·화면 상태 보존·SSE·지연 로딩 복구 포함 |
+| 초기 그래프 JavaScript | 449,118 / 500,000 bytes |
+| 타입·빌드·CLI smoke | 모두 통과 |
+| 패키지 내용·새 설치 smoke | 64개 파일; 실제 tarball 설치, CLI·모든 웹 청크·workspace·네 공급자 fixture API·보안 검사·정상 종료 통과 |
+| 정리 | 보안 probe PID 3개·해당 포트 종료, GUI 포트 4379 폐쇄, 설치 임시 경로 제거 확인 |
+
+원시 audit·의도된 취약 버전 재현 실패·최종 검사 명령/시간/종료 코드·로그·화면 14개·설치 의존성 버전·정리 근거는 [바탕화면 보고서](</Users/supercent/Desktop/agent graph test/dependency-audit-20261024-231300/TEST_RESULTS.md>)와 [기계 판독 결과](</Users/supercent/Desktop/agent graph test/dependency-audit-20261024-231300/RESULTS.json>)에 보존했다. 관련 공식 공지는 [body-parser](https://github.com/advisories/GHSA-27r3-jxmh-p828), [fast-uri scheme](https://github.com/advisories/GHSA-w74x-v6f9-j3xg), [host](https://github.com/advisories/GHSA-wjr9-j795-jxcr), [relative path](https://github.com/advisories/GHSA-xhq7-xmqj-769h), [suffix](https://github.com/advisories/GHSA-333x-w4r6-6crp)다.
+
+이번 실행은 fake CLI 기반 제품 회귀와 실제 HTTP/Chromium·패키지 설치 검사다. 실제 모델 추론 및 Windows/Linux 원격 CI는 재실행하지 않았으며 새 Actions 링크와 원격 push는 없다. 아래 과거 기록의 audit 실패는 당시 결과로 보존한다.
+
 ## 2026-10-24 고정 검증 계약·전체 예산 개선과 Kilo 실제 무인 완주
 
 실제 검증 코드 커밋: `bd51f91cad036a5bb828e83b02638fcca4b10c3f` (`codex/verified-completion`, 시작 시 깨끗한 상태). 구현은 `7de0a45` → `d819185` → `2c8e724` → `128971c` → `bd51f91`로 나누고, 이후 변경은 검증 문서다. 정책·형식은 [AUTONOMOUS_WORKFLOW.md](AUTONOMOUS_WORKFLOW.md)에 기록했다.
