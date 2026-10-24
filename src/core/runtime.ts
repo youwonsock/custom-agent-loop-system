@@ -574,6 +574,7 @@ export class GraphRuntime {
             a.failureKind === "tool_arguments" && /for the "write" tool/.test(a.message ?? ""))),
         ...(nextResume ? { resumeId: nextResume } : {}),
       });
+      if (await this.poll()) return null; // Includes bounded native config preflight time.
       const id = randomUUID(),
         logPath = path.join(
           this.store.visitDir(this.state.id, visit.id),

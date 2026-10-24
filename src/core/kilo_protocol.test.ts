@@ -9,6 +9,7 @@ import { CommandTracker, isVerificationCommand } from "./verification_evidence";
 import { buildInvocation } from "./invocation";
 import { createAutonomousGraph } from "./graph";
 import plugin = require("./kilo_protocol_plugin");
+import { kiloRecoveryAgents } from "./kilo_recovery";
 
 const cwd = "/owned/project with spaces";
 const nodeCommand = "npm test > verification/model-tests.txt 2>&1";
@@ -65,12 +66,16 @@ test("native hook execution preserves the actual nonzero test exit code as evide
 });
 
 test("Kilo guards are invocation-local and preserve native permission and plugin configuration", async t => {
+  const target=await fs.mkdtemp(path.join(os.tmpdir(),"kilo-recovery-config-"));
+  t.after(()=>fs.rm(target,{recursive:true,force:true}));
+  const binary=path.join(target,"kilo-config.cjs");
+  await fs.writeFile(binary,`process.stdout.write(JSON.stringify({default_agent:"configured-custom",agent:{"configured-custom":{}},auth:{secret:"never-copy-this"}}));`);
   const original=process.env.KILO_CONFIG_CONTENT;
   t.after(()=>{ if(original===undefined)delete process.env.KILO_CONFIG_CONTENT;else process.env.KILO_CONFIG_CONTENT=original; });
   process.env.KILO_CONFIG_CONTENT=JSON.stringify({plugin:["existing-plugin"],permission:{bash:"ask",webfetch:"deny"},tools:{custom:false}});
-  const graph=createAutonomousGraph(),binding={connectionId:"k",modelId:"kilo/kilo-auto/free"},connection={id:"k",type:"kilo" as const,label:"Kilo",binary:process.execPath};
+  const graph=createAutonomousGraph(),binding={connectionId:"k",modelId:"kilo/kilo-auto/free"},connection={id:"k",type:"kilo" as const,label:"Kilo",binary};
   for(const type of ["implementation","test","review"] as const){
-    const invocation=await buildInvocation(connection,binding,graph.nodes.find(n=>n.type===type)!,{prompt:"goal",cwd,fullAccess:false,allowedPaths:[],verificationCommands:protocol.commands,disableWrite:true});
+    const invocation=await buildInvocation(connection,binding,graph.nodes.find(n=>n.type===type)!,{prompt:"goal",cwd:target,fullAccess:false,allowedPaths:[],verificationCommands:protocol.commands,disableWrite:true});
     const config=JSON.parse(invocation.env.KILO_CONFIG_CONTENT!);
     assert.equal(config.permission.bash,type==="review"?"deny":"ask");assert.equal(config.permission.webfetch,"deny");
     assert.equal(config.plugin[0],"existing-plugin");
@@ -79,10 +84,22 @@ test("Kilo guards are invocation-local and preserve native permission and plugin
       assert.equal(config.tools.write,undefined); assert.equal(config.permission.edit,"deny");
     }else{
       assert.equal(config.plugin.length,2);assert.match(config.plugin[1],/kilo_protocol_plugin\.js$/);
-      assert.deepEqual(JSON.parse(invocation.env.AGENT_GRAPH_KILO_CHECKS!),protocol);
+      assert.deepEqual(JSON.parse(invocation.env.AGENT_GRAPH_KILO_CHECKS!),{cwd:target,commands:protocol.commands});
       assert.equal(config.tools.write,false);assert.equal(config.tools.custom,false);
+      assert.equal(config.agent["configured-custom"].tools.write,false);
+      assert.equal(config.agent.build.tools.write,false);assert.equal(config.agent.code.tools.write,false);
+      assert.doesNotMatch(JSON.stringify(invocation),/never-copy-this/);
       assert.match(invocation.args.at(-1)!,/write tool is disabled/);
     }
   }
   assert.equal(process.env.KILO_CONFIG_CONTENT,JSON.stringify({plugin:["existing-plugin"],permission:{bash:"ask",webfetch:"deny"},tools:{custom:false}}));
+});
+
+test("failed native configuration preflight exposes no raw config or credentials", async t => {
+  const root=await fs.mkdtemp(path.join(os.tmpdir(),"kilo-private-config-"));t.after(()=>fs.rm(root,{recursive:true,force:true}));
+  const file=path.join(root,"failed.cjs");await fs.writeFile(file,"process.stdout.write('private-provider-config');process.stderr.write('private-credential');process.exit(7)");
+  await assert.rejects(kiloRecoveryAgents(process.execPath,[file],root,process.env as Record<string,string>),error=>{
+    assert.match((error as Error).message,/could not resolve effective agent names/);
+    assert.doesNotMatch(String(error),/private-provider-config|private-credential/);return true;
+  });
 });

@@ -30,7 +30,10 @@ export class ToolFailureTracker {
     const key = `${String(part.tool)}:${error}`;
     this.count = this.previous === key ? this.count + 1 : 1;
     this.previous = key;
-    return this.count >= 3
+    // Two confirmed malformed writes are enough to select the invocation-local
+    // write fallback. Other unavailable tools retain the existing three-call cap.
+    const limit = part.tool === "write" ? 2 : 3;
+    return this.count >= limit
       ? `Stopped after ${this.count} consecutive invalid-argument failures for the "${String(part.tool)}" tool. ${error.slice(0, 1500)}`
       : null;
   }

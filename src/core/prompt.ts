@@ -36,6 +36,9 @@ export function buildRecoveryMessage(
       "The preceding CLI aborted repeated unavailable tools or malformed tool input. This is a fresh bounded attempt. Follow the current role and native tool schema, supply all required fields, never submit {} and never repeat the same invalid call. Kilo read-only roles use read/glob/grep, never exec/exec_command/bash/write/edit. Writable roles use bash(command, description) for checks and write(filePath, content) for files. Never run checks in a read-only role. Do not weaken checks or switch models.",
       ...errors,
     );
+    if (/for the "write" tool/.test(message)) lines.push(
+      "A repeated write schema failure selects a bounded Kilo fallback: write is unavailable in the next writable invocation, including Kilo's shared native edit group. Use the permitted bash tool with both command and description and small safely quoted heredocs to create or update files. Never invent the missing content of an empty call, request broader permissions, modify protected checks, or call the disabled write/edit tools again.",
+    );
   }
   return lines.join("\n");
 }

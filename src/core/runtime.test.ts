@@ -36,6 +36,8 @@ test("malformed tool input gets bounded schema feedback and a fresh-session retr
   const recovery = buildRecoveryMessage(failure.kind, failure.message, "Existing tests pass", [{ type: "tool_use", part: { tool: "write", state: { status: "error", error: 'filePath and content are required' } } }]);
   assert.match(recovery, /filePath and content are required/);
   assert.match(recovery, /never submit \{\}/);
+  assert.match(recovery, /write is unavailable/);
+  assert.match(recovery, /safely quoted heredocs/);
 });
 test("a provider capacity retry timeout keeps its timeout cause and provider explanation", () => {
   const r = result();

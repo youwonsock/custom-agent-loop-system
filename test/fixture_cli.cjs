@@ -25,7 +25,10 @@ try {
   model.isFree = metadata.isFree;
   model.cost = metadata.cost;
 } catch {}
-if (args.includes("app-server")) {
+if (args[0] === "debug" && args[1] === "config") {
+  // Native configuration preflight is not a model turn or a fixture call.
+  emit({default_agent:"fixture",agent:{fixture:{tools:{write:true}}}});
+} else if (args.includes("app-server")) {
   const input = readline.createInterface({ input: process.stdin });
   input.on("line", (line) => {
     const m = JSON.parse(line);
@@ -167,6 +170,11 @@ if (args.includes("app-server")) {
     }
     if (!prompt.includes("filePath and content are missing and required") || args.includes("--session")) {
       console.error("Error: missing schema feedback or reused invalid session");
+      process.exit(1);
+    }
+    const nativeConfig = JSON.parse(process.env.KILO_CONFIG_CONTENT || "{}");
+    if (nativeConfig.agent?.fixture?.tools?.write !== false || !prompt.includes("write tool is disabled")) {
+      console.error("Error: malformed-write recovery did not exclude write in the effective agent config");
       process.exit(1);
     }
   }

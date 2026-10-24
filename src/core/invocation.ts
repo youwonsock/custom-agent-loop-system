@@ -2,6 +2,7 @@ import { AgentNode, ExecutionBinding, LocalConnection } from "../shared/domain";
 import { resolveExecutable } from "./catalog";
 import * as path from "node:path";
 import { pathToFileURL } from "node:url";
+import { kiloRecoveryAgents } from "./kilo_recovery";
 export function isReadOnly(type: AgentNode["type"]): boolean {
   return ["planning", "review", "approval", "interrupt"].includes(type);
 }
@@ -110,8 +111,21 @@ export async function buildInvocation(
     delete env.AGENT_GRAPH_KILO_CHECKS;
     const guardedChecks = c.type === "kilo" && !readonly && opts.verificationCommands?.length;
     if (guardedChecks) env.AGENT_GRAPH_KILO_CHECKS = JSON.stringify({cwd: opts.cwd, commands: opts.verificationCommands});
+    const recoveryAgents: Record<string, {tools?: Record<string, unknown>}> = Object.create(null);
+    if (c.type === "kilo" && !readonly && opts.disableWrite) {
+      // Kilo resolves effective agents before plugin config hooks; write=false
+      // must be part of the invocation config, not a later hook mutation.
+      const names = await kiloRecoveryAgents(executable.file, executable.prefix, opts.cwd, env);
+      const nativeAgents = (native.agent as typeof recoveryAgents | undefined) ?? {};
+      for (const name of names) recoveryAgents[name] = {
+        ...nativeAgents[name], tools: {...nativeAgents[name]?.tools, write: false},
+      };
+    }
     env[key] = JSON.stringify({
       ...native,
+      ...(Object.keys(recoveryAgents).length ? {agent: {
+        ...((native.agent as Record<string, unknown>) ?? {}), ...recoveryAgents,
+      }} : {}),
       ...(guardedChecks ? {plugin: [
         ...(Array.isArray(native.plugin) ? native.plugin : []),
         pathToFileURL(path.join(__dirname, "kilo_protocol_plugin.js")).href,
@@ -132,7 +146,7 @@ export async function buildInvocation(
             ? "Use only permitted read-only tools: read(filePath), glob(pattern), grep(pattern) to inspect target files and prior actual test evidence. exec, exec_command, execute, bash, write and edit are unavailable in this read-only role; never call them or request shell/write permissions. For planning, use the supplied browser command/schema contract without reading the platform implementation."
             : "Use bash with command (string) and description (string) for shell commands, never exec or exec_command. " +
               (opts.disableWrite
-                ? "The write tool is disabled in this attempt after observed schema failures. Do not call write or invent content for a failed empty call. Use permitted bash commands with small, safely quoted heredocs to create files, or edit existing files; preserve frozen acceptance files. "
+                ? "The write tool is disabled in this attempt after observed schema failures; Kilo also excludes its shared native edit group. Do not call write/edit or invent content for a failed empty call. Use permitted bash commands with small, safely quoted heredocs to create or update files; preserve frozen acceptance files. "
                 : "The write tool requires both filePath (absolute path) and content (string). Keep each write small; never send {}. ") +
               "Preserve existing tests and use bash to run them before deciding whether additional coverage is necessary. " +
               (process.platform === "win32"
