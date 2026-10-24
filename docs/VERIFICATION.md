@@ -1,5 +1,26 @@
 # 구현 검증 및 수정 기록
 
+## 2026-10-24 Windows·Linux·macOS 원격 CI 통과와 main 반영
+
+병합 전 검증 커밋: `d545169f686599cf4915f396ddb031505b6c3c89`. [GitHub Actions CI #73](https://github.com/youwonsock/custom-agent-loop-system/actions/runs/40104250854)의 Windows·Ubuntu·macOS 플랫폼과 Ubuntu Chromium 작업 4개가 모두 success다. 각 작업은 깨끗한 체크아웃에서 Node 24.21.0 / npm 11.19.0으로 실행됐다.
+
+| 원격 검사 | 결과 |
+|---|---|
+| Windows x64 코어·서버·CLI | 241 통과, 제외 0, 실패 0; 실제 ConPTY 검사 포함 |
+| Linux x64 코어·서버·CLI | 240 통과, Windows ConPTY 전용 1 제외, 실패 0 |
+| macOS arm64 코어·서버·CLI | 240 통과, Windows ConPTY 전용 1 제외, 실패 0 |
+| 개발 도구 / macOS 실행기 | OS별 도구 10/10; macOS 실행기 4/4와 빌드 통과 |
+| Chromium GUI | 25/25; 초기 JavaScript 449,118 / 500,000 bytes |
+| 패키지 내용·새 설치·운영 audit | 세 OS 모두 통과; 설치 의존성 보안 재현 통과, 운영 취약점 0 |
+
+Windows에서 발견된 PTY 마스킹 실패는 재조립한 JSON 이벤트를 저장하기 전에 다시 마스킹하도록 수정했고, 줄바꿈으로 분리된 비밀값의 결정적 재현 검사를 추가했다. 서버 회귀의 직접 런타임 실행은 운영 worker 경로로 격리해 Windows ConPTY 핸들 때문에 테스트 프로세스가 남지 않도록 했다. 기존 판정 assertion과 Windows 네이티브 검사는 유지했다. 개발 테스트 출력은 TAP으로 바꿔 실패 상세를 즉시 보존한다. 공개 CLI·REST/SSE·저장 버전은 변경하지 않았다.
+
+처음 실행한 [CI #71](https://github.com/youwonsock/custom-agent-loop-system/actions/runs/40103108271)은 Windows 마스킹 실패와 종료 지연을 확인한 뒤 중단했고, [CI #72](https://github.com/youwonsock/custom-agent-loop-system/actions/runs/40104060716)는 후속 격리 수정으로 대체했다. 두 실행을 최종 통과 수에 합산하지 않는다. 로컬 빌드가 겹쳐 무효화한 실행과 수정 전 보안 재현 실패도 별도로 보존했다. 최종 커밋의 로컬 플랫폼·GUI는 순차 재검사하여 모두 통과했다.
+
+원격 artifact는 OS·커밋·실행 회차별로 90일 보존하며 바탕화면에도 ZIP과 원시 요약·로그·스크린샷을 내려받아 SHA-256을 검증했다. 성공한 35개 커밋의 이력을 fast-forward로 main에 반영했으며, 이 검증 기록을 제외한 소스는 위 검증 커밋과 같다. 원격 main 갱신과 main에서 재실행한 CI의 최종 결과는 [바탕화면 보고서](</Users/supercent/Desktop/agent graph test/ci-main-merge-20261024-233356/TEST_RESULTS.md>) 및 [기계 판독 결과](</Users/supercent/Desktop/agent graph test/ci-main-merge-20261024-233356/RESULTS.json>)에 기록한다.
+
+실제 모델 추론은 이번 CI에서 실행하지 않았다. 공급자 기능은 fake CLI fixture로 검사했으며 실제 HTTP·Chromium·npm 설치 검사는 구분한다. 로컬 테스트 서버와 설치 임시 경로 정리를 확인했다. 이전 실제 Kilo 결과와 과거 실패 기록은 보존한다.
+
 ## 2026-10-24 의존성 취약점 수정과 전체 설치 회귀
 
 검증한 코드·lockfile·검사 커밋: `fe08bf2c9e8e1aff3270146f7a63ee93e4414747` (`codex/verified-completion`). Node 24.21.0 / npm 11.19.0 / macOS arm64의 깨끗한 커밋 상태에서 `verify:platform`과 `verify:browser`를 순차 실행했고 모두 exit 0이다. 이후 변경은 이 검증 기록뿐이다.
