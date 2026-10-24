@@ -169,6 +169,14 @@ export class CliDiagnosticError extends Error {
 
 export class CliDiagnosticCollector {
   readonly diagnostics = emptyCliDiagnostics();
+  private repeatedFailure: { key: string; count: number } | null = null;
+  private lastFailureLine: string | null = null;
+  retryFailure: CliDiagnostic | null = null;
+  resetRetryFailures(): void {
+    this.repeatedFailure = null;
+    this.lastFailureLine = null;
+    this.retryFailure = null;
+  }
   private finalError(error: unknown): void {
     const next = cliDiagnostic(error),
       previous = this.diagnostics.terminalError;
@@ -186,6 +194,8 @@ export class CliDiagnosticCollector {
     this.diagnostics.terminalError = next;
   }
   observeEvent(event: Obj): void {
+    const session = event.sessionID ?? event.sessionId;
+    if (typeof session === "string" && session.startsWith("title-")) return;
     // Read only known execution-level error fields. Tool errors, embedded
     // documents and assistant text are deliberately not traversed.
     if (event.type === "error" || event.type === "turn.failed") {
@@ -231,9 +241,27 @@ export class CliDiagnosticCollector {
     // Kilo's native logger writes logfmt alongside JSON events. Only ERROR
     // records are diagnostics; tool output and assistant text are not scanned.
     if (/^timestamp=\S+ level=ERROR\b/.test(line)) {
+      // Title generation is a separate request with separate credentials. Keep
+      // its raw log, but never label the current coding request with its error.
+      if (/\bsession\.id="?title-|\bagent="?title\b/.test(line)) return;
       const value = line.match(/\berror\.error=("(?:[^"\\]|\\.)*")/);
-      if (value) {
-        try { this.diagnostics.plainError = cliDiagnostic(JSON.parse(value[1]!)); } catch { /* keep raw log */ }
+      const message = line.match(/\berror\.error\.message=("(?:[^"\\]|\\.)*")/);
+      const code = line.match(/\berror\.error\.code=(\d{3})\b/);
+      if (value || message) {
+        try {
+          const next = cliDiagnostic({
+            message: JSON.parse((message ?? value)![1]!),
+            ...(code ? { statusCode: Number(code[1]) } : {}),
+          });
+          this.diagnostics.plainError = next;
+          if (!["network", "rate_limited", "quota_exhausted"].includes(next.kind)) this.resetRetryFailures();
+          if (["network", "rate_limited", "quota_exhausted"].includes(next.kind) && line !== this.lastFailureLine) {
+            const key = `${next.kind}:${next.statusCode}:${next.message}`;
+            this.repeatedFailure = { key, count: this.repeatedFailure?.key === key ? this.repeatedFailure.count + 1 : 1 };
+            this.lastFailureLine = line;
+            if (this.repeatedFailure.count >= 3) this.retryFailure = next;
+          }
+        } catch { /* malformed logger fields remain raw log only */ }
       }
       return;
     }

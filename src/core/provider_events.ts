@@ -126,6 +126,12 @@ function progressIdentity(
   assistantText: string | null,
 ): string | null {
   const type = typeof event.type === "string" ? event.type : "";
+  // A provider retry can emit fresh step IDs indefinitely without generating
+  // any answer. Lifecycle notifications are transport, not useful progress.
+  if (["step_start", "step_finish"].includes(type)) return null;
+  if (type === "text" && !assistantText?.trim()) return null;
+  if (type === "tool_use" && ["failed", "error", "cancelled"].includes(toolEventStatus(event) ?? ""))
+    return null;
   const recognized = [
     "text",
     "tool_use",

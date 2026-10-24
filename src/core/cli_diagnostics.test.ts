@@ -180,3 +180,30 @@ test("explicit upstream credential failures retry without treating operator auth
   for (const message of ["Invalid credential", "Invalid API key", "Upstream authentication failed", "Please fix credentials"])
     assert.notEqual(cliDiagnostic(message).kind, "network", message);
 });
+
+
+test("Kilo diagnostics isolate auxiliary title errors and parse numeric primary logfmt failures", () => {
+  const c = new CliDiagnosticCollector();
+  c.observeLine('timestamp=1 level=ERROR session.id=title-ses_helper agent=title error.error="Invalid API key"');
+  c.observeEvent({type:"error",sessionID:"title-ses_helper",error:{message:"Unauthorized",statusCode:401}});
+  assert.equal(JSON.stringify(c.diagnostics.plainError), "null");
+  assert.equal(JSON.stringify(c.diagnostics.terminalError), "null");
+  for (let n=0;n<3;n++) c.observeLine(`timestamp=${n} level=ERROR session.id=ses_main error.error.code=504 error.error.message="Upstream idle timeout exceeded"`);
+  assert.equal(c.diagnostics.plainError?.kind, "network");
+  assert.equal(c.retryFailure?.statusCode, 504);
+  c.resetRetryFailures();
+  assert.equal(c.retryFailure, null);
+  c.observeLine('timestamp=4 level=ERROR session.id=ses_main error.error="Invalid API key"');
+  assert.equal(c.diagnostics.plainError?.kind, "auth");
+});
+
+test("duplicate logger errors do not consume retries and real progress resets a failure streak", () => {
+  const c = new CliDiagnosticCollector();
+  const error = 'timestamp=1 level=ERROR session.id=ses_main error.error.code=504 error.error.message="Upstream idle timeout exceeded"';
+  for(let n=0;n<10;n++) c.observeLine(error);
+  assert.equal(c.retryFailure,null);
+  c.resetRetryFailures();
+  c.observeLine(error.replace('timestamp=1','timestamp=2'));
+  c.observeLine(error.replace('timestamp=1','timestamp=3'));
+  assert.equal(c.retryFailure,null);
+});

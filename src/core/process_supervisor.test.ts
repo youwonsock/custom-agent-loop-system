@@ -311,3 +311,16 @@ test("permission denial correlation excludes unexecuted writes but retains poten
   assert.equal(partial.evidence.fileMutation, true);
   assert.equal(partial.outcome, "succeeded");
 });
+
+
+test("retry step IDs do not renew idle time, and repeated primary failures stop before idle", async () => {
+  const noise = await runFake("retry-step-noise", { transport: 750, idle: 250, phase: 1500 });
+  assert.equal(noise.outcome, "idle_timeout");
+  const errors = await runFake("primary-provider-failures", { transport: 750, idle: 1500, phase: 2500 });
+  assert.equal(errors.failureKind, "network");
+  assert.match(errors.failureMessage!, /3 repeated provider failures/);
+  assert.equal(errors.diagnostics.plainError?.statusCode, 504);
+  const tools = await runFake("unavailable-tools", { transport: 750, idle: 1500, phase: 2500 });
+  assert.equal(tools.failureKind, "tool_arguments");
+  assert.match(tools.failureMessage!, /3 consecutive/);
+});

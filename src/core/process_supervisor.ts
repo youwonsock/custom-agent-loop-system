@@ -40,6 +40,7 @@ import {
   isStructurallyCompleteJson,
 } from "./process_output";
 import { normalizeProviderEvent } from "./provider_events";
+import { ToolFailureTracker } from "./tool_failures";
 import { terminateProcessTreeBounded } from "./process_lifecycle";
 import type { Activity } from "../shared/execution_types";
 // Preserve imports used by existing integrations.
@@ -199,6 +200,7 @@ export class ProcessSupervisor {
     const evidence = emptyEvidence();
     const mutations = new MutationTracker();
     const diagnosticCollector = new CliDiagnosticCollector();
+    const toolFailures = new ToolFailureTracker();
     const searchIds = new Set<string>();
     const pendingClaudeSearches = new Set<string>();
     const autoInjected: {
@@ -468,8 +470,8 @@ export class ProcessSupervisor {
     const markMeaningfulProgress = (
       identity: string,
       nextActivity: SupervisorProgress["activity"],
-    ): void => {
-      if (seenProgress.has(identity)) return;
+    ): boolean => {
+      if (seenProgress.has(identity)) return false;
       seenProgress.add(identity);
       seenProgressOrder.push(identity);
       if (seenProgressOrder.length > 512) {
@@ -481,6 +483,7 @@ export class ProcessSupervisor {
       resetActivityTimer();
       armProgressWindowTimer();
       notifyProgress();
+      return true;
     };
 
     const commands = new CommandTracker();
@@ -531,8 +534,11 @@ export class ProcessSupervisor {
       }
       const identity = normalized.progressId;
       const nextActivity = normalized.activity;
-      if (identity && nextActivity)
-        markMeaningfulProgress(identity, nextActivity);
+      if (identity && nextActivity && markMeaningfulProgress(identity, nextActivity)) {
+        diagnosticCollector.resetRetryFailures();
+      }
+      const toolFailure = toolFailures.observe(event);
+      if (toolFailure) void terminate("process_exit", "tool_arguments", toolFailure, false);
       notifyProgress();
     };
 
@@ -563,6 +569,9 @@ export class ProcessSupervisor {
 
       const lower = trimmed.toLowerCase();
       diagnosticCollector.observeLine(trimmed);
+      const retryFailure = diagnosticCollector.retryFailure;
+      if (retryFailure)
+        void terminate("process_exit", retryFailure.kind, `Stopped after 3 repeated provider failures without useful progress: ${retryFailure.message}`, false);
       if (/^timestamp=\S+ level=(?:INFO|WARN|ERROR)\b/.test(trimmed)) {
         const session = trimmed.match(/\bsession\.id=(ses_[A-Za-z0-9]+)/);
         if (session) cliSessionId = session[1]!;

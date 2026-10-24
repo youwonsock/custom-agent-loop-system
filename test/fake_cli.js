@@ -21,6 +21,21 @@ switch (mode) {
     }, 40);
     break;
   }
+  case "retry-step-noise": {
+    let n=0;
+    setInterval(() => { emit({type:"step_start",part:{id:`retry-${n++}`},sessionID:"ses_retryNoise"}); emit({type:"step_finish",part:{id:`done-${n++}`}}); }, 25);
+    break;
+  }
+  case "primary-provider-failures": {
+    let n=0;
+    setInterval(() => {console.error(`timestamp=${n++} level=ERROR message="stream error" session.id=ses_primary error.error.code=504 error.error.message="Upstream idle timeout exceeded"`);emit({type:"step_start",part:{id:`retry-${n}`}});}, 30);
+    break;
+  }
+  case "unavailable-tools": {
+    let n=0;
+    setInterval(() => emit({type:"tool_use",part:{id:`bad-${n++}`,tool:"exec",state:{status:"error",error:"Model tried to call unavailable tool 'exec'"}}}),30);
+    break;
+  }
   case "native-provider-retries":
     console.error('timestamp=2026-10-22T16:51:12Z level=INFO message=stream session.id=ses_nativeRetry');
     setInterval(() => console.error('timestamp=2026-10-22T16:51:13Z level=ERROR message="stream error" error.error="Providers for this model are currently at capacity."'), 30);
@@ -231,11 +246,7 @@ switch (mode) {
         process.exit(0);
         return;
       }
-      emit({
-        type: "step_start",
-        id: `continuous-${progress++}`,
-        sessionID: "continuous-session",
-      });
+      assistant(`Completed work unit ${progress}`, `continuous-${progress++}`);
     }, 80);
     break;
   }
