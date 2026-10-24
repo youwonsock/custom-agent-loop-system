@@ -1,5 +1,26 @@
 # 구현 검증 및 수정 기록
 
+## 2026-10-25 자체 Node 영역 계약 강화와 Kilo 실제 무인 검증
+
+실제 모델 실행 코드는 `6c40ebbfa16569f8353dcf21dd0d141a0cb0823e`, 실행 종료 후 진단·네이티브 읽기 호환성 보완 코드는 `4716c1d36b26f360ff2f57a5c6e12e553d9798c3`이다. 새 자율 npm 계약은 자체 Node 영역별 파일·필수 case·보호된 결함 adapter를 요구한다. 제공 인수 검사를 제외한 복사본에서 baseline·무결함 대조군·제품 결함의 실제 ERR_ASSERTION을 검사하고, 현재 소스/테스트 해시·실제 native 명령·영역별 판단을 결합한다. 검토와 최종 승인은 자체 파일 및 품질 보고서의 완료된 native 읽기도 요구한다. 기존 필드 없는 그래프·저장 버전·REST/SSE는 유지했다.
+
+실제 Kilo Auto Free 세션 `f570c4e3-2032-434f-b433-1ae9824366ff`는 **2026-10-25 03:27:33–04:27:33 KST, 60분 / CLI 8회** 후 전체 시간 예산 소진으로 **PAUSED**다. 목표/설정/예산 변경·승인·재개·워크플로 STOP·운영자의 대상 코드 수정은 모두 0회였다. 요청 모델은 계속 `kilo/kilo-auto/free`이고 native 무료 판정에 따른 추가 복구 1회를 사용했다. 실제 계정 청구액은 측정하지 않았다.
+
+| 범위 | 결과 |
+|---|---|
+| 실제 자체 Node | 4영역 필수 25개·제품 결함 12개, 품질 8회 중 2회 통과 이력. 후속 game/app 수정으로 최종 소스 해시와 보고가 불일치하며 현재 유효한 Test PASS는 없음 |
+| 실제 독립 검사 | 엔진 13묶음/4000비교, 컨트롤러·저장 최종 12/12, 실제 Chromium 최종 4/4. 각 시점의 결과이며 최종 승인 아님 |
+| 미완료 | 플랫폼 브라우저 39단계, 수락된 정식 테스트 PASS, 읽기 전용 검토, 최종 승인 모두 미도달 |
+| 차단·정리 | 테스트 attempt의 fileMutation=true 보존, 전역 성공 게이트 불충족. 고정 6개 파일 유지. 관측 PID 215개 종료·포트 12개 폐쇄·소유 잔류 0, PAUSED 유지 |
+| 보완 코드 로컬 회귀 | Node 24.21.0 macOS arm64: 코어 258 통과 / Windows ConPTY 전용 1 제외 / 실패 0; GUI 25/25, 도구 10/10, 실행기 4/4 |
+| 패키지·실패 probe | 72파일·새 설치 smoke 통과, 운영 audit 0건. 의도된 HTTP 정리 누락은 exit 1과 timeout/정리 안내 유지, worker 3개 종료 확인 |
+
+새 계약은 초기의 타입 확인 중심 컨트롤러 테스트와 HTTP 실패 경로의 서버 정리 누락을 실제로 차단했다. Kilo가 자체 assertion·raw HTTP·정리를 보완했으나 이후 테스트 역할에서 제품 수정이 이어지고 전체 예산이 소진됐다. 과거 Node 통과 출력과 최신 소스의 유효한 증거를 구분하며 이 실행을 SUCCESS 또는 완전 무인 운용 안정성의 증거로 취급하지 않는다. 빈 assertion을 거부한 뒤 자동 보완·독립 검토·최종 승인까지 가는 경로는 fake CLI/실제 Node 검증기 회귀에서 별도로 통과했다.
+
+`4716c1d`는 큰 보고서의 출력 절단에 대비한 요약/원인 안내와 단독 exit-zero Kilo/OpenCode shell 읽기를 보완했다. 이 코드로 실제 모델을 재실행하지 않았으며 전체 로컬 회귀·설치·실패 probe와 실제 로그 재생만 수행했다. Windows/Linux 신규 원격 CI·push·main 병합은 수행하지 않았다. [기준 main CI](https://github.com/youwonsock/custom-agent-loop-system/actions/runs/40105004387)는 이번 코드의 검증 결과와 별도다.
+
+[바탕화면 상세 보고서](</Users/supercent/Desktop/agent graph test/kilo-node-contract-20261025-025134/TEST_RESULTS.md>) · [기계 판독 결과](</Users/supercent/Desktop/agent graph test/kilo-node-contract-20261025-025134/RESULTS.json>)에 실제 세션/로그·품질 실패와 통과 이력·Chromium 스크린샷·고정 해시·정리 근거·개발자 calibration/probe를 구분해 보존했다.
+
 ## 2026-10-25 완료 프로토콜·검사 종료코드·write 복구 수정과 Kilo 실제 무인 완주
 
 실제 검증 코드 `819f96b3cf599ce6bb6a075654bd0321dcc295c6` (`codex/autonomous-protocol-recovery`), main 기준 `f41b3974a3470424d36da37ede43eed22c4df6ac`. 자율 구현의 평문 마지막 인라인 표식만 제한 정규화하고 원시 응답을 보존한다. 등록 Kilo 검사의 표시용 파이프/상태 echo는 native 실행 전에 정확한 등록 명령으로 교체하되 기존 bash 권한 검토와 엄격한 receipt 게이트는 유지한다. write 스키마 오류 2회 뒤에는 유효 에이전트의 write/edit 도구를 호출별 설정에서 제외하고 허용된 bash로 이어간다. 전역 CLI 설정·모델·공개 API·저장 형식·의존성 버전은 유지했다.
