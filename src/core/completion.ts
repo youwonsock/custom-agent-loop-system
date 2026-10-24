@@ -81,6 +81,15 @@ export function validateCompletion(
   cwd?: string,
 ): Completion {
   let output = result.assistantText.replace(/\r\n/g, "\n").trim();
+  // A terminal prose sentinel ends implementation, never approves the product.
+  // Canonicalize only the observed autonomous implementation variation; quoted,
+  // repeated, fenced or nonterminal markers and all audit roles stay strict.
+  if (
+    automation && node.type === "implementation" &&
+    (output.match(/\[PHASE_DONE\]/g) ?? []).length === 1 &&
+    !output.includes("```") && !output.includes("~~~") &&
+    /[.!?。][\t ]+\[PHASE_DONE\]$/.test(output)
+  ) output = output.replace(/[\t ]+\[PHASE_DONE\]$/, "\n[PHASE_DONE]");
   const answer: Completion = {
     valid: true,
     reason: null,

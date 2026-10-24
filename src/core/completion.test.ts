@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createGraph } from "./graph";
+import { createGraph, createAutonomousGraph } from "./graph";
 import { validateCompletion, parsePlans } from "./completion";
 import { deriveRequirementLedger } from "./requirement_ledger";
 import { emptyEvidence } from "./event_evidence";
@@ -25,6 +25,33 @@ const result = (text: string): SupervisorResult => ({
   autoInjected: [],
   evidence: emptyEvidence(),
   diagnostics: emptyCliDiagnostics(),
+});
+test("autonomous implementation accepts only an unambiguous terminal prose marker without approving tests", () => {
+  const graph = createAutonomousGraph(), requirements = deriveRequirementLedger("build acceptance").items;
+  const implementation = graph.nodes.find(n => n.type === "implementation")!;
+  for (const text of [
+    "All checks pass. Implementation complete. [PHASE_DONE]",
+    "All fixed requirements satisfied based on observed evidence. Implementation complete with all checks passing. [PHASE_DONE]",
+    "구현을 완료했습니다.\r\n검사 결과를 확인했습니다. [PHASE_DONE]",
+  ]) {
+    const original = result(text);
+    const c = validateCompletion(implementation, original, "goal", requirements, [], [], graph.automation);
+    assert.equal(c.valid, true); assert.equal(c.verdict, null);
+    assert.ok(c.output.endsWith("\n[PHASE_DONE]"));
+    assert.equal(original.assistantText, text, "raw assistant evidence is preserved");
+    assert.equal(validateCompletion(implementation, original, "goal", requirements).valid, false, "manual profiles remain strict");
+  }
+  for (const text of ["echo [PHASE_DONE]", "done [PHASE_DONE]", "Done. [PHASE_DONE] trailing", "Done.", "Done. `[PHASE_DONE]`", "```\nDone. [PHASE_DONE]", "Done. [PHASE_DONE]\nAgain. [PHASE_DONE]"]) {
+    assert.equal(validateCompletion(implementation, result(text), "goal", requirements, [], [], graph.automation).valid, false, text);
+  }
+  for (const type of ["test", "review", "approval"] as const) {
+    const node = graph.nodes.find(n => n.type === type)!;
+    assert.equal(validateCompletion(node, result("Done. [PHASE_DONE]"), "goal", requirements, [], [], graph.automation).valid, false);
+  }
+  for (const changed of [
+    { ...result("Done. [PHASE_DONE]"), exitCode: 1 },
+    { ...result("Done. [PHASE_DONE]"), outcome: "idle_timeout" as const, failureKind: "idle_timeout" as const },
+  ]) assert.equal(validateCompletion(implementation, changed, "goal", requirements, [], [], graph.automation).valid, false);
 });
 test("assistant completion and requirement gates reject weak PASS or APPROVED", () => {
   const g = createGraph(),
