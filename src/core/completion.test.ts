@@ -196,15 +196,35 @@ for (const type of ["review", "approval"] as const) test(`${type} cannot approve
 });
 
 
-test("planning recovery identifies missing full IDs per option without accepting shorthand or prefixes", () => {
+test("planning recovery identifies unresolved IDs per option without accepting numeric prefixes", () => {
   const requirements = deriveRequirementLedger("one\ntwo").items;
   const node = createGraph().nodes[0]!;
   node.planning = { requiresApproval: false, optionsCount: 1 };
-  for (const text of ["REQ-001/002", "REQ-001 REQ-0020"]) {
+  for (const text of ["REQ-001/003", "REQ-001 REQ-0020"]) {
     const c = validateCompletion(node, result(`## OPTION 1: Plan\n${text}\n[PHASE_DONE]`), "goal", requirements);
     assert.equal(c.valid, false);
     assert.match(c.reason!, /OPTION 1: REQ-002/);
     assert.match(c.reason!, /REQ-006, REQ-007/);
   }
   assert.equal(validateCompletion(node, result("## OPTION 1: Plan\nREQ-001 first check\nREQ-002 second check\n[PHASE_DONE]"), "goal", requirements).valid, true);
+});
+
+
+test("plan-only reference normalization accepts known lists and ranges without rewriting output", () => {
+ const requirements=deriveRequirementLedger("one\ntwo\nthree").items,node=createGraph().nodes[0]!;
+ node.planning={requiresApproval:false,optionsCount:1};
+ for(const refs of ["REQ-001/002/003","REQ-001,002,003","REQ-001..003","REQ-001–REQ-003"]){
+  const text=`## OPTION 1: Strategy\n${refs}: implement and verify the original goal\n[PHASE_DONE]`;
+  const c=validateCompletion(node,result(text),"goal",requirements);
+  assert.equal(c.valid,true,refs);assert.equal(c.output,text);
+ }
+ for(const refs of ["REQ-001..999","REQ-003..001","REQ-001/003","REQ-001 REQ-0020"])
+  assert.equal(validateCompletion(node,result(`## OPTION 1: Strategy\n${refs}\n[PHASE_DONE]`),"goal",requirements).valid,false,refs);
+});
+test("plan abbreviation support never expands test evidence or permits success without fixed-ID blocks", () => {
+ const requirements=deriveRequirementLedger("one\ntwo").items;
+ const r=result("[REQUIREMENT_EVIDENCE]\nREQ_ID: REQ-001/002\nSTATUS: SATISFIED\nEVIDENCE: observed\nCHECK_COMMAND: npm test\n[/REQUIREMENT_EVIDENCE]\nVERDICT: PASS\n[PHASE_DONE]");
+ r.evidence.commands=[{id:"test",command:"npm test",exitCode:0,environmentError:null}];
+ const c=validateCompletion(createGraph().nodes[2]!,r,"goal",requirements);
+ assert.equal(c.valid,false);assert.notEqual(c.verdict,"PASS");
 });

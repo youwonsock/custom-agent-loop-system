@@ -35,6 +35,27 @@ export function parsePlans(output: string): PlanChoice[] {
     revision: 1,
   }));
 }
+/** Plan references are prose, not execution evidence. Recognize explicit lists
+ * and bounded ranges of known IDs without changing the model's original plan. */
+function planReferences(body: string, requirements: RequirementItem[]): Set<string> {
+  const ids = new Set(body.match(/\bREQ-\d+\b/g) ?? []);
+  const known = new Set(requirements.map(r => r.id));
+  const id = (digits: string) => `REQ-${digits}`;
+  for (const match of body.matchAll(/\bREQ-\d{3,}(?:\s*[\/,]\s*(?:REQ-)?\d{3,}\b)+/g))
+    for (const number of match[0].matchAll(/\d{3,}\b/g))
+      if (known.has(id(number[0]))) ids.add(id(number[0]));
+  for (const match of body.matchAll(/\bREQ-(\d{3,})\s*(?:\.\.|[-–—~])\s*(?:REQ-)?(\d{3,})\b/g)) {
+    if (!known.has(id(match[1]!)) || !known.has(id(match[2]!))) continue;
+    const start = Number(match[1]), end = Number(match[2]);
+    if (end < start) continue;
+    // Iterate only the finite ledger, never a model-supplied numeric range.
+    for (const r of requirements) {
+      const n = Number(r.id.slice(4));
+      if (n >= start && n <= end) ids.add(r.id);
+    }
+  }
+  return ids;
+}
 export interface Completion {
   valid: boolean;
   reason: string | null;
@@ -152,12 +173,12 @@ export function validateCompletion(
     )
       return fail(`완전한 계획 선택지 ${count}개가 순서대로 필요합니다.`);
     const missing = answer.plans.flatMap((p) => {
-      const ids = new Set(p.body.match(/\bREQ-\d+\b/g) ?? []);
+      const ids = planReferences(p.body, requirements);
       const absent = requirements.filter((r) => !ids.has(r.id));
       return absent.length ? [`OPTION ${p.id}: ${absent.map((r) => r.id).join(", ")}`] : [];
     });
     if (missing.length)
-      return fail(`계획별 필수 REQ ID 누락: ${missing.join("; ")}. 각 ID를 전체 표기로 작성하세요 (예: REQ-006, REQ-007). REQ-006/007 같은 축약은 허용하지 않습니다. 구현이나 도구 재실행 없이 전체 계획 보고만 보완하세요.`);
+      return fail(`계획별 필수 REQ ID 누락: ${missing.join("; ")}. 해결되지 않은 각 ID를 전체 표기로 작성하세요 (예: REQ-006, REQ-007). 알려진 ID의 명확한 목록·범위만 참조로 해석합니다. 구현이나 도구 재실행 없이 전체 계획 보고만 보완하세요.`);
   }
   if (node.type === "test") {
     const testOutput = repairableBlocker
