@@ -1,5 +1,27 @@
 # 구현 검증 및 수정 기록
 
+## 2026-10-25 완료 프로토콜·검사 종료코드·write 복구 수정과 Kilo 실제 무인 완주
+
+실제 검증 코드 `819f96b3cf599ce6bb6a075654bd0321dcc295c6` (`codex/autonomous-protocol-recovery`), main 기준 `f41b3974a3470424d36da37ede43eed22c4df6ac`. 자율 구현의 평문 마지막 인라인 표식만 제한 정규화하고 원시 응답을 보존한다. 등록 Kilo 검사의 표시용 파이프/상태 echo는 native 실행 전에 정확한 등록 명령으로 교체하되 기존 bash 권한 검토와 엄격한 receipt 게이트는 유지한다. write 스키마 오류 2회 뒤에는 유효 에이전트의 write/edit 도구를 호출별 설정에서 제외하고 허용된 bash로 이어간다. 전역 CLI 설정·모델·공개 API·저장 형식·의존성 버전은 유지했다.
+
+실제 Kilo Auto Free 세션 `9933be52-2234-4cc1-8faa-2286736f53e0`는 **2026-10-25 02:01:09–02:32:15 KST, 31분 06.8초 / 10회**로 제작 → 정식 테스트 PASS → 읽기 전용 검토 APPROVED → 최종 승인 APPROVED → SUCCESS에 도달했다. 최초 60분/24회 예산을 유지했고 승인·재개·피드백·소스 수정·예산 변경 0회였다. 요청 모델은 `kilo/kilo-auto/free`이며 무료 복구 직전 native isFree=true를 재확인했다. 계정 청구액은 측정하지 않았다.
+
+| 검사 | 결과 |
+|---|---|
+| 실제 표식·종료코드 | 원문 `All checks pass. [PHASE_DONE]` 정규화, 정식 테스트 역할의 등록 명령 5개 exit 0, 이전 실제 실패 exit 1 네 건 보존 |
+| 실제 게임 | 모델 자체 엔진 smoke 3/3, 고정 엔진 13묶음/4000비교, 상태 12/12, 실제 Chromium 4/4, 브라우저 39단계 통과; 고정 5개 파일·최종 소스 해시 유지 |
+| 로컬 Node 24 코어·서버·CLI | 247 통과 / Windows ConPTY 전용 1 제외 / 실패 0 |
+| Chromium GUI / 도구 / macOS 실행기 | 25/25 / 10/10 / 4/4; 타입·빌드·CLI smoke 통과 |
+| 패키지 / 운영 audit | 새 설치본의 native 훅·write 복구·기존 기능·보안 smoke 통과, 취약점 0 |
+| 종료 | 소유 관찰 프로세스 17개 종료, 포트 8개 폐쇄, 잔류 0; SUCCESS 유지·워크플로 STOP 0회 |
+
+코어/GUI 전체 회귀 커밋은 `1153ba980918164d22ead2dd25fff8829c5b390b`이며 이후 `819f96b`는 패키지 검사 2개만 보강했고 런타임 소스는 동일하다. 새 패키지 검사는 `819f96b`에서 통과했다. 개발 중 fixture의 설정 조회 미지원 실패도 보존하고 수정 후 전체 회귀를 다시 통과했다.
+
+실제 공급자 오류 로그 14건과 계획 형식 보완 2회가 있었고 무료 추가 복구 1회로 완주했다. write 인수 오류는 실 실행에서 0건으로, 해당 대체 경로는 회귀·실제 Kilo 설정 probe에서만 확인했다. 모델 자체 Node 3개는 엔진 smoke에 국한되며 컨트롤러/저장/HTTP의 자체 테스트 작성 폭은 추가 개선 대상이다. 한 번의 고정 계약 완주와 일반 작업의 가용성·테스트 설계 품질을 구분한다.
+
+새 커밋의 Windows/Linux 원격 CI·main 병합·push는 이번 요청에서 수행하지 않았다. [기준 main CI](https://github.com/youwonsock/custom-agent-loop-system/actions/runs/40105004387)는 이번 모델 실행과 별도다. [바탕화면 보고서](</Users/supercent/Desktop/agent graph test/kilo-protocol-recovery-20261025-014350/TEST_RESULTS.md>) · [기계 판독 결과](</Users/supercent/Desktop/agent graph test/kilo-protocol-recovery-20261025-014350/RESULTS.json>)에 원시 로그·실패/성공 이력·스크린샷·정리 근거를 보존했다.
+
+
 ## 2026-10-24 Windows·Linux·macOS 원격 CI 통과와 main 반영
 
 병합 전 검증 커밋: `d545169f686599cf4915f396ddb031505b6c3c89`. [GitHub Actions CI #73](https://github.com/youwonsock/custom-agent-loop-system/actions/runs/40104250854)의 Windows·Ubuntu·macOS 플랫폼과 Ubuntu Chromium 작업 4개가 모두 success다. 각 작업은 깨끗한 체크아웃에서 Node 24.21.0 / npm 11.19.0으로 실행됐다.
