@@ -41,7 +41,7 @@ export interface AgentGraphDocument {
   nodes: AgentNode[];
   edges: GraphEdge[];
   defaultBinding?: ExecutionBinding;
-  automation?: { maxRepairCycles: number; nativeApprovalReview: boolean; browserVerification?: boolean; verificationContract?: boolean };
+  automation?: { maxRepairCycles: number; nativeApprovalReview: boolean; browserVerification?: boolean; verificationContract?: boolean; authoredNodeTests?:boolean };
   entrypoints: {
     start: string | null;
     reentry: string | null;
@@ -124,6 +124,25 @@ export interface VerificationManifest {
   version: 1;
   protectedFiles: string[];
   checks: Array<{ id: string; command: string; requirements: string[] }>;
+  nodeTests?: NodeTestPolicy;
+}
+export interface NodeTestPolicy {
+  checkId: string;
+  suiteCheckId: string;
+  scopes: Array<{
+    id: string;
+    file: string;
+    requirements: string[];
+    cases: string[];
+    challenges: Array<{id: string; adapter: string; targets: string[]}>;
+  }>;
+}
+export interface NodeTestProof {
+  version: 1;
+  runId: string;
+  reportDigest: string;
+  sourceHashes: Record<string, string>;
+  scopes: Array<{id: string; file: string; cases: string[]; challenges: string[]}>;
 }
 export interface VerificationContract {
   version: 1;
@@ -147,6 +166,7 @@ export interface CommandReceipt {
   environmentError: string | null;
 }
 export interface AttemptRecord {
+  readFiles?: string[];
   /** Written only after runtime completion validation; absent legacy evidence fails closed. */
   completionAccepted?: boolean;
   fileMutation?: boolean;
@@ -180,6 +200,7 @@ export interface PlanChoice {
 }
 export interface NodeVisit {
   verifiedCommands?: CommandReceipt[];
+  nodeTestProof?: NodeTestProof;
   id: string;
   nodeId: string;
   number: number;

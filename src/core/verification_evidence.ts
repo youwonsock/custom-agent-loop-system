@@ -1,6 +1,7 @@
 import * as path from "node:path";
 import { CommandReceipt, NodeVisit, SessionState } from "../shared/domain";
 import { browserVerificationCommand } from "./browser_command";
+import { nodeTestVerificationCommand } from "./node_test_command";
 import { fileMutation } from "./event_evidence";
 import {
   evaluateRequirementCoverage,
@@ -13,7 +14,7 @@ const obj = (v: unknown): Obj =>
   v && typeof v === "object" && !Array.isArray(v) ? (v as Obj) : {};
 
 // Decode one literal argv layer; never evaluate substitutions or shell operators.
-function literalShellWords(input: string): string[] | null {
+export function literalShellWords(input: string): string[] | null {
   const words: string[] = [];
   let word = "",
     quote = "",
@@ -107,6 +108,7 @@ export function isBrowserVerificationCommand(command: string, cwd?: string): boo
 export function isVerificationCommand(command: string, cwd?: string): boolean {
   const c = canonicalCommand(command);
   if (isBrowserVerificationCommand(c, cwd)) return true;
+  if (!/[`$]/.test(c) && projectCommandKey(c,cwd) === nodeTestVerificationCommand()) return true;
   // Do not accept a backgrounded test whose shell exits before the test does.
   if (c.replace(/2>&1/g, "").replace(/&&/g, "").includes("&")) return false;
   if (/[\n;|`]/.test(c) || /\$\(/.test(c)) return false;
@@ -334,4 +336,9 @@ export function currentTestProof(
       proof = [];
   }
   return proof;
+}
+export function currentNodeTestProof(state:SessionState,before:NodeVisit) {
+  if(!currentTestProof(state,before).length)return undefined;
+  const index=state.visits.findIndex(v=>v.id===before.id);
+  return state.visits.slice(0,index).reverse().find(v=>state.graph.nodes.find(n=>n.id===v.nodeId)?.type==="test"&&acceptedVisit(v,state.targetProjectPath)&&v.verdict==="PASS")?.nodeTestProof;
 }

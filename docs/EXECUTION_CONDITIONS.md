@@ -1,6 +1,6 @@
 # 실행 성공·실패·재시도 조건
 
-2026-10-24 기준. 구현: `src/core/completion.ts`, `runtime.ts`, `success_gate.ts`, `verification_evidence.ts`, `graph.ts`, `model_pricing.ts`, `cli_diagnostics.ts`, `agent_attempt_runner.ts`, `src/server/coordinator.ts`, `runtime_defaults.json`.
+2026-10-25 기준. 구현: `src/core/completion.ts`, `runtime.ts`, `success_gate.ts`, `verification_evidence.ts`, `graph.ts`, `model_pricing.ts`, `cli_diagnostics.ts`, `agent_attempt_runner.ts`, `src/server/coordinator.ts`, `runtime_defaults.json`.
 
 ## 자율 실행 프리셋
 
@@ -49,6 +49,8 @@
 Codex 실행의 로그인 셸은 끄고 Agent Graph를 실행한 Node 디렉터리를 자식 PATH 앞에 고정한다. 기존 sandbox·접근 승인 정책은 유지하며, 테스트 환경 차단은 통과로 바꾸지 않는다.
 
 검증 로그를 읽거나 `echo`로 성공을 출력하는 것은 실행 증거가 아니다. 후속 구현·계획·테스트·중단 방문, 실패·반려, 관측된 파일 변경은 이전 테스트 증거를 무효화한다. 테스트 역할이 테스트를 작성·수정한 경우 마지막 수정 이후의 실제 검사만 인정한다. 같은 방문에서 보고 형식을 보완할 때는 아직 유효한 관측 명령을 재사용할 수 있다. 과거 실패가 있어도 수정 후 새 테스트·최종 승인을 모두 통과하면 성공할 수 있다. 실제 검사를 실행했다는 증거도 검사 범위와 산출물 품질을 보장하지는 않는다.
+
+새 자율 프리셋의 `authoredNodeTests=true`에서는 `npm test`가 등록된 고정 계약에 `nodeTests` 영역 정책도 필수다. 모든 자체 영역의 필수 named case·무결함 대조군·제품 결함 assertion 탐지가 성공해야 한다. skip/todo·import/문법 오류·timeout·제공 인수 검사 호출만으로는 통과하지 않는다. 현재 소스/테스트 해시와 품질 보고서가 일치하고 native suite와 품질 명령 모두 실제 exit 0이어야 한다. 검토·최종 승인도 각 자체 파일과 품질 보고서의 완료된 네이티브 읽기 및 모든 `testScopes` 판단을 요구한다. 누락되면 성공을 차단한다. 기존 필드 없는 그래프의 동작은 유지하며 상세 스키마·상한은 [자체 Node 계약](AUTONOMOUS_WORKFLOW.md#자체-node-테스트의-영역별-계약과-독립-검토)을 따른다.
 
 ## 실패·대기·중지 조건
 

@@ -9,6 +9,7 @@ import { promisify } from "node:util";
 import { createServer } from "./app";
 import { AgentGraphDocument, SessionState } from "../shared/domain";
 import { delay } from "../core/resilience";
+import { nodeTestVerificationCommand } from "../core/node_test_command";
 const origin = "http://127.0.0.1:4317",
   host = "127.0.0.1:4317",
   binary = path.resolve(__dirname, "../../../test/fixture_cli.cjs");
@@ -1445,6 +1446,7 @@ test("autonomous runtime detects hidden production writes even without native fi
 
 async function contracted(s: Awaited<ReturnType<typeof setup>>, supplied = true, failing = false, second = false) {
   let graph = await s.store.createGraph({ template: "autonomous" });
+  graph.automation!.authoredNodeTests = false; // Legacy frozen-check profile; own-suite cases have dedicated coverage.
   graph.automation!.browserVerification = false;
   graph.automation!.maxRepairCycles = 1;
   graph.defaultBinding = s.graph.defaultBinding;
@@ -1470,6 +1472,23 @@ test("supplied frozen contract executes a real protected assertion and JSON repo
   assert.ok(done.visits.slice(2).every(v => v.output.includes("[REPORT_PROTOCOL: json-v1]")));
   assert.equal(done.visits[2]!.attempts[0]!.commands![0]!.exitCode, 0);
   assert.equal(done.visits.at(-1)!.verdict, "APPROVED");
+});
+test("own Node quality rejects empty assertions despite claimed PASS and repairs before independent final approval",async t=>{
+ const s=await setup();t.after(s.cleanup);
+ let graph=await s.store.createGraph({template:"autonomous"});graph.automation!.browserVerification=false;graph.automation!.maxRepairCycles=1;graph.defaultBinding=s.graph.defaultBinding;graph=await s.store.saveGraph(graph.id,graph,graph.revision);
+ await fs.mkdir(path.join(s.target,".agent-graph"));await fs.mkdir(path.join(s.target,"probes"));
+ await fs.writeFile(path.join(s.target,"value.mjs"),"export const value=1;\n");
+ await fs.writeFile(path.join(s.target,"package.json"),JSON.stringify({type:"module",scripts:{test:"node --test --test-concurrency=1 test/value.test.mjs"}}));
+ await fs.writeFile(path.join(s.target,"probes/verify-value.mjs"),"export async function mutate({enabled}){return {'value.mjs':'export const value='+(enabled?2:1)+';'}}");
+ const manifest={version:1,protectedFiles:["probes/verify-value.mjs"],checks:[{id:"node",command:"npm test",requirements:["REQ-001"]},{id:"quality",command:nodeTestVerificationCommand(),requirements:["REQ-001"]}],nodeTests:{checkId:"quality",suiteCheckId:"node",scopes:[{id:"value",file:"test/value.test.mjs",requirements:["REQ-001"],cases:["value:correct"],challenges:[{id:"wrong-value",adapter:"probes/verify-value.mjs",targets:["value.mjs"]}]}]}};
+ await fs.writeFile(path.join(s.target,".agent-graph/verification.json"),JSON.stringify(manifest));
+ const id=await launch(s,graph,"fixture:contract-own-node",{phaseTimeoutMs:15000,idleTimeoutMs:10000,toolTimeoutMs:10000,phaseRecoveryBudgetMs:30000});
+ const done=await wait(()=>s.store.readSession(id),"SUCCESS",45000),tests=done.visits.filter(v=>v.nodeId==="test");
+ assert.equal(tests.length,2);assert.equal(tests[0]!.verdict,"FAIL");assert.equal(tests[1]!.verdict,"PASS");
+ assert.equal(tests[0]!.nodeTestProof,undefined);assert.deepEqual(tests[1]!.nodeTestProof!.scopes[0]!.challenges,["wrong-value"]);
+ assert.equal(tests[0]!.attempts.at(-1)!.commands!.find(c=>c.command===nodeTestVerificationCommand())!.exitCode,1);
+ assert.equal(tests[1]!.attempts.at(-1)!.commands!.find(c=>c.command===nodeTestVerificationCommand())!.exitCode,0);
+ assert.deepEqual(done.processedRequests,[]);assert.equal(done.visits.at(-1)!.verdict,"APPROVED");
 });
 test("a model-authored contract freezes before test and reaches final approval without operator actions", async t => {
   const s = await setup(); t.after(s.cleanup);

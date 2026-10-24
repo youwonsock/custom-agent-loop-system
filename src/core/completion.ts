@@ -5,6 +5,7 @@ import {
   CommandReceipt,
   PlanChoice,
   VerificationContract,
+  NodeTestProof,
 } from "../shared/domain";
 import { SupervisorResult } from "./process_supervisor";
 import {
@@ -22,6 +23,7 @@ import {
 } from "./verification_evidence";
 import { renderStructuredReport } from "./report_protocol";
 import { missingContractReceipts } from "./verification_contract";
+import { nodeTestProofProblem, nodeScopeAuditProblem, nodeInspectionProblem } from "./node_test_policy";
 export const requiresResearch = (goal: string): boolean =>
   /(?:인터넷|웹)\s*(?:을|를|에서|으로)?\s*(?:검색|조사|찾)|\b(?:search|browse|research|look\s*up)(?:\s+the)?\s+(?:internet|web)\b|\b(?:internet|web)\s+(?:search|research)\b/i.test(
     goal.replace(/\s+/g, " "),
@@ -79,6 +81,8 @@ export function validateCompletion(
   automation?: AgentGraphDocument["automation"],
   contract?: VerificationContract,
   cwd?: string,
+  nodeTestProof?: NodeTestProof,
+  inspectedFiles: string[] = result.evidence.readFiles ?? [],
 ): Completion {
   let output = result.assistantText.replace(/\r\n/g, "\n").trim();
   // A terminal prose sentinel ends implementation, never approves the product.
@@ -241,6 +245,12 @@ export function validateCompletion(
       );
   }
   if (answer.verdict === "PASS" || answer.verdict === "APPROVED") {
+    if(answer.verdict==="APPROVED"&&contract?.manifest?.nodeTests){
+      const inspection=nodeInspectionProblem(contract.manifest.nodeTests,inspectedFiles);
+      if(inspection)return fail(inspection);
+    }
+    const problem=nodeTestProofProblem(contract?.manifest?.nodeTests,nodeTestProof)??nodeScopeAuditProblem(contract?.manifest?.nodeTests,output);
+    if(problem){answer.verdict=node.type==="test"?"FAIL":"REJECTED";answer.reason=problem;return answer;}
     const failed = failedVerificationCommand(commands);
     if (failed) {
       answer.verdict = node.type === "test" ? "FAIL" : "REJECTED";

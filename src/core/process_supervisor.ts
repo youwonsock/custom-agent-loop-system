@@ -41,6 +41,7 @@ import {
 } from "./process_output";
 import { normalizeProviderEvent } from "./provider_events";
 import { ToolFailureTracker } from "./tool_failures";
+import { InspectionTracker } from "./inspection_evidence";
 import { terminateProcessTreeBounded } from "./process_lifecycle";
 import type { Activity } from "../shared/execution_types";
 // Preserve imports used by existing integrations.
@@ -488,8 +489,11 @@ export class ProcessSupervisor {
     };
 
     const commands = new CommandTracker(options.cwd);
+    const inspections = new InspectionTracker(options.cwd);
     const processEvent = (event: AnyObj): void => {
       commands.observe(event);
+      inspections.observe(event);
+      evidence.readFiles=inspections.files;
       evidence.commands = commands.receipts;
       mutations.observe(event);
       evidence.fileMutation ||= mutations.hasMutation;

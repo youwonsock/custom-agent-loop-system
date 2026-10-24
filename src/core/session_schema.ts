@@ -3,6 +3,7 @@ import { AppError } from "./errors";
 import { safeId, validateGraphDocument } from "./graph";
 import { executionSettings } from "./settings";
 import { validContractSnapshot, validateManifest } from "./verification_contract";
+import { validNodeTestProof } from "./node_test_policy";
 
 type Obj = Record<string, unknown>;
 const object = (v: unknown): v is Obj => !!v && typeof v === "object" && !Array.isArray(v);
@@ -23,6 +24,7 @@ function attempt(v: unknown): boolean {
     nullableText(v.message) && text(v.logPath) && nullableText(v.lastProgressAt) && member(v.activity, ["initial_transport", "model_generation", "tool_execution"]) &&
     text(v.deadlineAt) && text(v.requestedModelId) && nullableText(v.actualModelId) && count(v.assistantTextBytes) && count(v.maxTokens) &&
     (v.commands === undefined || array(v.commands, receipt)) && (v.completionAccepted === undefined || typeof v.completionAccepted === "boolean") &&
+    (v.readFiles === undefined || (Array.isArray(v.readFiles)&&v.readFiles.length<=1000&&v.readFiles.every(text))) &&
     (v.fileMutation === undefined || typeof v.fileMutation === "boolean") &&
     (v.pricing === undefined || (object(v.pricing) && member(v.pricing.status,["free","paid","unknown"]) && member(v.pricing.source,["native_flag","native_cost","unavailable"]) && text(v.pricing.checkedAt) && text(v.pricing.reason)));
 }
@@ -31,7 +33,7 @@ function visit(v: unknown): boolean {
     text(v.startedAt) && nullableText(v.completedAt) && array(v.attempts, attempt) && text(v.output) &&
     (v.verdict === null || member(v.verdict, ["PASS","FAIL","BLOCKED","APPROVED","REJECTED"])) && array(v.plans, plan) &&
     (v.selectedPlanId === null || count(v.selectedPlanId)) && text(v.cycleStartedAt) && text(v.cycleDeadlineAt) && count(v.recoveryCount) &&
-    typeof v.transitionCommitted === "boolean" && count(v.automaticCycles) && (v.verifiedCommands === undefined || array(v.verifiedCommands, receipt));
+    typeof v.transitionCommitted === "boolean" && count(v.automaticCycles) && (v.verifiedCommands === undefined || array(v.verifiedCommands, receipt)) && (v.nodeTestProof === undefined || validNodeTestProof(v.nodeTestProof));
 }
 
 /** Decode at the persistence boundary without inventing missing evidence or migrating v3. */

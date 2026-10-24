@@ -61,6 +61,7 @@ const receipt = {
 test("autonomous preset is opt-in, persisted, bounded and still requires tests/final approval", () => {
   assert.equal(createGraph().automation, undefined);
   assert.equal(createAutonomousGraph().automation!.verificationContract,true);
+  assert.equal(createAutonomousGraph().automation!.authoredNodeTests,true);
   assert.equal(createGraph().nodes[0]!.planning!.requiresApproval, true);
   const copy = validateGraphDocument(g);
   assert.deepEqual(copy.automation, g.automation);

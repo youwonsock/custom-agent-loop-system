@@ -10,6 +10,9 @@ import {
   isVerificationCommand,
 } from "./verification_evidence";
 import { parseRequirementEvidence } from "./requirement_ledger";
+import { nodeTestScript } from "./node_test_policy";
+import { nodeTestVerificationCommand } from "./node_test_command";
+import { currentNodeTestProof } from "./verification_evidence";
 export function buildRecoveryMessage(
   kind: FailureKind,
   message: string,
@@ -107,6 +110,10 @@ export function buildNodePrompt(
     structured ? "The engine binds JSON judgments to frozen check IDs and observed native receipts. Never invent a passed check." : "For each requirement report: [REQUIREMENT_EVIDENCE]\nREQ_ID: REQ-001\nSTATUS: SATISFIED|PARTIAL|FAILED|BLOCKED\nEVIDENCE: concrete observed check or artifact\n[/REQUIREMENT_EVIDENCE]. Never invent a passed check.",
   ];
   if (state.executionBudget) lines.push("=== WHOLE SESSION BUDGET (never resets on retries/resume) ===",JSON.stringify({deadlineAt:state.executionBudget.deadlineAt,maxNativeAttempts:state.executionBudget.maxAttempts,usedNativeAttempts:state.visits.reduce((n,v)=>n+v.attempts.length,0)}),"The engine enforces this wall-clock and native-agent-invocation budget. Provider-internal model turns are not counted as separate native attempts. Do not edit budget files or create another session to evade the limits.");
+  if(state.graph.automation?.verificationContract&&state.graph.automation.authoredNodeTests)lines.push(
+    "New autonomous npm workflows require a nodeTests policy in the frozen verification contract: separate npm test and installed verify-node-tests checks, own scope files with named required cases, and protected production-defect adapters with no-op controls. Define scopes from the original goal (e.g. engine/controller/storage/raw HTTP); engine smoke or supplied acceptance success alone cannot prove authored controller/storage/HTTP coverage. Preserve any supplied policy; do not remove scopes or probes to pass.",
+    `Installed own-suite verifier command: ${nodeTestVerificationCommand()}`,
+    "nodeTests schema: {checkId:'self_tests',suiteCheckId:'node',scopes:[{id:'behavior',file:'test/behavior.test.mjs',requirements:['REQ-001'],cases:['behavior:boundary'],challenges:[{id:'wrong-result',adapter:'tests/probes/defect.mjs',targets:['module.mjs']}]}]}. Register those separate check IDs, protect EVERY adapter. An adapter exports async mutate({root,enabled,id}) returning {relativeProductionFile:contentString}; enabled=false is the no-op control. Never change test/package files or undeclared targets. npm scripts.test must be node --test --test-concurrency=1 followed by EVERY scope file in policy order. If adapters are model-authored, identify that origin honestly; do not label them external acceptance.");
   if (state.graph.automation?.verificationContract) lines.push(
     "=== FROZEN VERIFICATION CONTRACT ===",
     state.verificationContract?.status === "locked" ? JSON.stringify(state.verificationContract.manifest) : JSON.stringify({version:1,protectedFiles:["tests/verify-acceptance.mjs"],checks:[{id:"acceptance",command:"node tests/verify-acceptance.mjs",requirements:state.requirements.items.map(r=>r.id)}]}),
@@ -133,6 +140,17 @@ export function buildNodePrompt(
         "Create the spec only if absent; preserve any acceptance spec supplied by the user. Run unit tests first, then the exact browser command last as a single foreground call, without redirect, echo/status wrappers or file edits afterward. If it fails on product assertions, report FAIL for implementation. The verifier resolves Playwright from its own installation as a fallback: target-local require('playwright') failure is NOT an environment blocker. Execute the command before investigating dependencies. Do not inspect platform source or search for installations when a valid successful native verifier receipt already exists. Only its actual missing-tool error warrants preparing Playwright/Chromium through normal approved tools; never bypass a denied approval.",
       );
     }
+  }
+  const nodePolicy=state.verificationContract?.manifest?.nodeTests;
+  if(nodePolicy){
+    lines.push("=== AUTHORED NODE TEST QUALITY CONTRACT ===",
+      `npm scripts.test MUST be exactly: ${nodeTestScript(nodePolicy)}`,
+      "Create each scope file yourself with node:test and real node:assert/strict assertions. Each required case name must be used verbatim exactly once. Do not import/call supplied acceptance runners or substitute their success for authored coverage. The platform executes your files without supplied protected oracles in isolated project copies. No skipped/todo/cancelled tests. Do not change production or test source while tests execute. Keep temporary outputs under verification/. Use injected randomness/in-memory storage; HTTP tests must launch PORT=0, parse the actual URL, exercise raw paths and terminate only their own server in after/finally hooks. For nonthrowing boundaries use assert.doesNotThrow/doesNotReject.",
+      "The frozen adapters introduce production defects only in isolated copies. Every no-op control must still pass; every mutant must fail a required named assertion in the corresponding authored scope. Syntax/import errors, timeout, skipped tests, test-source edits and missing cases never count as defect detection. Never detect the verifier or rewrite its artifacts. External engine/controller/browser checks are separate requirements, not replacements for these authored tests.",
+      ...nodePolicy.scopes.map(s=>`${s.id}: file=${s.file}; requirements=${s.requirements.join(",")}; required cases=${JSON.stringify(s.cases)}; required production-defect challenges=${s.challenges.map(c=>c.id).join(",")}`),
+      `Quality report: verification/node-tests/report.json; inspect its baseline, no-op controls, assertion kills and source hashes. ${["review","approval"].includes(node.type)?"READ-ONLY: independently read EACH authored scope file and the quality report with native read(filePath) or standalone cat/Get-Content; completed reads are mandatory evidence. Reject shallow/missing controller, storage or raw HTTP assertions even when external acceptance passed. Do not run checks or modify files.":"Execute every registered check separately; own Node verifier before the final browser command. Repair weak authored tests as well as product defects."}`,
+      `Current accepted test-role own-suite facts: ${JSON.stringify(currentNodeTestProof(state,visit)??null)}`,
+      "For PASS/APPROVED the JSON report MUST also contain testScopes:[{id,status,evidence}] for EVERY scope. Explain the actual assertions, no-op controls and detected defects for that scope. Evidence from supplied tests cannot satisfy this judgment. Use PARTIAL/FAILED/BLOCKED and FAIL/REJECTED when coverage or execution is unproved.");
   }
   if (node.type === "implementation" || node.type === "test")
     lines.push(
@@ -206,7 +224,7 @@ export function buildNodePrompt(
     const missing=state.verificationContract!.manifest!.checks.filter(check=>!receipts.some(r=>r.exitCode===0&&!r.environmentError&&projectCommandKey(r.command,state.targetProjectPath)===projectCommandKey(check.command,state.targetProjectPath)));
     lines.push("=== JSON REPORT v1 ===",
       "Return one [AGENT_REPORT] JSON [/AGENT_REPORT] with version:1, verdict and requirements. Each requirement has id, status (SATISFIED/PARTIAL/FAILED/BLOCKED), evidence (concrete observed fact, max 2000 chars). Do NOT type CHECK_COMMAND, combine command strings, quote receipts, write a report file or add PHASE_DONE. The engine attaches check IDs, actual receipt IDs and commands. Every fixed ID is mandatory for PASS/APPROVED; omitted/duplicate/unknown IDs are rejected. Never infer a pass from an unexecuted/failed check. FAIL/REJECTED may return only failed items; an external blocker uses verdict:BLOCKED, blockedKind:external, and concrete evidence. Product/test setup blockers use blockedKind:product/test_setup. Existing access/auth gates always win.",
-      `[AGENT_REPORT]\n${JSON.stringify({version:1,verdict:node.type==="test"?"PASS":"APPROVED",requirements:state.requirements.items.map(r=>({id:r.id,status:"SATISFIED",evidence:"replace with observed facts; use FAILED/BLOCKED when unproved"}))})}\n[/AGENT_REPORT]`,
+      `[AGENT_REPORT]\n${JSON.stringify({version:1,verdict:node.type==="test"?"PASS":"APPROVED",requirements:state.requirements.items.map(r=>({id:r.id,status:"SATISFIED",evidence:"replace with observed facts; use FAILED/BLOCKED when unproved"})),...(nodePolicy?{testScopes:nodePolicy.scopes.map(s=>({id:s.id,status:"SATISFIED",evidence:"replace with independently observed authored assertions and challenge results"}))}:{})})}\n[/AGENT_REPORT]`,
       node.type==="test" ? (missing.length ? `Actual successful receipts still missing; execute THESE checks separately, browser last. Copy each command literally: never append | tail, | head, echo, status output or a second command. Read the output/report separately:\n${missing.map(c=>`${c.id}: ${c.command}`).join("\n")}` : "All frozen checks already have successful current receipts. Return JSON only without edits or repeated execution.") : "Read-only: inspect current test receipts and reports; reject missing, failed, skipped or stale evidence. Do not execute checks.");
   }
   if (recovery)

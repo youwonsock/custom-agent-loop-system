@@ -59,7 +59,8 @@ export function validateGraphDocument(input: unknown): AgentGraphDocument {
       typeof g.automation.nativeApprovalReview !== "boolean" ||
       (g.automation.browserVerification !== undefined &&
         typeof g.automation.browserVerification !== "boolean") ||
-      (g.automation.verificationContract !== undefined && typeof g.automation.verificationContract !== "boolean"))
+      (g.automation.verificationContract !== undefined && typeof g.automation.verificationContract !== "boolean") ||
+      (g.automation.authoredNodeTests !== undefined && typeof g.automation.authoredNodeTests !== "boolean"))
   )
     throw new AppError(
       400,
@@ -172,6 +173,7 @@ export function validateGraphDocument(input: unknown): AgentGraphDocument {
               ? { browserVerification: g.automation.browserVerification }
               : {}),
             ...(g.automation.verificationContract !== undefined ? { verificationContract: g.automation.verificationContract } : {}),
+            ...(g.automation.authoredNodeTests !== undefined ? { authoredNodeTests:g.automation.authoredNodeTests } : {}),
           },
         }
       : {}),
@@ -271,6 +273,7 @@ export function createAutonomousGraph(
     nativeApprovalReview: true,
     browserVerification: true,
     verificationContract: true,
+    authoredNodeTests: true,
   };
   graph.nodes.find((n) => n.type === "planning")!.planning = {
     requiresApproval: false,

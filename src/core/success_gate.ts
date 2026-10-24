@@ -1,12 +1,14 @@
 import { SessionState } from "../shared/domain";
 import { evaluateRequirementCoverage, latestRequirementStatuses } from "./requirement_ledger";
-import { acceptedVisit, currentTestProof } from "./verification_evidence";
+import { acceptedVisit, currentTestProof, currentNodeTestProof } from "./verification_evidence";
+import { nodeTestProofProblem, nodeScopeAuditProblem, nodeInspectionProblem } from "./node_test_policy";
 import { contractProofMissing } from "./verification_contract";
 import { sessionBudgetReason } from "./session_budget";
 
 /** Every path to SUCCESS, including recovered snapshots, passes this gate. */
 export function successBlockers(state: SessionState): string[] {
   const blockers: string[] = [];
+  if(state.graph.automation?.verificationContract&&state.graph.automation.authoredNodeTests&&state.verificationContract?.manifest?.checks.some(c=>/^npm test(?:\s|$)/.test(c.command))&&!state.verificationContract.manifest.nodeTests)blockers.push("자체 Node 테스트 계약이 누락되었습니다.");
   const budget = sessionBudgetReason(state, false, state.status === "SUCCESS" ? Date.parse(state.updatedAt) : Date.now());
   if (budget) blockers.push(budget);
   const final = state.visits.at(-1);
@@ -26,6 +28,16 @@ export function successBlockers(state: SessionState): string[] {
   if (!final || !currentTestProof(state, final).length)
     blockers.push("현재 구현의 모든 필수 요구사항을 검사한 실제 테스트 PASS 기록이 필요합니다.");
   if (final) {
+    const ownProblem=nodeTestProofProblem(state.verificationContract?.manifest?.nodeTests,currentNodeTestProof(state,final))??nodeScopeAuditProblem(state.verificationContract?.manifest?.nodeTests,final.output);
+    if(ownProblem)blockers.push(ownProblem);
+    const testIndex=state.visits.reduce((last,v,index)=>state.graph.nodes.find(n=>n.id===v.nodeId)?.type==="test"&&v.status==="succeeded"?index:last,-1);
+    for(const visit of state.visits.slice(testIndex+1)){
+      const type=state.graph.nodes.find(n=>n.id===visit.nodeId)?.type;
+      if(type==="review"||type==="approval"){
+        const inspection=nodeInspectionProblem(state.verificationContract?.manifest?.nodeTests,[...new Set(visit.attempts.flatMap(a=>a.readFiles??[]))]);
+        if(inspection)blockers.push(`${visit.nodeId}: ${inspection}`);
+      }
+    }
     const missing = contractProofMissing(state, currentTestProof(state, final));
     if (missing.length) blockers.push(`검증 계약의 성공 기록이 없습니다: ${missing.join(", ")}`);
   }

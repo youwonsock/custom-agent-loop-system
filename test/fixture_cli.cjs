@@ -248,6 +248,12 @@ if (args[0] === "debug" && args[1] === "config") {
         "implemented goal\n",
       );
       if (prompt.includes("fixture:contract-runner-repair")) fs.writeFileSync("package.json", JSON.stringify({ scripts: { test: calls.implementation === 1 ? "node tests/verify-acceptance.mjs || node tests/verify-acceptance.mjs" : "node tests/verify-acceptance.mjs" } }));
+      if(prompt.includes("fixture:contract-own-node")){
+        fs.mkdirSync("test",{recursive:true});
+        fs.writeFileSync("test/value.test.mjs",calls.implementation===1
+          ? "import test from 'node:test';test('value:correct',()=>{});"
+          : "import test from 'node:test';import a from 'node:assert/strict';import {value} from '../value.mjs';test('value:correct',()=>a.equal(value,1));");
+      }
       if (prompt.includes("fixture:contract-create")) {
         fs.mkdirSync(".agent-graph", { recursive: true });
         fs.mkdirSync("tests", { recursive: true });
@@ -296,11 +302,19 @@ if (args[0] === "debug" && args[1] === "config") {
           if (prompt.includes("fixture:contract-omit-check") && check.id === "second") continue;
           const cwd = process.platform === "win32" ? '"'+process.cwd()+'"' : "'"+process.cwd().replace(/'/g, "'\\''")+"'";
           const observedCommand = prompt.includes("fixture:contract-cwd") ? "cd "+cwd+" && "+check.command : check.command;
-          const executed = spawnSync(observedCommand, { shell: true, cwd: process.cwd(), encoding: "utf8" });
+          const words=require("../dist/src/core/verification_evidence.js").literalShellWords(observedCommand);
+          const executed = words?.[0]==="node"&&words[2]==="verify-node-tests"
+            ? spawnSync(process.execPath,words.slice(1),{cwd:process.cwd(),encoding:"utf8"})
+            : spawnSync(observedCommand, { shell: true, cwd: process.cwd(), encoding: "utf8" });
           emit({ type: "item.completed", item: { id: check.id, type: "command_execution", command: observedCommand, exit_code: executed.status, status: "completed", aggregated_output: executed.stdout + executed.stderr } });
         }
       }
-      text = "[AGENT_REPORT]\n" + JSON.stringify({ version: 1, verdict: type === "test" ? "PASS" : "APPROVED", requirements: reqs.map(id => ({ id, status: "SATISFIED", evidence: "inspected actual acceptance artifact and receipts" })) }) + "\n[/AGENT_REPORT]";
+      const own=JSON.parse(fs.readFileSync(".agent-graph/verification.json","utf8")).nodeTests;
+      if(own&&["review","approval"].includes(type))for(const file of [...own.scopes.map(s=>s.file),"verification/node-tests/report.json"]){
+        const output=fs.readFileSync(file,"utf8");
+        emit({type:"tool_use",part:{id:`inspect-${type}-${file}`,tool:"read",state:{status:"completed",input:{filePath:path.resolve(file)},output}}});
+      }
+      text = "[AGENT_REPORT]\n" + JSON.stringify({ version: 1, verdict: type === "test" ? "PASS" : "APPROVED", requirements: reqs.map(id => ({ id, status: "SATISFIED", evidence: "inspected actual acceptance artifact and receipts" })),...(own?{testScopes:own.scopes.map(s=>({id:s.id,status:"SATISFIED",evidence:"actual own scope assertions and mutation result inspected"}))}:{}) }) + "\n[/AGENT_REPORT]";
     }
     if (prompt.includes("인터넷 검색")) {
       emit({

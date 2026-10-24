@@ -2,6 +2,7 @@ import { shellMutation } from "./shell_mutation";
 import { CommandReceipt } from "../shared/domain";
 type Event = Record<string, unknown>;
 export interface EventEvidence {
+  readFiles?: string[];
   commands: CommandReceipt[];
   fileMutation: boolean;
   changedFiles?: string[];
@@ -11,6 +12,7 @@ export interface EventEvidence {
   actualModelId: string | null;
 }
 export const emptyEvidence = (): EventEvidence => ({
+  readFiles: [],
   commands: [],
   fileMutation: false,
   completedSearches: 0,

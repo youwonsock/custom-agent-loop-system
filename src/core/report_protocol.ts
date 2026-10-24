@@ -28,6 +28,19 @@ export function renderStructuredReport(text:string,node:AgentNode,requirements:R
     const effectiveStatus=observed.some(o=>o.receipt.exitCode!==0||o.receipt.environmentError)?"FAILED":item.status;
     lines.push(`[REQUIREMENT_EVIDENCE]\nREQ_ID: ${item.id}\nSTATUS: ${effectiveStatus}\nEVIDENCE: ${evidence}${observed.length?` | Native receipts: ${observed.map(r=>`${r.check}=${r.receipt.id} (exit ${r.receipt.exitCode ?? "unknown"})`).join(", ")}`:""}${observed.length?`\nCHECK_COMMAND: ${observed[0]!.receipt.command}`:""}\n[/REQUIREMENT_EVIDENCE]`);
   }
+  const policy=contract.manifest!.nodeTests;
+  if(policy){
+    const audits=report.testScopes;
+    if(audits!==undefined&&!Array.isArray(audits))throw Error("testScopes는 자체 Node 영역 검토 배열이어야 합니다.");
+    const scopeSeen=new Set<string>();
+    for(const row of Array.isArray(audits)?audits:[]){
+      if(!object(row)||typeof row.id!=="string"||scopeSeen.has(row.id)||!policy.scopes.some(s=>s.id===row.id)||!["SATISFIED","PARTIAL","FAILED","BLOCKED"].includes(String(row.status))||typeof row.evidence!=="string"||!row.evidence.trim()||row.evidence.length>2000)throw Error("자체 Node testScopes의 id/status/evidence가 잘못되었습니다.");
+      scopeSeen.add(row.id);
+      const evidence=row.evidence.replace(/[\r\n]+/g," ").replace(/[\[\]]/g," ");
+      lines.push(`[NODE_TEST_SCOPE]\nSCOPE_ID: ${row.id}\nSTATUS: ${row.status}\nEVIDENCE: ${evidence}\n[/NODE_TEST_SCOPE]`);
+    }
+    if(["PASS","APPROVED"].includes(verdict)&&policy.scopes.some(s=>!scopeSeen.has(s.id)))throw Error(`자체 Node 영역 전체의 testScopes 판단이 필요합니다: ${policy.scopes.map(s=>s.id).join(", ")}`);
+  }
   if(report.blockedKind)lines.push(`BLOCKED_KIND: ${report.blockedKind}`);
   lines.push(node.type==="test"?`VERDICT: ${verdict}`:verdict==="BLOCKED"?"VERDICT: BLOCKED":verdict,"[PHASE_DONE]");
   return lines.join("\n\n");

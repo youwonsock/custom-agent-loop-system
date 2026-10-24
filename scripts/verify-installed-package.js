@@ -65,6 +65,24 @@ async function main() {
     const project = path.join(temporary, "project");
     await fs.mkdir(project);
     const core = path.join(installed, "dist", "src", "core");
+    const { nodeTestVerificationCommand } = require(path.join(core, "node_test_command.js"));
+    const { readNodeTestProof } = require(path.join(core, "node_test_verification.js"));
+    const qualityProject = path.join(temporary, "own-node-project");
+    await fs.mkdir(path.join(qualityProject, ".agent-graph"), { recursive: true });
+    await fs.mkdir(path.join(qualityProject, "test"));
+    await fs.mkdir(path.join(qualityProject, "probes"));
+    const nodeTests = { checkId: "quality", suiteCheckId: "node", scopes: [{ id: "value", file: "test/value.test.mjs", requirements: ["REQ-001"], cases: ["value:correct"], challenges: [{ id: "wrong-value", adapter: "probes/value.mjs", targets: ["value.mjs"] }] }] };
+    await fs.writeFile(path.join(qualityProject, "package.json"), JSON.stringify({ type: "module", scripts: { test: "node --test --test-concurrency=1 test/value.test.mjs" } }));
+    await fs.writeFile(path.join(qualityProject, "value.mjs"), "export const value=1;\n");
+    await fs.writeFile(path.join(qualityProject, "test/value.test.mjs"), "import test from 'node:test';import a from 'node:assert/strict';import {value} from '../value.mjs';test('value:correct',()=>a.equal(value,1));\n");
+    await fs.writeFile(path.join(qualityProject, "probes/value.mjs"), "export async function mutate({enabled}){return {'value.mjs':'export const value='+ (enabled?2:1)+';\\n'}}\n");
+    await fs.writeFile(path.join(qualityProject, ".agent-graph", "verification.json"), JSON.stringify({ version: 1, protectedFiles: ["probes/value.mjs"], checks: [{ id: "node", command: "npm test", requirements: ["REQ-001"] }, { id: "quality", command: nodeTestVerificationCommand(), requirements: ["REQ-001"] }], nodeTests }));
+    execFileSync(process.execPath, [cli, "verify-node-tests", "--target", qualityProject], { encoding: "utf8", stdio: "pipe" });
+    const ownProof = await readNodeTestProof(qualityProject, nodeTests);
+    const ownReport = JSON.parse(await fs.readFile(path.join(qualityProject, "verification/node-tests/report.json"), "utf8"));
+    if (ownProof.scopes.length !== 1 || !ownReport.allPassed || !ownReport.processesStopped || !ownReport.workspacesRemoved || ownReport.workers.length !== 3 || ownReport.workers.some(w => !w.stopped))
+      throw new Error("Installed own Node verifier failed assertion/control/mutation/cleanup proof.");
+    process.stdout.write("Installed own Node verifier verified: authored assertion, no-op control, production mutation, current proof and owned process cleanup.\n");
     const plugin = require(path.join(core, "kilo_protocol_plugin.js"));
     const previousProtocol = process.env.AGENT_GRAPH_KILO_CHECKS;
     try {

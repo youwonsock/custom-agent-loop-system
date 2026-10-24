@@ -105,6 +105,26 @@
 
 검사 연결과 고정 해시는 검사의 실행·보존을 증명한다. 검사 내용이 도메인의 모든 요구사항을 충분히 검증하는지는 인수 테스트 작성자와 독립 검토의 책임이다. 모델이 직접 만든 검사의 출처를 외부에서 제공된 인수 기준과 동일하게 표현하지 않는다.
 
+## 자체 Node 테스트의 영역별 계약과 독립 검토
+
+새 자율 프리셋은 `automation.authoredNodeTests=true`를 사용한다. 고정 계약에 `npm test`가 있으면 `nodeTests` 정책도 필수다. 기존 그래프에 이 선택 필드가 없으면 종전 동작을 유지한다. UI의 **자체 Node 테스트 계약 필수** 설정으로 제어하며 다른 데이터 버전이나 저장 키는 변경하지 않는다.
+
+`nodeTests`는 `suiteCheckId`(실제 `npm test` 검사), `checkId`(플랫폼이 제공하는 정확한 `verify-node-tests` 명령), `scopes`를 선언한다. 각 영역은 고유한 `id`, 직접 작성할 `test/*.test.mjs` 파일, 요구사항 ID, 정확한 `cases` 이름, 보호된 `challenges` 목록을 가진다. 예를 들어 2048은 엔진·컨트롤러·저장·HTTP를 각각 선언한다. 컨트롤러의 실제 이동/스폰/점수, 저장 어댑터의 직렬화/복구/예외, 포트 0의 실제 HTTP 요청과 서버 종료를 자체 assertion으로 검사한다. 제공된 인수 검사만 호출하는 파일은 자체 테스트로 인정하지 않는다.
+
+각 challenge는 `{id,adapter,targets}`로 선언한다. 보호된 ESM adapter는 `mutate({root,enabled,id})`에서 선언된 제품 파일의 대체 소스 문자열 맵을 반환한다. `enabled=false`는 같은 래퍼의 무결함 대조군이고 `true`는 지정 결함이다. 테스트·package.json·보호 파일은 교체할 수 없다. 구현자는 테스트에서 adapter나 결함 ID를 검사하지 않고 공개 동작을 assertion으로 확인한다.
+
+`npm test`는 `node --test --test-concurrency=1 <영역 파일들을 선언 순서대로>`와 정확히 일치해야 한다. 별도의 `agent-loop verify-node-tests`는 원본을 바꾸지 않고 격리 복사본에서 영역별 baseline, 각 무결함 대조군, 제품 결함을 순서대로 실행한다. 제공된 인수 검사/계약은 복사본에서 제외한다. 필수 이름은 정확히 한 번 성공해야 하고 skip/todo/cancel은 실패다. 결함 검사는 해당 영역의 필수 case에서 **실제 `ERR_ASSERTION`**이 발생해야 통과한다. 문법·import 오류, 단순 출력, timeout은 결함 탐지로 인정하지 않는다. Node의 `node:test.run` 구조화 이벤트를 사용한다([Node 24 테스트 API](https://r2.nodejs.org/docs/latest-v24.x/api/test.html)).
+
+결과는 `verification/node-tests/<run-id>/`와 `verification/node-tests/report.json`에 남긴다. 소스·자체 테스트 해시, 영역별 case, 대조군, 탐지 assertion, 소유 프로세스 종료와 임시 복사본 정리 결과를 기록한다. 작업당 20초·전체 180초 상한이 있으며 실패도 보고서를 남긴다. 성공 보고도 현재 소스 해시와 재대조하며 native suite·품질 검사 양쪽의 실제 종료 코드 0이 있어야 테스트 PASS를 수락한다.
+
+정책이 있는 테스트·검토·최종 승인 보고에는 아래와 같이 **모든 영역**의 판단이 추가로 필요하다.
+
+```json
+{"testScopes":[{"id":"controller","status":"SATISFIED","evidence":"실제 테스트 파일, assertion, 대조군과 탐지한 결함 근거"}]}
+```
+
+읽기 전용 검토자와 최종 승인자는 각 자체 테스트 파일과 `verification/node-tests/report.json`을 네이티브 `read`/`Read` 또는 단독 `cat`/`Get-Content`로 읽어야 한다. 완료된 실제 읽기 기록을 별도 보존하며 주장 문장·실패한 읽기·검사 재실행은 대신할 수 없다. 두 역할의 영역별 판단, 현재 테스트 역할의 품질 보고 digest, 실제 검사 이력이 모두 일치해야 SUCCESS로 이동한다. 이는 선언한 경계의 검증 강도이며 모든 가능한 결함이나 적대적인 테스트 코드를 격리·증명하는 보안 장치는 아니다.
+
 ## 전체 실행 예산
 
 새 실행에는 단계 복구 예산과 별개로 `sessionTimeoutMs`(기본 60분), `maxSessionAttempts`(기본 24회)를 저장한다. 화면의 전체 시간·전체 에이전트 시도 한도에서도 설정한다. 시간은 시작부터 대기·백오프·재개·재시작 시간을 포함한 wall-clock이다. 시도 수는 네이티브 에이전트 CLI 호출 수이며 보고 보완·무료 복구도 포함한다. **CLI 내부의 공급자 요청 수·토큰·금액을 제한하는 과금 예산은 아니다.**

@@ -11,6 +11,7 @@ import {
   AttemptRecord,
   ModelPricing,
   NodeVisit,
+  NodeTestProof,
   SessionState,
 } from "../shared/domain";
 import { StudioStore } from "./store";
@@ -43,7 +44,8 @@ import {
 import { validateCompletion, Completion } from "./completion";
 import { AppError, messageOf } from "./errors";
 import { outsidePaths } from "./access_paths";
-import { currentTestProof, mergeProjectReceipts } from "./verification_evidence";
+import { currentTestProof, currentNodeTestProof, mergeProjectReceipts } from "./verification_evidence";
+import { readNodeTestProof } from "./node_test_verification";
 import { modelPricing } from "./model_pricing";
 import { productionHashes } from "./verification_sources";
 import { successBlockers } from "./success_gate";
@@ -679,8 +681,9 @@ export class GraphRuntime {
       attempt.cliSessionId = result.cliSessionId;
       attempt.actualModelId = result.evidence.actualModelId;
       attempt.commands = result.evidence.commands;
+      attempt.readFiles=result.evidence.readFiles;
       attempt.fileMutation = result.evidence.fileMutation;
-      if (result.evidence.fileMutation) visit.verifiedCommands = [];
+      if (result.evidence.fileMutation) {visit.verifiedCommands = [];delete visit.nodeTestProof;}
       if (["test", "review", "approval"].includes(node.type))
         visit.verifiedCommands = mergeProjectReceipts(
           this.state.targetProjectPath,
@@ -736,6 +739,16 @@ export class GraphRuntime {
           attempt.fileMutation = true;
         }
       }
+      let nodeProof:NodeTestProof|undefined, nodeProofError:string|undefined;
+      if(this.state.verificationContract?.manifest?.nodeTests&&["test","review","approval"].includes(node.type)&&result.outcome==="succeeded"){
+        try {
+          nodeProof=await readNodeTestProof(this.state.targetProjectPath,this.state.verificationContract.manifest.nodeTests);
+          if(node.type!=="test"){
+            const prior=currentNodeTestProof(this.state,visit);
+            if(!prior||prior.runId!==nodeProof.runId||prior.reportDigest!==nodeProof.reportDigest)throw Error("자체 Node 증거가 현재 테스트 역할에서 승인된 실행과 다릅니다.");
+          }
+        }catch(error){nodeProof=undefined;nodeProofError=messageOf(error);}
+      }
       const completion = validateCompletion(
         node,
         result,
@@ -746,7 +759,11 @@ export class GraphRuntime {
         this.state.graph.automation,
         this.state.verificationContract,
         this.state.targetProjectPath,
+        nodeProof,
+        [...new Set(visit.attempts.flatMap(a=>a.readFiles??[]))],
       );
+      if(nodeProofError&&completion.valid&&["FAIL","REJECTED"].includes(completion.verdict??""))completion.reason=`자체 Node 검증: ${nodeProofError}`;
+      if(completion.valid&&completion.verdict==="PASS"&&node.type==="test"&&nodeProof)visit.nodeTestProof=nodeProof;
       if (completion.valid && node.type === "planning" && this.state.graph.automation) {
         const requested=this.outside(`${this.state.goal}\n${this.state.graph.nodes.map(n=>n.instructions).join("\n")}`);
         const unrequested=[...new Set(completion.plans.flatMap(plan=>this.outside(plan.body,requested)))];

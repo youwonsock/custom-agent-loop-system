@@ -69,6 +69,8 @@ API 키, MCP, 웹 검색, 스킬, 훅, 플러그인 설정은 해당 CLI에서 �
 
 `SUCCESS`에는 모든 필수 요구사항의 충족 증거, 현재 구현의 실제 테스트 PASS, 마지막 최종 승인(`approval`)의 정상 APPROVED가 모두 필요합니다. 구현에서 바로 완료하거나 실패 간선을 완료에 연결한 그래프는 실행을 차단합니다. 기존 snapshot도 종단에서 같은 조건을 검사하며, 근거 누락 시 사유와 함께 `PAUSED`로 보존합니다. 수동 재개로 수정·재검증·최종 승인을 다시 수행할 수 있습니다. 과거 완료 기록은 소급 변경하지 않습니다.
 
+새 자율 프리셋의 `authoredNodeTests`는 `npm test` 계약에 자체 Node 영역 정책을 요구합니다. 컨트롤러·저장·HTTP 같은 경계를 필수 case로 선언하고 실제 assertion, 무결함 대조군, 제품 결함 탐지를 별도 검증합니다. 검토자와 최종 승인자는 자체 테스트 파일과 품질 보고서를 실제로 읽고 모든 영역을 판단해야 합니다. 설정·계약·제한은 [자율 실행 문서](docs/AUTONOMOUS_WORKFLOW.md#자체-node-테스트의-영역별-계약과-독립-검토)에 설명했습니다.
+
 실행 기록은 검사가 실행됐다는 근거입니다. 모델이 작성한 테스트가 목표 전체를 정확히 검사한다는 보장은 없으므로 중요한 산출물은 독립 인수 검사도 수행해야 합니다. 인식하지 못하는 검사 명령은 자동 통과하지 않습니다. 네이티브 이벤트에 보고되지 않은 외부 파일 변경은 감지하지 못합니다.
 
 샌드박스의 `listen EPERM` 등 환경 제약이나 테스트의 `VERDICT: BLOCKED`는 원인과 함께 `WAITING_USER`로 보존합니다. 자동 구현 반복이나 권한 확대 없이 환경 확인 후 같은 테스트 방문을 수동 재개합니다. 프롬프트 경로 검사는 공백 경로와 HTTP 요청 대상을 구별하며, 모호한 실제 외부 파일 요청에는 `FILE_ACCESS: /absolute/path`를 사용합니다. 실제 접근 제한은 네이티브 CLI 권한으로 집행됩니다.
@@ -94,6 +96,7 @@ agent-loop graphs
 agent-loop models --connection CONNECTION_ID --target /absolute/project
 agent-loop run --graph GRAPH_ID --goal "목표" --target /absolute/project
 agent-loop resume --session SESSION_ID
+agent-loop verify-node-tests --target /absolute/project
 ```
 
 `--root`를 사용하면 GUI와 CLI가 같은 저장 영역을 공유합니다. 그래프는 version 2, 연결 저장소는 version 1, 실행 상태는 stateVersion 3입니다. 소유권 잠금·heartbeat와 파일 기반 제어 큐로 중복 실행과 Stop/Interrupt 요청 손실을 방지합니다.

@@ -295,6 +295,7 @@ export default function GraphInspector({
                           nativeApprovalReview: false,
                           browserVerification: true,
                           verificationContract: true,
+                          authoredNodeTests: true,
                         };
                       else delete g.automation;
                     })
@@ -305,6 +306,12 @@ export default function GraphInspector({
               {draft.automation && (
                 <>
                   <p className="muted">검증 계약: {draft.automation.verificationContract ? "보호 파일·필수 검사 고정" : "기존 그래프 정책"}</p>
+                  <label className="checkbox">
+                    <input type="checkbox" aria-label="자체 Node 테스트 계약 필수"
+                      checked={Boolean(draft.automation.authoredNodeTests)}
+                      onChange={e=>change(g=>{g.automation!.authoredNodeTests=e.target.checked;if(e.target.checked)g.automation!.verificationContract=true;})}/>
+                    npm 테스트에 자체 영역·결함 탐지 계약 필수
+                  </label>
                   <label>
                     자동 수정 횟수
                     <input
