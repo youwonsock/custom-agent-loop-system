@@ -2,6 +2,10 @@
 
 2026-10-24 기준. 구현: `src/core/completion.ts`, `runtime.ts`, `success_gate.ts`, `verification_evidence.ts`, `graph.ts`, `model_pricing.ts`, `cli_diagnostics.ts`, `agent_attempt_runner.ts`, `src/server/coordinator.ts`, `runtime_defaults.json`.
 
+## 자율 실행 프리셋
+
+새 자율 그래프는 계획 1개 자동 선택, 검증 실패의 구현 재진입(기본 3회), 선택적인 실제 브라우저 증거 강제를 지원한다. 기존 그래프와 명시적인 승인·STOP·접근·비용 한도는 유지한다. 수정 가능한 BLOCKED는 명시적 product/test_setup 분류가 있을 때만 실패 경로로 돌리며 네이티브 권한 오류는 계속 대기한다. 테스트 역할의 제품 변경은 반려하고 새 구현·테스트·승인이 필요하다. 형식 보완에서는 현재 실제 명령 기록만 재사용한다. 상세 동작은 [AUTONOMOUS_WORKFLOW.md](AUTONOMOUS_WORKFLOW.md)에 기록했다. 그래프 v2에 선택적 automation 필드만 추가했으며 기존 세션 v3는 그대로 읽는다.
+
 ## 비용에 따른 재시도
 
 | 상황 | 무료 확인 | 유료·가격 미확인 |

@@ -1,7 +1,18 @@
-import { advanceVisit, interruptSession, prepareManualResume, stopSession } from "./session_transitions";
+import {
+  advanceVisit,
+  interruptSession,
+  prepareManualResume,
+  stopSession,
+} from "./session_transitions";
 import { randomUUID } from "node:crypto";
 import * as path from "node:path";
-import { AgentNode, AttemptRecord, ModelPricing, NodeVisit, SessionState } from "../shared/domain";
+import {
+  AgentNode,
+  AttemptRecord,
+  ModelPricing,
+  NodeVisit,
+  SessionState,
+} from "../shared/domain";
 import { StudioStore } from "./store";
 import {
   SessionOwnership,
@@ -34,6 +45,7 @@ import { AppError, messageOf } from "./errors";
 import { outsidePaths } from "./access_paths";
 import { currentTestProof, mergeReceipts } from "./verification_evidence";
 import { modelPricing } from "./model_pricing";
+import { productionHashes } from "./verification_sources";
 import { successBlockers } from "./success_gate";
 
 export interface RuntimeHooks {
@@ -49,7 +61,9 @@ export function classifyFailure(
     !["process_exit", "incomplete_response"].includes(result.failureKind);
   const diagnostic =
     result.diagnostics.terminalError ??
-    (result.exitCode !== 0 || result.timedOut ? result.diagnostics.plainError : null);
+    (result.exitCode !== 0 || result.timedOut
+      ? result.diagnostics.plainError
+      : null);
   const kind =
     result.outcome === "orphaned_process"
       ? "orphaned_process"
@@ -74,19 +88,28 @@ export function classifyFailure(
       : kind === "model_unavailable"
         ? `CLI에서 선택한 모델을 실행할 수 없습니다. 모델 권한과 설정을 확인하세요.${diagnostic ? ` (${diagnostic.message})` : ""}`
         : (detail ?? `CLI 실패 (${result.exitCode})`);
-  if (preserved && result.timedOut && diagnostic && diagnostic.kind !== "process_exit")
+  if (
+    preserved &&
+    result.timedOut &&
+    diagnostic &&
+    diagnostic.kind !== "process_exit"
+  )
     message += `\nLast observed CLI error: ${diagnostic.message}`;
   return {
     kind,
     message,
-    retryable: ![
-      "auth",
-      "model_unavailable",
-      "permission",
-      "role_violation",
-      "orphaned_process",
-      "cancelled",
-    ].includes(kind) && !["auth", "permission", "model_unavailable"].includes(diagnostic?.kind ?? ""),
+    retryable:
+      ![
+        "auth",
+        "model_unavailable",
+        "permission",
+        "role_violation",
+        "orphaned_process",
+        "cancelled",
+      ].includes(kind) &&
+      !["auth", "permission", "model_unavailable"].includes(
+        diagnostic?.kind ?? "",
+      ),
     occurredAt: new Date().toISOString(),
     attemptId: null,
     role: null,
@@ -139,8 +162,10 @@ export class GraphRuntime {
   }
   async run(mode: "start" | "manual" | "automatic" = "start"): Promise<void> {
     this.state = await this.store.readSession(this.sessionId);
-    const automaticRecoveryVisitId = mode === "automatic" && this.state.automaticRecovery
-      ? this.state.activeVisitId : null;
+    const automaticRecoveryVisitId =
+      mode === "automatic" && this.state.automaticRecovery
+        ? this.state.activeVisitId
+        : null;
     const settings = this.state.settings;
     this.owner = new SessionOwnership({
       sessionDir: this.store.sessionDir(this.sessionId),
@@ -233,24 +258,34 @@ export class GraphRuntime {
           }
           for (const [nodeId, binding] of Object.entries(this.state.bindings)) {
             if (binding.connectionId !== connection.id) continue;
-            const model = catalog.models.find(m => m.id === binding.modelId)!;
+            const model = catalog.models.find((m) => m.id === binding.modelId)!;
             this.pricing.set(nodeId, model.pricing ?? modelPricing());
           }
           break;
         }
       }
       this.abort = new AbortController();
-      if (automaticRecoveryVisitId && this.state.activeVisitId === automaticRecoveryVisitId) {
-        if (this.pricing.get(this.state.currentNodeId ?? "")?.status !== "free") {
+      if (
+        automaticRecoveryVisitId &&
+        this.state.activeVisitId === automaticRecoveryVisitId
+      ) {
+        if (
+          this.pricing.get(this.state.currentNodeId ?? "")?.status !== "free"
+        ) {
           this.state.status = "PAUSED";
-          this.state.statusReason = "자동 복구 전에 무료 모델임을 다시 확인하지 못했습니다. 추가 모델 호출 없이 정지했습니다.";
+          this.state.statusReason =
+            "자동 복구 전에 무료 모델임을 다시 확인하지 못했습니다. 추가 모델 호출 없이 정지했습니다.";
           await this.save();
           return;
         }
-        const visit = this.state.visits.find(v => v.id === automaticRecoveryVisitId)!;
+        const visit = this.state.visits.find(
+          (v) => v.id === automaticRecoveryVisitId,
+        )!;
         // Scheduler latency and metadata lookup must not consume the next attempt's budget.
         visit.cycleStartedAt = new Date().toISOString();
-        visit.cycleDeadlineAt = new Date(Date.now() + settings.phaseRecoveryBudgetMs).toISOString();
+        visit.cycleDeadlineAt = new Date(
+          Date.now() + settings.phaseRecoveryBudgetMs,
+        ).toISOString();
       }
       this.state.statusReason = null;
       await this.save();
@@ -262,10 +297,9 @@ export class GraphRuntime {
         if (id === "SUCCESS" || id === "PAUSED") {
           const blockers = id === "SUCCESS" ? successBlockers(this.state) : [];
           this.state.status = blockers.length ? "PAUSED" : id;
-          this.state.statusReason =
-            blockers.length
-              ? `성공 조건 미충족: ${blockers.join(" ")} 수정·테스트·최종 승인을 다시 수행하도록 수동 재개하세요.`
-              : id === "SUCCESS"
+          this.state.statusReason = blockers.length
+            ? `성공 조건 미충족: ${blockers.join(" ")} 수정·테스트·최종 승인을 다시 수행하도록 수동 재개하세요.`
+            : id === "SUCCESS"
               ? "모든 필수 요구사항, 실제 테스트 실행 증거와 최종 승인을 확인했습니다."
               : (this.state.statusReason ??
                 "중단 분석을 완료했습니다. 계획과 근거를 검토한 뒤 재개하세요.");
@@ -363,7 +397,9 @@ export class GraphRuntime {
         if (this.state.status !== "RUNNING") return;
         if (this.state.activeVisitId !== visit.id) continue; // interrupt control changed traversal
         if (!completion) continue;
-        visit.output = completion.output + (completion.reason ? `\n\n[ORCHESTRATOR] ${completion.reason}` : "");
+        visit.output =
+          completion.output +
+          (completion.reason ? `\n\n[ORCHESTRATOR] ${completion.reason}` : "");
         visit.verdict = completion.verdict;
         if (completion.researchBlocked) {
           visit.status = "paused";
@@ -440,6 +476,18 @@ export class GraphRuntime {
     node: AgentNode,
     visit: NodeVisit,
   ): Promise<Completion | null> {
+    let testInputs: Record<string, string> | null = null;
+    if (this.state.graph.automation && node.type === "test") {
+      try {
+        testInputs = await productionHashes(this.state.targetProjectPath);
+      } catch (error) {
+        visit.status = "paused";
+        this.state.status = "WAITING_USER";
+        this.state.statusReason = `검증 전 소스 읽기가 차단됐습니다. 경로·권한을 확인하세요: ${messageOf(error)}`;
+        await this.save();
+        return null;
+      }
+    }
     const s = this.state.settings,
       binding = this.state.bindings[node.id]!,
       connection = this.state.connections.find(
@@ -490,6 +538,7 @@ export class GraphRuntime {
         cwd: this.state.targetProjectPath,
         fullAccess: this.state.accessMode === "full_access",
         allowedPaths: this.state.additionalAllowedPaths,
+        nativeApprovalReview: this.state.graph.automation?.nativeApprovalReview,
         ...(nextResume ? { resumeId: nextResume } : {}),
       });
       const id = randomUUID(),
@@ -598,7 +647,11 @@ export class GraphRuntime {
       attempt.commands = result.evidence.commands;
       attempt.fileMutation = result.evidence.fileMutation;
       if (result.evidence.fileMutation) visit.verifiedCommands = [];
-      if (["test", "review", "approval"].includes(node.type)) visit.verifiedCommands = mergeReceipts(visit.verifiedCommands, result.evidence.commands);
+      if (["test", "review", "approval"].includes(node.type))
+        visit.verifiedCommands = mergeReceipts(
+          visit.verifiedCommands,
+          result.evidence.commands,
+        );
       attempt.assistantTextBytes = result.evidence.assistantTextBytes;
       attempt.maxTokens = result.evidence.maxTokens;
       if (orphaned) {
@@ -623,6 +676,24 @@ export class GraphRuntime {
         await this.finishControl(result.controlRequest);
         return null;
       }
+      if (testInputs && result.outcome === "succeeded") {
+        let changed: string[];
+        try {
+          const after = await productionHashes(this.state.targetProjectPath);
+          changed = [
+            ...new Set([...Object.keys(testInputs), ...Object.keys(after)]),
+          ].filter((file) => testInputs[file] !== after[file]);
+        } catch (error) {
+          changed = [`소스 검사 차단: ${messageOf(error)}`];
+        }
+        if (changed.length) {
+          result.evidence.changedFiles = [
+            ...new Set([...(result.evidence.changedFiles ?? []), ...changed]),
+          ];
+          result.evidence.fileMutation = true;
+          attempt.fileMutation = true;
+        }
+      }
       const completion = validateCompletion(
         node,
         result,
@@ -630,6 +701,7 @@ export class GraphRuntime {
         this.state.requirements.items,
         visit.verifiedCommands ?? result.evidence.commands,
         currentTestProof(this.state, visit),
+        this.state.graph.automation,
       );
       if (completion.environmentBlocked) {
         visit.output = completion.output;
@@ -669,9 +741,11 @@ export class GraphRuntime {
         await this.save();
         return null;
       }
-      const providerFailure = result.diagnostics.terminalError ?? result.diagnostics.plainError;
+      const providerFailure =
+        result.diagnostics.terminalError ?? result.diagnostics.plainError;
       if (
-        (failure.kind === "quota_exhausted" || providerFailure?.kind === "quota_exhausted") &&
+        (failure.kind === "quota_exhausted" ||
+          providerFailure?.kind === "quota_exhausted") &&
         attempt.pricing?.status !== "free"
       ) {
         visit.status = "paused";
@@ -680,7 +754,12 @@ export class GraphRuntime {
         await this.save();
         return null;
       }
-      recoveryMessage = buildRecoveryMessage(failure.kind, failure.message, result.assistantText, result.events);
+      recoveryMessage = buildRecoveryMessage(
+        failure.kind,
+        failure.message,
+        result.assistantText,
+        result.events,
+      );
       const decision = runner.decideRetry({
         failure,
         attemptNumber: normal + 1,

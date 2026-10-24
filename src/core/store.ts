@@ -17,11 +17,19 @@ import {
   readJsonFile,
   withShortFileLock,
 } from "./resilience";
-import { createGraph, safeId, validateGraphDocument } from "./graph";
+import {
+  createGraph,
+  createAutonomousGraph,
+  safeId,
+  validateGraphDocument,
+} from "./graph";
 import { AppError } from "./errors";
 
 export class StudioStore {
-  private readonly summaryCache = new Map<string, { signature: string; summary: SessionSummary }>();
+  private readonly summaryCache = new Map<
+    string,
+    { signature: string; summary: SessionSummary }
+  >();
   constructor(readonly root: string) {}
   async init(): Promise<void> {
     await fs.mkdir(path.join(this.root, "graphs"), { recursive: true });
@@ -76,12 +84,17 @@ export class StudioStore {
   }
   async createGraph(input: {
     name?: string;
+    template?: "autonomous";
     empty?: boolean;
     document?: unknown;
   }): Promise<AgentGraphDocument> {
+    if (input.template !== undefined && input.template !== "autonomous")
+      throw new AppError(400, "지원하지 않는 그래프 템플릿입니다.");
     const doc = input.document
       ? validateGraphDocument(input.document)
-      : createGraph(input.name, input.empty);
+      : input.template === "autonomous"
+        ? createAutonomousGraph(input.name)
+        : createGraph(input.name, input.empty);
     doc.id = randomUUID();
     doc.revision = 1;
     doc.updatedAt = new Date().toISOString();
@@ -207,48 +220,83 @@ export class StudioStore {
   }
   /** Stat all records, but decode only changed snapshots; never retain historical output in memory. */
   async sessionSummaries(): Promise<SessionSummary[]> {
-    const ids = (await fs.readdir(path.join(this.root, "sessions"))).filter(safeId);
+    const ids = (await fs.readdir(path.join(this.root, "sessions"))).filter(
+      safeId,
+    );
     const idSet = new Set(ids);
-    for (const id of this.summaryCache.keys()) if (!idSet.has(id)) this.summaryCache.delete(id);
-    const summaries = await Promise.all(ids.map(async id => {
-      try {
-        const info = await fs.stat(path.join(this.sessionDir(id), "state.json"));
-        const signature = `${info.mtimeMs}:${info.ctimeMs}:${info.size}:${info.ino}`;
-        const cached = this.summaryCache.get(id);
-        if (cached?.signature === signature) return cached.summary;
-        const summary = sessionSummary(await this.readSession(id));
-        this.summaryCache.set(id, { signature, summary });
-        return summary;
-      } catch { this.summaryCache.delete(id); return null; }
-    }));
-    return summaries.filter((s): s is SessionSummary => !!s).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    for (const id of this.summaryCache.keys())
+      if (!idSet.has(id)) this.summaryCache.delete(id);
+    const summaries = await Promise.all(
+      ids.map(async (id) => {
+        try {
+          const info = await fs.stat(
+            path.join(this.sessionDir(id), "state.json"),
+          );
+          const signature = `${info.mtimeMs}:${info.ctimeMs}:${info.size}:${info.ino}`;
+          const cached = this.summaryCache.get(id);
+          if (cached?.signature === signature) return cached.summary;
+          const summary = sessionSummary(await this.readSession(id));
+          this.summaryCache.set(id, { signature, summary });
+          return summary;
+        } catch {
+          this.summaryCache.delete(id);
+          return null;
+        }
+      }),
+    );
+    return summaries
+      .filter((s): s is SessionSummary => !!s)
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   }
   async readSession(id: string): Promise<SessionState> {
     let raw: string;
-    try { raw = await fs.readFile(path.join(this.sessionDir(id), "state.json"), "utf8"); }
-    catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") throw new AppError(404, "세션이 없습니다.");
+    try {
+      raw = await fs.readFile(
+        path.join(this.sessionDir(id), "state.json"),
+        "utf8",
+      );
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT")
+        throw new AppError(404, "세션이 없습니다.");
       throw error;
     }
     let value: unknown;
-    try { value = JSON.parse(raw); }
-    catch { throw new AppError(500, "세션 snapshot JSON이 손상되었습니다. 원본 파일을 확인하세요.", "invalid_session"); }
+    try {
+      value = JSON.parse(raw);
+    } catch {
+      throw new AppError(
+        500,
+        "세션 snapshot JSON이 손상되었습니다. 원본 파일을 확인하세요.",
+        "invalid_session",
+      );
+    }
     return decodeSession(value, id);
   }
 
   async writeSession(state: SessionState): Promise<void> {
-    await withShortFileLock(path.join(this.sessionDir(state.id), "state.lock"), async () => {
-      const current = await this.readSession(state.id).catch(error => {
-        if (error instanceof AppError && error.statusCode === 404) return null;
-        throw error;
-      });
-      decodeSession(state, state.id);
-      if (current && (current.revision ?? 0) !== (state.revision ?? 0))
-        throw new AppError(409, "더 새로운 세션 상태가 저장되어 이전 상태를 덮어쓸 수 없습니다.", "stale_session");
-      state.revision = (current?.revision ?? 0) + 1;
-      state.updatedAt = new Date().toISOString();
-      await atomicWriteJsonFile(path.join(this.sessionDir(state.id), "state.json"), state);
-    });
+    await withShortFileLock(
+      path.join(this.sessionDir(state.id), "state.lock"),
+      async () => {
+        const current = await this.readSession(state.id).catch((error) => {
+          if (error instanceof AppError && error.statusCode === 404)
+            return null;
+          throw error;
+        });
+        decodeSession(state, state.id);
+        if (current && (current.revision ?? 0) !== (state.revision ?? 0))
+          throw new AppError(
+            409,
+            "더 새로운 세션 상태가 저장되어 이전 상태를 덮어쓸 수 없습니다.",
+            "stale_session",
+          );
+        state.revision = (current?.revision ?? 0) + 1;
+        state.updatedAt = new Date().toISOString();
+        await atomicWriteJsonFile(
+          path.join(this.sessionDir(state.id), "state.json"),
+          state,
+        );
+      },
+    );
   }
   async mutateSession(
     id: string,

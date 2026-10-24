@@ -2,7 +2,11 @@ import * as fs from "node:fs";
 import * as fsp from "node:fs/promises";
 import * as path from "node:path";
 import * as pty from "node-pty";
-import { OutputStream, SupervisedChild, spawnPipeChild } from "./process_transport";
+import {
+  OutputStream,
+  SupervisedChild,
+  spawnPipeChild,
+} from "./process_transport";
 import { CommandTracker } from "./verification_evidence";
 import {
   EventEvidence,
@@ -26,13 +30,24 @@ import {
   emptyCliDiagnostics,
 } from "./cli_diagnostics";
 
-import { StreamingRedactor, LineBuffer, appendRing, utf8Prefix, stripTerminalControlSequences, isInteractiveAccessPrompt, isStructurallyCompleteJson } from "./process_output";
+import {
+  StreamingRedactor,
+  LineBuffer,
+  appendRing,
+  utf8Prefix,
+  stripTerminalControlSequences,
+  isInteractiveAccessPrompt,
+  isStructurallyCompleteJson,
+} from "./process_output";
 import { normalizeProviderEvent } from "./provider_events";
 import { terminateProcessTreeBounded } from "./process_lifecycle";
 import type { Activity } from "../shared/execution_types";
 // Preserve imports used by existing integrations.
 export { extractAssistantText, findSessionId } from "./provider_events";
-export { stripTerminalControlSequences, isInteractiveAccessPrompt } from "./process_output";
+export {
+  stripTerminalControlSequences,
+  isInteractiveAccessPrompt,
+} from "./process_output";
 export { terminateProcessTreeBounded } from "./process_lifecycle";
 
 type AnyObj = Record<string, unknown>;
@@ -134,16 +149,22 @@ export class ProcessSupervisor {
 
     let child: SupervisedChild;
     try {
-      child = options.transport === "pipe"
-        ? spawnPipeChild(options.binary, options.args, options.cwd, options.env)
-        : pty.spawn(options.binary, options.args, {
-        name: "xterm-256color",
-        cols: options.cols,
-        rows: options.rows,
-        cwd: options.cwd,
-        env: options.env,
-        useConpty: options.useConpty,
-      });
+      child =
+        options.transport === "pipe"
+          ? spawnPipeChild(
+              options.binary,
+              options.args,
+              options.cwd,
+              options.env,
+            )
+          : pty.spawn(options.binary, options.args, {
+              name: "xterm-256color",
+              cols: options.cols,
+              rows: options.rows,
+              cwd: options.cwd,
+              env: options.env,
+              useConpty: options.useConpty,
+            });
     } catch (err) {
       rawLog.end();
       const message = err instanceof Error ? err.message : String(err);
@@ -265,6 +286,10 @@ export class ProcessSupervisor {
         if (remainder) processLine(remainder, stream);
       }
       evidence.fileMutation ||= mutations.finish();
+      if (mutations.changedFiles.length)
+        evidence.changedFiles = mutations.changedFiles.map((file) =>
+          path.relative(options.cwd, path.resolve(options.cwd, file)),
+        );
       const terminal = diagnosticCollector.diagnostics.terminalError;
       if (
         terminal &&
@@ -308,7 +333,9 @@ export class ProcessSupervisor {
       finish(
         actualExitCode === 0 ? "succeeded" : "process_exit",
         actualExitCode === 0 ? null : "process_exit",
-        actualExitCode === 0 ? null : `Process exited with code ${actualExitCode}`,
+        actualExitCode === 0
+          ? null
+          : `Process exited with code ${actualExitCode}`,
         false,
       );
     };
@@ -382,7 +409,9 @@ export class ProcessSupervisor {
 
     const resetActivityTimer = (): void => {
       if (
-        resolved || terminating || !transportEstablished ||
+        resolved ||
+        terminating ||
+        !transportEstablished ||
         activity === "initial_transport"
       )
         return;
@@ -470,8 +499,7 @@ export class ProcessSupervisor {
       }
       evidence.maxTokens = Math.max(evidence.maxTokens, observeTokens(event));
       const reportedModel = observeModel(event);
-      if (reportedModel)
-        evidence.actualModelId = reportedModel;
+      if (reportedModel) evidence.actualModelId = reportedModel;
       const eventBytesForEntry = Buffer.byteLength(
         JSON.stringify(event),
         "utf8",
@@ -571,7 +599,10 @@ export class ProcessSupervisor {
       }
     }
 
-    const handleSafeData = (safeData: string, stream: OutputStream = "stdout"): void => {
+    const handleSafeData = (
+      safeData: string,
+      stream: OutputStream = "stdout",
+    ): void => {
       options.onOutput?.(safeData);
       writeRawLog(safeData);
       outputTail = appendRing(
@@ -594,10 +625,12 @@ export class ProcessSupervisor {
       // implementations inject cursor-control bytes between writes; redacting the
       // normalized stream prevents a split credential from being reconstructed by
       // the assistant-event parser even when those bytes bisect the secret.
-      const safeData = redactors[stream].push(stripTerminalControlSequences(data));
+      const safeData = redactors[stream].push(
+        stripTerminalControlSequences(data),
+      );
       if (safeData) handleSafeData(safeData, stream);
     });
-    child.onError?.(error => {
+    child.onError?.((error) => {
       actualExitCode = -1;
       finish("spawn_error", "spawn_error", error.message, false);
     });

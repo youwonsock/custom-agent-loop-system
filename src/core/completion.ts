@@ -1,5 +1,10 @@
 import { NodeVerdict } from "../shared/execution_types";
-import { AgentNode, CommandReceipt, PlanChoice } from "../shared/domain";
+import {
+  AgentGraphDocument,
+  AgentNode,
+  CommandReceipt,
+  PlanChoice,
+} from "../shared/domain";
 import { SupervisorResult } from "./process_supervisor";
 import {
   evaluateRequirementCoverage,
@@ -8,7 +13,12 @@ import {
 } from "./requirement_ledger";
 import { isReadOnly } from "./invocation";
 import { FailureKind } from "./resilience";
-import { checkCommandKey, failedVerificationCommand, isVerificationCommand } from "./verification_evidence";
+import {
+  checkCommandKey,
+  failedVerificationCommand,
+  isVerificationCommand,
+  isBrowserVerificationCommand,
+} from "./verification_evidence";
 export const requiresResearch = (goal: string): boolean =>
   /(?:인터넷|웹)\s*(?:을|를|에서|으로)?\s*(?:검색|조사|찾)|\b(?:search|browse|research|look\s*up)(?:\s+the)?\s+(?:internet|web)\b|\b(?:internet|web)\s+(?:search|research)\b/i.test(
     goal.replace(/\s+/g, " "),
@@ -42,6 +52,7 @@ export function validateCompletion(
   requirements: RequirementItem[],
   commands: CommandReceipt[] = result.evidence.commands,
   priorTestProof: CommandReceipt[] = [],
+  automation?: AgentGraphDocument["automation"],
 ): Completion {
   const output = result.assistantText.replace(/\r\n/g, "\n").trim();
   const answer: Completion = {
@@ -73,10 +84,35 @@ export function validateCompletion(
       "읽기 전용 역할에서 파일 변경이 관측되었습니다.",
       "role_violation",
     );
+  const productionEdits = (result.evidence.changedFiles ?? []).filter(
+    (file) =>
+      !/^(?:test|tests|verification|\.agent-graph|artifacts|test-results|playwright-report)(?:\/|$)|(?:^|\/)[^/]+\.(?:test|spec)\.[cm]?[jt]sx?$|^playwright\.config\.[cm]?[jt]s$/.test(
+        file.replace(/\\/g, "/"),
+      ),
+  );
+  if (
+    automation &&
+    node.type === "test" &&
+    productionEdits.length &&
+    !commands.some((c) => c.environmentError)
+  ) {
+    answer.verdict = "FAIL";
+    answer.reason = `테스트 역할의 제품 파일 변경을 반려했습니다: ${productionEdits.join(", ")}. 구현 역할에서 수정하고 전체 검증을 다시 수행해야 합니다.`;
+    return answer;
+  }
+  const repairableBlocker =
+    Boolean(automation) &&
+    /^BLOCKED_KIND:\s*(?:product|test_setup)\s*$/im.test(output);
   if (["test", "review", "approval"].includes(node.type)) {
-    const blocked = commands.find(c => c.environmentError);
-    const reportedBlocked = parseRequirementEvidence(output).some(r => r.status === "BLOCKED");
-    if (blocked || reportedBlocked || /^(?:\*\*|__)?VERDICT:\s*BLOCKED\b/im.test(output)) {
+    const blocked = commands.find((c) => c.environmentError);
+    const reportedBlocked = parseRequirementEvidence(output).some(
+      (r) => r.status === "BLOCKED",
+    );
+    if (
+      blocked ||
+      (!repairableBlocker &&
+        (reportedBlocked || /^(?:\*\*|__)?VERDICT:\s*BLOCKED\b/im.test(output)))
+    ) {
       answer.verdict = "BLOCKED";
       answer.environmentBlocked = blocked
         ? `검증 환경 제약: ${blocked.command} → ${blocked.environmentError}. 환경을 해결한 뒤 같은 방문을 수동 재개하세요.`
@@ -104,7 +140,8 @@ export function validateCompletion(
       );
   }
   const coverage = evaluateRequirementCoverage(output, requirements);
-  const missingOnly = coverage.missing.length > 0 &&
+  const missingOnly =
+    coverage.missing.length > 0 &&
     coverage.unresolved.length === coverage.missing.length;
   if (node.type === "planning") {
     answer.plans = parsePlans(output);
@@ -120,7 +157,12 @@ export function validateCompletion(
       return fail("모든 계획 선택지에서 각 REQ ID를 다뤄야 합니다.");
   }
   if (node.type === "test") {
-    const lines = [...output.matchAll(/^(?:\*\*|__)?VERDICT:\s*(PASS|FAIL)\b.*$/gim)];
+    const testOutput = repairableBlocker
+      ? output.replace(/^VERDICT:\s*BLOCKED\b.*$/gim, "VERDICT: FAIL")
+      : output;
+    const lines = [
+      ...testOutput.matchAll(/^(?:\*\*|__)?VERDICT:\s*(PASS|FAIL)\b.*$/gim),
+    ];
     if (!lines.length) return fail("VERDICT: PASS 또는 FAIL 행이 필요합니다.");
     answer.verdict =
       lines.at(-1)![1]!.toUpperCase() === "PASS" && coverage.allSatisfied
@@ -129,10 +171,17 @@ export function validateCompletion(
     if (lines.at(-1)![1]!.toUpperCase() === "PASS" && !coverage.allSatisfied)
       answer.reason = `요구사항 증거가 부족합니다: ${coverage.unresolved.join(", ")}`;
     if (lines.at(-1)![1]!.toUpperCase() === "PASS" && missingOnly)
-      return fail(`요구사항 증거 형식이 누락되었거나 잘못되었습니다: ${coverage.missing.join(", ")}. 기존 결과를 보존하고 모든 REQ의 올바른 증거 블록과 VERDICT를 포함한 전체 최종 보고를 다시 반환하세요.`);
+      return fail(
+        `요구사항 증거 형식이 누락되었거나 잘못되었습니다: ${coverage.missing.join(", ")}. 기존 결과를 보존하고 모든 REQ의 올바른 증거 블록과 VERDICT를 포함한 전체 최종 보고를 다시 반환하세요.`,
+      );
   }
   if (node.type === "review" || node.type === "approval") {
-    const lines = [...output.matchAll(/^(?:\*\*|__)?(APPROVED|REJECTED)\b.*$/gim)];
+    const auditOutput = repairableBlocker
+      ? output.replace(/^VERDICT:\s*BLOCKED\b.*$/gim, "REJECTED")
+      : output;
+    const lines = [
+      ...auditOutput.matchAll(/^(?:\*\*|__)?(APPROVED|REJECTED)\b.*$/gim),
+    ];
     if (!lines.length) return fail("APPROVED 또는 REJECTED 행이 필요합니다.");
     answer.verdict =
       lines.at(-1)![1]!.toUpperCase() === "APPROVED" && coverage.allSatisfied
@@ -144,7 +193,9 @@ export function validateCompletion(
     )
       answer.reason = `요구사항 증거가 부족합니다: ${coverage.unresolved.join(", ")}`;
     if (lines.at(-1)![1]!.toUpperCase() === "APPROVED" && missingOnly)
-      return fail(`요구사항 증거 형식이 누락되었거나 잘못되었습니다: ${coverage.missing.join(", ")}. 기존 결과를 보존하고 모든 REQ의 올바른 증거 블록과 승인 판정을 포함한 전체 최종 보고를 다시 반환하세요.`);
+      return fail(
+        `요구사항 증거 형식이 누락되었거나 잘못되었습니다: ${coverage.missing.join(", ")}. 기존 결과를 보존하고 모든 REQ의 올바른 증거 블록과 승인 판정을 포함한 전체 최종 보고를 다시 반환하세요.`,
+      );
   }
   if (answer.verdict === "PASS" || answer.verdict === "APPROVED") {
     const failed = failedVerificationCommand(commands);
@@ -155,17 +206,53 @@ export function validateCompletion(
     }
   }
   if (answer.verdict === "PASS") {
-    const records = new Map(parseRequirementEvidence(output).map(r => [r.requirementId, r]));
-    const unverified = requirements.filter(r => {
+    if (
+      automation?.browserVerification &&
+      !commands.some(
+        (c) => c.exitCode === 0 && isBrowserVerificationCommand(c.command),
+      )
+    )
+      return fail(
+        "자율 웹 검증에는 플랫폼 verify-browser 명령의 실제 성공 기록이 필요합니다. 브라우저 보고서만 작성하거나 npm test로 대체할 수 없습니다.",
+      );
+    const records = new Map(
+      parseRequirementEvidence(output).map((r) => [r.requirementId, r]),
+    );
+    const unverified = requirements.filter((r) => {
       const command = records.get(r.id)?.checkCommand;
-      return !command || !commands.some(c => checkCommandKey(c.command) === checkCommandKey(command) && c.exitCode === 0 && !c.environmentError && isVerificationCommand(c.command));
+      return (
+        !command ||
+        !commands.some(
+          (c) =>
+            checkCommandKey(c.command) === checkCommandKey(command) &&
+            c.exitCode === 0 &&
+            !c.environmentError &&
+            isVerificationCommand(c.command),
+        )
+      );
     });
-    if (!commands.some(c => c.exitCode === 0 && isVerificationCommand(c.command)) || unverified.length)
-      return fail(`관측된 성공 검증 명령이 필요합니다 (${unverified.map(r => r.id).join(", ")}). 각 요구사항 블록에 CHECK_COMMAND: 실제 실행 명령을 적으세요. 설명이나 저장된 로그 파일만으로 PASS를 판정할 수 없습니다.`);
+    if (
+      !commands.some(
+        (c) => c.exitCode === 0 && isVerificationCommand(c.command),
+      ) ||
+      unverified.length
+    )
+      return fail(
+        `관측된 성공 검증 명령이 필요합니다 (${unverified.map((r) => r.id).join(", ")}). 각 요구사항 블록에 CHECK_COMMAND: 실제 실행 명령을 적으세요. 설명이나 저장된 로그 파일만으로 PASS를 판정할 수 없습니다.`,
+      );
   }
-  if (answer.verdict === "APPROVED" && !priorTestProof.some(c => c.exitCode === 0 && !c.environmentError && isVerificationCommand(c.command))) {
+  if (
+    answer.verdict === "APPROVED" &&
+    !priorTestProof.some(
+      (c) =>
+        c.exitCode === 0 &&
+        !c.environmentError &&
+        isVerificationCommand(c.command),
+    )
+  ) {
     answer.verdict = "REJECTED";
-    answer.reason = "현재 구현에 대한 테스트 역할의 관측된 PASS 기록이 없습니다. 검증을 실행한 뒤 승인해야 합니다.";
+    answer.reason =
+      "현재 구현에 대한 테스트 역할의 관측된 PASS 기록이 없습니다. 검증을 실행한 뒤 승인해야 합니다.";
   }
   return answer;
 }

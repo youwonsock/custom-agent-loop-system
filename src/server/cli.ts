@@ -6,6 +6,7 @@ import { createServer } from "./app";
 import { StudioStore } from "../core/store";
 import { SessionCoordinator } from "./coordinator";
 import { readJsonFile } from "../core/resilience";
+import { runBrowserVerification } from "../core/browser_verification";
 import { queryModels } from "../core/catalog";
 const args = process.argv.slice(2),
   command = args[0] ?? "ui";
@@ -19,8 +20,33 @@ const root = path.resolve(
 async function main(): Promise<void> {
   if (["--help", "-h", "help"].includes(command)) {
     process.stdout.write(
-      "Agent Graph Studio 4.0.0\n\nagent-loop ui [--root <directory>] [--port 4317] [--no-open]\nagent-loop init [--root <directory>]\nagent-loop graphs [--root <directory>]\nagent-loop models --connection <id> --target <directory>\nagent-loop run --graph <id> --goal <text> --target <directory>\nagent-loop resume --session <id>\n\nNode.js 24+ and authenticated local coding CLIs are required.\n",
+      "Agent Graph Studio 4.0.0\n\nagent-loop ui [--root <directory>] [--port 4317] [--no-open]\nagent-loop init [--root <directory>]\nagent-loop graphs [--root <directory>]\nagent-loop models --connection <id> --target <directory>\nagent-loop run --graph <id> --goal <text> --target <directory>\nagent-loop resume --session <id>\nagent-loop init --autonomous\nagent-loop verify-browser --spec .agent-graph/browser.json [--target <directory>]\n\nNode.js 24+ and authenticated local coding CLIs are required.\n",
     );
+    return;
+  }
+  if (command === "verify-browser") {
+    if (args.includes("--help")) {
+      process.stdout.write(
+        'Spec: {"version":1,"server":{"command":["node","server.mjs"]},"steps":[{"id":"page","type":"visible","selector":"h1"},{"id":"mobile","type":"viewport","width":390,"height":844},{"id":"bounds","type":"noOverflow"}]}\nTypes: viewport, click, press, drag, reload, visible, text, count, within, noOverflow, snapshot, sameSnapshot, differentSnapshot, noConsoleErrors, http. Each step needs a unique id. Output: verification/browser/report.json, screenshots, trace and source hashes. Requires locally installed playwright and Chromium. Executes inside the calling CLI sandbox; permission denial remains blocked.\n',
+      );
+      return;
+    }
+    const controller = new AbortController(),
+      cancel = () => controller.abort(new Error("Verification cancelled"));
+    process.once("SIGINT", cancel);
+    process.once("SIGTERM", cancel);
+    try {
+      const report = await runBrowserVerification({
+        target: option("target", process.cwd())!,
+        spec: option("spec", ".agent-graph/browser.json")!,
+        signal: controller.signal,
+      });
+      process.stdout.write(JSON.stringify(report, null, 2) + "\n");
+      process.exitCode = report.allPassed ? 0 : 1;
+    } finally {
+      process.removeListener("SIGINT", cancel);
+      process.removeListener("SIGTERM", cancel);
+    }
     return;
   }
   if (command === "ui") {
@@ -96,6 +122,10 @@ async function main(): Promise<void> {
   await store.init();
   if (command === "init") {
     process.stdout.write(`Initialized ${root}\n`);
+    if (args.includes("--autonomous")) {
+      const graph = await store.createGraph({ template: "autonomous" });
+      process.stdout.write(`Autonomous graph: ${graph.id}\n`);
+    }
     return;
   }
   if (command === "graphs") {

@@ -4,6 +4,7 @@ type Event = Record<string, unknown>;
 export interface EventEvidence {
   commands: CommandReceipt[];
   fileMutation: boolean;
+  changedFiles?: string[];
   completedSearches: number;
   maxTokens: number;
   assistantTextBytes: number;
@@ -49,6 +50,15 @@ function mutatingTool(name: string, input: unknown): boolean {
 
 export class MutationTracker {
   private confirmed = false;
+  private readonly files = new Set<string>();
+  private readonly pendingFiles = new Map<string, string[]>();
+  get changedFiles(): string[] {
+    const files = [
+      ...new Set([...this.files, ...this.pendingFiles.values()].flat()),
+    ];
+    return files.length > 256 ? ["__too_many_changed_files__"] : files;
+  }
+
   private readonly pending = new Map<string, boolean>();
   get hasMutation(): boolean {
     return this.confirmed;
@@ -65,7 +75,39 @@ export class MutationTracker {
     nativeChange = false,
   ): void {
     const key = typeof id === "string" && id ? id : null;
+    const data = obj(input);
+    const paths = [
+      data.filePath,
+      data.file_path,
+      data.path,
+      ...(Array.isArray(data.paths) ? data.paths : []),
+    ].filter((v): v is string => typeof v === "string");
+    if (denied || ["denied", "rejected"].includes(status)) {
+      if (key) this.pendingFiles.delete(key);
+    } else if (
+      paths.length &&
+      key &&
+      (nativeChange || mutatingTool(name, input))
+    ) {
+      if (this.pendingFiles.size >= 256) {
+        this.files.add("__too_many_changed_files__");
+        this.pendingFiles.clear();
+      }
+      this.pendingFiles.set(key, paths);
+    }
+    const commitPaths = () => {
+      for (const file of paths.length
+        ? paths
+        : key
+          ? (this.pendingFiles.get(key) ?? [])
+          : []) {
+        if (this.files.size < 255) this.files.add(file);
+        else this.files.add("__too_many_changed_files__");
+      }
+      if (key) this.pendingFiles.delete(key);
+    };
     if (nativeChange && ["completed", "success"].includes(status)) {
+      commitPaths();
       this.confirmed = true;
       if (key) this.pending.delete(key);
       return;
@@ -80,6 +122,7 @@ export class MutationTracker {
       (key ? this.pending.has(key) : false);
     if (!mutation) return;
     if (["completed", "success"].includes(status)) {
+      commitPaths();
       this.confirmed = true;
       if (key) this.pending.delete(key);
     } else if (key) {
@@ -96,7 +139,7 @@ export class MutationTracker {
     const e = obj(value),
       type = e.type;
     if (type === "file_change" || type === "filechange") {
-      this.tool(e.id, "", null, "completed", false, true);
+      this.tool(e.id, "", e, "completed", false, true);
     } else if (type === "item.started" || type === "item.completed") {
       const item = obj(e.item);
       if (!["command_execution", "file_change"].includes(String(item.type)))
@@ -108,7 +151,13 @@ export class MutationTracker {
       this.tool(
         item.id,
         String(item.type),
-        item.command,
+        item.type === "file_change"
+          ? {
+              paths: Array.isArray(item.changes)
+                ? item.changes.map((c) => obj(c).path)
+                : [],
+            }
+          : item.command,
         status,
         preExecutionDenied(
           obj(item.error).message ?? item.error,
@@ -237,7 +286,8 @@ export function claudeCompletedSearch(
 export function observeTokens(event: Event, depth = 0): number {
   if (depth > 5) return 0;
   let count = 0;
-  const part = obj(event.part), tokens = obj(part.tokens);
+  const part = obj(event.part),
+    tokens = obj(part.tokens);
   // Kilo/OpenCode report usage under step_finish.part.tokens, not *_tokens.
   if (event.type === "step_finish")
     for (const key of ["total", "output", "reasoning"])
@@ -261,7 +311,8 @@ export function observeModel(event: Event): string | null {
     const model = obj(obj(event.part).model);
     if (typeof model.modelID === "string")
       return typeof model.providerID === "string"
-        ? `${model.providerID}/${model.modelID}` : model.modelID;
+        ? `${model.providerID}/${model.modelID}`
+        : model.modelID;
   }
   return null;
 }

@@ -41,6 +41,7 @@ export interface AgentGraphDocument {
   nodes: AgentNode[];
   edges: GraphEdge[];
   defaultBinding?: ExecutionBinding;
+  automation?: { maxRepairCycles: number; nativeApprovalReview: boolean; browserVerification?: boolean };
   entrypoints: {
     start: string | null;
     reentry: string | null;

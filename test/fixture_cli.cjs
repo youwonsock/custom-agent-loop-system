@@ -107,7 +107,8 @@ if (args.includes("app-server")) {
   const reqs = [
     ...new Set([...prompt.matchAll(/^(REQ-\d+):/gm)].map((m) => m[1])),
   ];
-  const counter = path.join(process.cwd(), ".fixture-calls.json");
+  if(prompt.includes("=== AUTONOMOUS WORKFLOW ==="))fs.mkdirSync("verification",{recursive:true});
+  const counter = path.join(process.cwd(), prompt.includes("=== AUTONOMOUS WORKFLOW ===") ? "verification/.fixture-calls.json" : ".fixture-calls.json");
   let calls = {};
   try {
     calls = JSON.parse(fs.readFileSync(counter, "utf8"));
@@ -115,7 +116,7 @@ if (args.includes("app-server")) {
   calls[type] = (calls[type] || 0) + 1;
   fs.writeFileSync(counter, JSON.stringify(calls));
   fs.appendFileSync(
-    path.join(process.cwd(), ".fixture-arguments.jsonl"),
+    path.join(process.cwd(), prompt.includes("=== AUTONOMOUS WORKFLOW ===") ? "verification/.fixture-arguments.jsonl" : ".fixture-arguments.jsonl"),
     JSON.stringify({ type, args }) + "\n",
   );
   if (type === "review" && prompt.includes("fixture:qa-regression")) {
@@ -208,6 +209,7 @@ if (args.includes("app-server")) {
     emit({ type: "thread.started", thread_id: "fixture-session" });
     setInterval(() => {}, 1000);
   } else {
+    const productBlocked = type === "test" && (prompt.includes("fixture:auto-product-blocked") || prompt.includes("fixture:auto-product-always-blocked")) && (calls[type] === 1 || prompt.includes("fixture:auto-product-always-blocked"));
     let rejected =
       type === "review" &&
       prompt.includes("fixture:reject-once") &&
@@ -215,7 +217,7 @@ if (args.includes("app-server")) {
     let evidence = reqs
       .map(
         (r) =>
-          `[REQUIREMENT_EVIDENCE]\nREQ_ID: ${r}\nSTATUS: ${rejected ? "PARTIAL" : "SATISFIED"}\nEVIDENCE: fixture observed acceptance artifact\nCHECK_COMMAND: node --test acceptance.test.cjs\n[/REQUIREMENT_EVIDENCE]`,
+          `[REQUIREMENT_EVIDENCE]\nREQ_ID: ${r}\nSTATUS: ${productBlocked ? "BLOCKED" : rejected ? "PARTIAL" : "SATISFIED"}\nEVIDENCE: fixture observed acceptance artifact\nCHECK_COMMAND: node --test acceptance.test.cjs\n[/REQUIREMENT_EVIDENCE]`,
       )
       .join("\n");
     if (prompt.includes("fixture:evidence-typo-once") && ["test", "review", "approval"].includes(type) && calls[type] === 1)
@@ -253,12 +255,14 @@ if (args.includes("app-server")) {
     else
       text =
         "Failure evidence reviewed. Inspect the last attempt and fix the cause before resuming.";
+    if(type==="test" && prompt.includes("fixture:auto-source-edit") && calls[type]===1)fs.writeFileSync("styles.css","/* unexpected test-role production edit */");
+    if(productBlocked)text=evidence+"\nBLOCKED_KIND: product\nVERDICT: BLOCKED";
     emit({ type: "thread.started", thread_id: "fixture-session" });
     if (["review", "approval"].includes(type) && prompt.includes(`fixture:${type}-check-fail-once`) && calls[type] === 1)
       emit({ type: "item.completed", item: { id: "extra-check", type: "command_execution", command: "node --test extra.test.cjs", exit_code: 1, status: "completed", aggregated_output: "# fail 1" } });
     if (type === "test") {
       const blocked = prompt.includes("fixture:environment-once") && calls[type] === 1;
-      emit({ type: "item.completed", item: { id: "acceptance", type: "command_execution", command: "node --test acceptance.test.cjs", exit_code: blocked ? 1 : 0, status: "completed", aggregated_output: blocked ? "Error: listen EPERM: operation not permitted 127.0.0.1" : "# pass 1\n# fail 0" } });
+      emit({ type: "item.completed", item: { id: "acceptance", type: "command_execution", command: "node --test acceptance.test.cjs", exit_code: blocked || productBlocked ? 1 : 0, status: "completed", aggregated_output: productBlocked ? "AssertionError: implementation incomplete" : blocked ? "Error: listen EPERM: operation not permitted 127.0.0.1" : "# pass 1\n# fail 0" } });
     }
     if (prompt.includes("인터넷 검색")) {
       emit({

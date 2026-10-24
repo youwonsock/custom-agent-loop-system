@@ -79,6 +79,7 @@ export function App() {
         </nav>
         <div className="library-heading">
           <span>그래프 라이브러리</span>
+          <button aria-label="자율 제작 그래프" title="자율 제작·검증 그래프 만들기" onClick={() => void attempt(() => newGraph(false, true))}>↻</button>
           <button
             aria-label="새 그래프"
             title="새 그래프"

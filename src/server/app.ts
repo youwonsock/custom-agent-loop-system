@@ -90,7 +90,7 @@ export async function createServer(
   app.get("/api/graphs", () => store.graphs());
   app.post("/api/graphs", async (request) => {
     const g = await store.createGraph(
-      request.body as { name?: string; empty?: boolean; document?: unknown },
+      request.body as { name?: string; template?: "autonomous"; empty?: boolean; document?: unknown },
     );
     coordinator.emitStudio({ type: "graphs" });
     return g;

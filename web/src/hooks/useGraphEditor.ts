@@ -241,12 +241,13 @@ export function useGraphEditor(data: Pick<StudioData, "boot" | "view" | "setView
       installDraft(await api<AgentGraphDocument>(`/graphs/${g.id}`));
       setView("graphs");
     });
-  const newGraph = (empty = false) =>
+  const newGraph = (empty = false, autonomous = false) =>
     graphAction(async () => {
       await flush();
       const g = await api<AgentGraphDocument>("/graphs", "POST", {
-        name: empty ? "새 빈 그래프" : "새 상호검증 루프",
+        name: empty ? "새 빈 그래프" : autonomous ? "자율 제작·검증 루프" : "새 상호검증 루프",
         empty,
+        ...(autonomous ? {template:"autonomous"} : {}),
       });
       await refreshGraphs();
       installDraft(g, false);

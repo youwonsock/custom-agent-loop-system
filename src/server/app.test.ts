@@ -352,7 +352,10 @@ async function minimal(s: Awaited<ReturnType<typeof setup>>) {
     .filter((e) => g.nodes.some((n) => n.id === e.source))
     .map((e) =>
       e.source === "test"
-        ? { ...e, target: e.outcome === "success" ? "approval" : "implementation" }
+        ? {
+            ...e,
+            target: e.outcome === "success" ? "approval" : "implementation",
+          }
         : e,
     );
   g.entrypoints = {
@@ -388,37 +391,61 @@ async function resumeHeld(s: Awaited<ReturnType<typeof setup>>, id: string) {
   });
   assert.equal(response.statusCode, 200, response.body);
 }
-async function setModelPricing(s: Awaited<ReturnType<typeof setup>>, metadata: Record<string, unknown>) {
-  await fs.writeFile(path.join(s.target, ".fixture-model-metadata.json"), JSON.stringify(metadata));
+async function setModelPricing(
+  s: Awaited<ReturnType<typeof setup>>,
+  metadata: Record<string, unknown>,
+) {
+  await fs.writeFile(
+    path.join(s.target, ".fixture-model-metadata.json"),
+    JSON.stringify(metadata),
+  );
 }
 
-test("API prevents execution of editable drafts that bypass tests or final approval", async t => {
-  const s = await setup(); t.after(s.cleanup);
+test("API prevents execution of editable drafts that bypass tests or final approval", async (t) => {
+  const s = await setup();
+  t.after(s.cleanup);
   const graph = s.graph;
-  graph.edges.find(e => e.source === "implementation" && e.outcome === "success")!.target = "SUCCESS";
+  graph.edges.find(
+    (e) => e.source === "implementation" && e.outcome === "success",
+  )!.target = "SUCCESS";
   const saved = await s.store.saveGraph(graph.id, graph, graph.revision);
   const response = await s.request("POST", "/api/sessions", {
-    requestId: randomUUID(), graphId: saved.id, expectedRevision: saved.revision,
-    goal: "must test", targetProjectPath: s.target, settings: quickSettings,
+    requestId: randomUUID(),
+    graphId: saved.id,
+    expectedRevision: saved.revision,
+    goal: "must test",
+    targetProjectPath: s.target,
+    settings: quickSettings,
   });
   assert.equal(response.statusCode, 400);
   assert.match(response.body, /unsafe_success/);
   assert.equal((await s.store.sessions()).length, 0);
 });
 
-test("recovered terminal snapshots fail closed without current test evidence and final approval", async t => {
-  const s = await setup(); t.after(s.cleanup);
+test("recovered terminal snapshots fail closed without current test evidence and final approval", async (t) => {
+  const s = await setup();
+  t.after(s.cleanup);
   const id = await launch(s, await minimal(s), "verified recovery");
   const completed = await wait(() => s.store.readSession(id), "SUCCESS");
   await delay(100);
   const { GraphRuntime } = await import("../core/runtime.js");
-  const calls = await fs.readFile(path.join(s.target, ".fixture-calls.json"), "utf8");
-  for (const mode of ["missing-tests", "failed-approval", "legacy-metadata"] as const) {
+  const calls = await fs.readFile(
+    path.join(s.target, ".fixture-calls.json"),
+    "utf8",
+  );
+  for (const mode of [
+    "missing-tests",
+    "failed-approval",
+    "legacy-metadata",
+  ] as const) {
     const snapshot = structuredClone(completed);
     snapshot.status = "PAUSED";
-    if (mode === "missing-tests") snapshot.visits = snapshot.visits.filter(v => v.nodeId !== "test");
+    if (mode === "missing-tests")
+      snapshot.visits = snapshot.visits.filter((v) => v.nodeId !== "test");
     if (mode === "failed-approval") snapshot.visits.at(-1)!.status = "failed";
-    if (mode === "legacy-metadata") for (const v of snapshot.visits) for (const a of v.attempts) delete a.completionAccepted;
+    if (mode === "legacy-metadata")
+      for (const v of snapshot.visits)
+        for (const a of v.attempts) delete a.completionAccepted;
     snapshot.revision = (await s.store.readSession(id)).revision;
     await s.store.writeSession(snapshot);
     await new GraphRuntime(s.store, id).run("manual");
@@ -427,16 +454,24 @@ test("recovered terminal snapshots fail closed without current test evidence and
     assert.equal(held.currentNodeId, "PAUSED");
     assert.match(held.statusReason!, /성공 조건 미충족/);
     assert.equal(held.automaticRecovery, null);
-    assert.equal(await fs.readFile(path.join(s.target, ".fixture-calls.json"), "utf8"), calls, "gate cannot spend on an automatic repair");
+    assert.equal(
+      await fs.readFile(path.join(s.target, ".fixture-calls.json"), "utf8"),
+      calls,
+      "gate cannot spend on an automatic repair",
+    );
   }
   await new GraphRuntime(s.store, id).run("manual");
   const repaired = await s.store.readSession(id);
   assert.equal(repaired.status, "SUCCESS", repaired.statusReason!);
-  assert.deepEqual(repaired.visits.slice(-3).map(v => v.nodeId), ["implementation", "test", "approval"]);
+  assert.deepEqual(
+    repaired.visits.slice(-3).map((v) => v.nodeId),
+    ["implementation", "test", "approval"],
+  );
 });
 
-test("legacy failure edges cannot turn test FAIL or approval REJECTED into SUCCESS", async t => {
-  const s = await setup(); t.after(s.cleanup);
+test("legacy failure edges cannot turn test FAIL or approval REJECTED into SUCCESS", async (t) => {
+  const s = await setup();
+  t.after(s.cleanup);
   const id = await launch(s, await minimal(s), "failure edge recovery");
   const completed = await wait(() => s.store.readSession(id), "SUCCESS");
   await delay(100);
@@ -444,14 +479,21 @@ test("legacy failure edges cannot turn test FAIL or approval REJECTED into SUCCE
   const { GraphRuntime } = await import("../core/runtime.js");
   for (const nodeId of ["test", "approval"]) {
     const snapshot = structuredClone(completed);
-    snapshot.status = "PAUSED"; snapshot.currentNodeId = nodeId; snapshot.visits = [];
-    snapshot.graph.edges.find(e => e.source === nodeId && e.outcome === "failure")!.target = "SUCCESS";
+    snapshot.status = "PAUSED";
+    snapshot.currentNodeId = nodeId;
+    snapshot.visits = [];
+    snapshot.graph.edges.find(
+      (e) => e.source === nodeId && e.outcome === "failure",
+    )!.target = "SUCCESS";
     snapshot.revision = (await s.store.readSession(id)).revision;
     await s.store.writeSession(snapshot);
     await new GraphRuntime(s.store, id).run("manual");
     const held = await s.store.readSession(id);
     assert.equal(held.status, "PAUSED", held.statusReason!);
-    assert.equal(held.visits.at(-1)!.verdict, nodeId === "test" ? "FAIL" : "REJECTED");
+    assert.equal(
+      held.visits.at(-1)!.verdict,
+      nodeId === "test" ? "FAIL" : "REJECTED",
+    );
     assert.match(held.statusReason!, /성공 조건 미충족/);
   }
 });
@@ -546,11 +588,17 @@ test("positive verdicts with malformed requirement blocks recover in the same ro
   const s = await setup();
   t.after(s.cleanup);
   const graph = await automaticPlans(s);
-  const id = await launch(s, graph, "fixture:evidence-typo-once", { maxAgentAttempts: 2, phaseRecoveryBudgetMs: 7000 });
+  const id = await launch(s, graph, "fixture:evidence-typo-once", {
+    maxAgentAttempts: 2,
+    phaseRecoveryBudgetMs: 7000,
+  });
   const state = await wait(() => s.store.readSession(id), "SUCCESS");
-  assert.equal(state.visits.filter(v => v.nodeId === "implementation").length, 1);
+  assert.equal(
+    state.visits.filter((v) => v.nodeId === "implementation").length,
+    1,
+  );
   for (const nodeId of ["test", "review", "approval"]) {
-    const visit = state.visits.find(v => v.nodeId === nodeId)!;
+    const visit = state.visits.find((v) => v.nodeId === nodeId)!;
     assert.equal(visit.status, "succeeded");
     assert.equal(visit.attempts.length, 2);
     assert.equal(visit.attempts[0]!.failureKind, "incomplete_response");
@@ -573,8 +621,11 @@ test("environment-blocked checks wait without repairing implementation and resum
   assert.equal((await s.store.readSession(id)).visits.length, 3);
   await resumeHeld(s, id);
   state = await wait(() => s.store.readSession(id), "SUCCESS");
-  assert.equal(state.visits.filter(v => v.nodeId === "implementation").length, 1);
-  assert.equal(state.visits.find(v => v.id === visit.id)!.attempts.length, 2);
+  assert.equal(
+    state.visits.filter((v) => v.nodeId === "implementation").length,
+    1,
+  );
+  assert.equal(state.visits.find((v) => v.id === visit.id)!.attempts.length, 2);
 });
 test("transport retry reconnects once within the same visit with the saved CLI session", async (t) => {
   const s = await setup();
@@ -585,7 +636,10 @@ test("transport retry reconnects once within the same visit with the saved CLI s
       phaseRecoveryBudgetMs: 7000,
     });
   const state = await wait(() => s.store.readSession(id), "SUCCESS");
-  assert.deepEqual(state.visits.map(v => v.nodeId), ["implementation", "test", "approval"]);
+  assert.deepEqual(
+    state.visits.map((v) => v.nodeId),
+    ["implementation", "test", "approval"],
+  );
   assert.equal(state.visits[0]!.attempts.length, 2);
   assert.equal(state.visits[0]!.attempts[1]!.reconnectUsed, true);
   const args = await fs.readFile(
@@ -597,17 +651,30 @@ test("transport retry reconnects once within the same visit with the saved CLI s
 test("malformed Kilo tool calls recover with schema feedback in a fresh attempt on the same model", async (t) => {
   const s = await setup();
   t.after(s.cleanup);
-  await s.store.saveConnection({ id: "fixture", label: "Fixture Kilo", type: "kilo", binary });
+  await s.store.saveConnection({
+    id: "fixture",
+    label: "Fixture Kilo",
+    type: "kilo",
+    binary,
+  });
   const graph = await minimal(s);
-  graph.defaultBinding = { connectionId: "fixture", modelId: "fixture/fixture-model" };
+  graph.defaultBinding = {
+    connectionId: "fixture",
+    modelId: "fixture/fixture-model",
+  };
   const saved = await s.store.saveGraph(graph.id, graph, graph.revision);
-  const id = await launch(s, saved, "fixture:tool-arguments-once", { maxAgentAttempts: 2, phaseRecoveryBudgetMs: 7000 });
+  const id = await launch(s, saved, "fixture:tool-arguments-once", {
+    maxAgentAttempts: 2,
+    phaseRecoveryBudgetMs: 7000,
+  });
   const state = await wait(() => s.store.readSession(id), "SUCCESS");
   const attempts = state.visits[0]!.attempts;
   assert.equal(attempts.length, 2);
   assert.equal(attempts[0]!.failureKind, "tool_arguments");
   assert.equal(attempts[1]!.reconnectUsed, false);
-  assert.ok(attempts.every(a => a.requestedModelId === "fixture/fixture-model"));
+  assert.ok(
+    attempts.every((a) => a.requestedModelId === "fixture/fixture-model"),
+  );
 });
 test("provider-confirmed free transport exhaustion schedules recovery then resumes automatically", async (t) => {
   const s = await setup(true);
@@ -621,7 +688,10 @@ test("provider-confirmed free transport exhaustion schedules recovery then resum
   const recovering = await wait(() => s.store.readSession(id), "RECOVERING");
   assert.equal(recovering.automaticRecovery?.count, 1);
   const state = await wait(() => s.store.readSession(id), "SUCCESS");
-  assert.deepEqual(state.visits.map(v => v.nodeId), ["implementation", "test", "approval"]);
+  assert.deepEqual(
+    state.visits.map((v) => v.nodeId),
+    ["implementation", "test", "approval"],
+  );
   assert.equal(state.visits[0]!.attempts.length, 2);
 });
 test("unknown pricing with observed model usage pauses instead of scheduling a new automatic cycle", async (t) => {
@@ -643,23 +713,36 @@ test("free models retry after observed usage and keep the same model and visit",
   t.after(s.cleanup);
   await setModelPricing(s, { isFree: true, cost: { input: 0, output: 0 } });
   const id = await launch(s, await minimal(s), "fixture:spent-network-once", {
-    maxAutomaticRecoveryCycles: 1, automaticRecoveryBackoffMs: [100],
+    maxAutomaticRecoveryCycles: 1,
+    automaticRecoveryBackoffMs: [100],
   });
   const recovering = await wait(() => s.store.readSession(id), "RECOVERING");
   assert.match(recovering.statusReason!, /무료.*자동 복구 1\/1/);
   const state = await wait(() => s.store.readSession(id), "SUCCESS");
-  assert.deepEqual(state.visits.map(v => v.nodeId), ["implementation", "test", "approval"]);
+  assert.deepEqual(
+    state.visits.map((v) => v.nodeId),
+    ["implementation", "test", "approval"],
+  );
   assert.equal(state.visits[0]!.attempts.length, 2);
   assert.ok(state.visits[0]!.attempts[0]!.assistantTextBytes > 0);
-  assert.ok(state.visits[0]!.attempts.every(a => a.pricing?.status === "free" && a.requestedModelId === "fixture-model"));
+  assert.ok(
+    state.visits[0]!.attempts.every(
+      (a) =>
+        a.pricing?.status === "free" && a.requestedModelId === "fixture-model",
+    ),
+  );
 });
-for (const metadata of [{ isFree: false, cost: { input: 1, output: 1 } }, { cost: { input: 0, output: 0 } }]) {
+for (const metadata of [
+  { isFree: false, cost: { input: 1, output: 1 } },
+  { cost: { input: 0, output: 0 } },
+]) {
   test(`${metadata.isFree === false ? "paid" : "unknown"} models stop at attempt limit even without observed tokens`, async (t) => {
     const s = await setup(true);
     t.after(s.cleanup);
     await setModelPricing(s, metadata);
     const id = await launch(s, await minimal(s), "fixture:network", {
-      maxAutomaticRecoveryCycles: 2, automaticRecoveryBackoffMs: [50],
+      maxAutomaticRecoveryCycles: 2,
+      automaticRecoveryBackoffMs: [50],
     });
     const state = await wait(() => s.store.readSession(id), "PAUSED");
     assert.equal(state.automaticRecovery, null);
@@ -675,7 +758,8 @@ test("free models still obey the automatic recovery cycle cap", async (t) => {
   t.after(s.cleanup);
   await setModelPricing(s, { isFree: true });
   const id = await launch(s, await minimal(s), "fixture:spent-network", {
-    maxAutomaticRecoveryCycles: 1, automaticRecoveryBackoffMs: [50],
+    maxAutomaticRecoveryCycles: 1,
+    automaticRecoveryBackoffMs: [50],
   });
   const state = await wait(() => s.store.readSession(id), "PAUSED");
   assert.equal(state.visits[0]!.automaticCycles, 1);
@@ -689,7 +773,8 @@ for (const metadata of [{ isFree: false, cost: { input: 1, output: 1 } }, {}]) {
     t.after(s.cleanup);
     await setModelPricing(s, { isFree: true });
     const id = await launch(s, await minimal(s), "fixture:spent-network-once", {
-      maxAutomaticRecoveryCycles: 1, automaticRecoveryBackoffMs: [1500],
+      maxAutomaticRecoveryCycles: 1,
+      automaticRecoveryBackoffMs: [1500],
     });
     await wait(() => s.store.readSession(id), "RECOVERING");
     await setModelPricing(s, metadata);
@@ -704,10 +789,14 @@ test("stop cancels a free-model automatic recovery without another model call", 
   t.after(s.cleanup);
   await setModelPricing(s, { isFree: true });
   const id = await launch(s, await minimal(s), "fixture:spent-network-once", {
-    maxAutomaticRecoveryCycles: 1, automaticRecoveryBackoffMs: [1500],
+    maxAutomaticRecoveryCycles: 1,
+    automaticRecoveryBackoffMs: [1500],
   });
   await wait(() => s.store.readSession(id), "RECOVERING");
-  const stopped = await s.request("POST", `/api/sessions/${id}/actions`, { requestId: randomUUID(), type: "stop" });
+  const stopped = await s.request("POST", `/api/sessions/${id}/actions`, {
+    requestId: randomUUID(),
+    type: "stop",
+  });
   assert.equal(stopped.statusCode, 200);
   const state = await wait(() => s.store.readSession(id), "STOPPED");
   assert.equal(state.automaticRecovery, null);
@@ -722,9 +811,13 @@ for (const isFree of [true, false]) {
     const id = await launch(s, await minimal(s), "fixture:quota-once", {
       maxAgentAttempts: isFree ? 1 : 2,
       phaseRecoveryBudgetMs: 7000,
-      maxAutomaticRecoveryCycles: 1, automaticRecoveryBackoffMs: [50],
+      maxAutomaticRecoveryCycles: 1,
+      automaticRecoveryBackoffMs: [50],
     });
-    const state = await wait(() => s.store.readSession(id), isFree ? "SUCCESS" : "PAUSED");
+    const state = await wait(
+      () => s.store.readSession(id),
+      isFree ? "SUCCESS" : "PAUSED",
+    );
     assert.equal(state.visits[0]!.attempts.length, isFree ? 2 : 1);
     assert.equal(state.visits[0]!.attempts[0]!.failureKind, "quota_exhausted");
     if (!isFree) assert.match(state.statusReason!, /공급자 사용 한도/);
@@ -735,12 +828,24 @@ for (const isFree of [true, false]) {
     const s = await setup(true);
     t.after(s.cleanup);
     await setModelPricing(s, { isFree });
-    const id = await launch(s, await minimal(s), "fixture:progress-budget-once", {
-      phaseTimeoutMs: 1000, phaseRecoveryBudgetMs: 1200,
-      transportTimeoutMs: 600, idleTimeoutMs: 600, toolTimeoutMs: 600,
-      maxAutomaticRecoveryCycles: 1, automaticRecoveryBackoffMs: [100],
-    });
-    const state = await wait(() => s.store.readSession(id), isFree ? "SUCCESS" : "PAUSED");
+    const id = await launch(
+      s,
+      await minimal(s),
+      "fixture:progress-budget-once",
+      {
+        phaseTimeoutMs: 1000,
+        phaseRecoveryBudgetMs: 1200,
+        transportTimeoutMs: 600,
+        idleTimeoutMs: 600,
+        toolTimeoutMs: 600,
+        maxAutomaticRecoveryCycles: 1,
+        automaticRecoveryBackoffMs: [100],
+      },
+    );
+    const state = await wait(
+      () => s.store.readSession(id),
+      isFree ? "SUCCESS" : "PAUSED",
+    );
     assert.equal(state.visits[0]!.attempts[0]!.failureKind, "phase_timeout");
     assert.equal(state.visits[0]!.attempts.length, isFree ? 2 : 1);
   });
@@ -784,8 +889,12 @@ test("iteration budget pauses a loop and only manual resume grants another budge
   const s = await setup();
   t.after(s.cleanup);
   let graph = await minimal(s);
-  graph.nodes = graph.nodes.filter(n => ["implementation", "interrupt"].includes(n.id));
-  graph.edges = graph.edges.filter(e => graph.nodes.some(n => n.id === e.source));
+  graph.nodes = graph.nodes.filter((n) =>
+    ["implementation", "interrupt"].includes(n.id),
+  );
+  graph.edges = graph.edges.filter((e) =>
+    graph.nodes.some((n) => n.id === e.source),
+  );
   graph.edges = graph.edges.map((e) =>
     e.source === "implementation" && e.outcome === "success"
       ? { ...e, target: "implementation" }
@@ -936,7 +1045,10 @@ test("a crashed worker pauses then manual resume cleans its old CLI child before
   state = await wait(() => s.store.readSession(id), "SUCCESS");
   assert.equal(checkProcessLiveness(childPid), "dead");
   assert.equal(state.visits[0]!.attempts[0]!.failureKind, "worker_crash");
-  assert.deepEqual(state.visits.map(v => v.nodeId), ["implementation", "test", "approval"]);
+  assert.deepEqual(
+    state.visits.map((v) => v.nodeId),
+    ["implementation", "test", "approval"],
+  );
   assert.equal(state.visits[0]!.attempts.length, 2);
 });
 
@@ -1020,7 +1132,10 @@ test("incomplete output gets a fresh bounded completion attempt without a transp
   const graph = await minimal(s),
     id = await launch(s, graph, "fixture:incomplete-once");
   const state = await wait(() => s.store.readSession(id), "SUCCESS");
-  assert.deepEqual(state.visits.map(v => v.nodeId), ["implementation", "test", "approval"]);
+  assert.deepEqual(
+    state.visits.map((v) => v.nodeId),
+    ["implementation", "test", "approval"],
+  );
   assert.equal(state.visits[0]!.attempts.length, 2);
   assert.equal(
     state.visits[0]!.attempts[0]!.failureKind,
@@ -1074,66 +1189,237 @@ test("a saved RUNNING state without a lease is paused instead of remaining stuck
   assert.equal(paused.visits[0]!.attempts.length, 1);
 });
 
-for (const role of ["review", "approval"] as const) test(`${role} failed extra check rejects approval and requires a new verified cycle`, async t => {
-  const s = await setup(); t.after(s.cleanup);
-  const id = await launch(s, await automaticPlans(s), `fixture:${role}-check-fail-once`);
-  const state = await wait(() => s.store.readSession(id), "SUCCESS");
-  const visits = state.visits.filter(v => v.nodeId === role);
-  assert.equal(visits[0]!.verdict, "REJECTED");
-  assert.equal(visits[0]!.status, "failed");
-  assert.equal(visits.at(-1)!.verdict, "APPROVED");
-  assert.equal(state.visits.filter(v => v.nodeId === "test").length, 2);
-});
+for (const role of ["review", "approval"] as const)
+  test(`${role} failed extra check rejects approval and requires a new verified cycle`, async (t) => {
+    const s = await setup();
+    t.after(s.cleanup);
+    const id = await launch(
+      s,
+      await automaticPlans(s),
+      `fixture:${role}-check-fail-once`,
+    );
+    const state = await wait(() => s.store.readSession(id), "SUCCESS");
+    const visits = state.visits.filter((v) => v.nodeId === role);
+    assert.equal(visits[0]!.verdict, "REJECTED");
+    assert.equal(visits[0]!.status, "failed");
+    assert.equal(visits.at(-1)!.verdict, "APPROVED");
+    assert.equal(state.visits.filter((v) => v.nodeId === "test").length, 2);
+  });
 
-test("summary API preserves full API compatibility and unchanged completed records are not reread each tick", async t => {
-  const s = await setup(); t.after(s.cleanup);
+test("summary API preserves full API compatibility and unchanged completed records are not reread each tick", async (t) => {
+  const s = await setup();
+  t.after(s.cleanup);
   const id = await launch(s, await minimal(s), "summary acceptance");
-  await wait(() => s.store.readSession(id), "SUCCESS"); await delay(100);
-  const full = (await s.request("GET", `/api/sessions/${id}`)).json<SessionState>();
+  await wait(() => s.store.readSession(id), "SUCCESS");
+  await delay(100);
+  const full = (
+    await s.request("GET", `/api/sessions/${id}`)
+  ).json<SessionState>();
   const summary = (await s.request("GET", "/api/sessions?summary=1")).json()[0];
-  assert.ok(full.visits.length); assert.ok(full.revision! > 1);
-  assert.equal(summary.revision, full.revision); assert.equal(summary.visits, undefined);
-  assert.equal((await s.request("GET", "/api/sessions")).json()[0].visits.length, full.visits.length);
-  const original = s.store.readSession.bind(s.store); let reads = 0;
-  s.store.readSession = async value => { reads++; return original(value); };
-  await s.store.sessionSummaries(); await s.store.sessionSummaries();
+  assert.ok(full.visits.length);
+  assert.ok(full.revision! > 1);
+  assert.equal(summary.revision, full.revision);
+  assert.equal(summary.visits, undefined);
+  assert.equal(
+    (await s.request("GET", "/api/sessions")).json()[0].visits.length,
+    full.visits.length,
+  );
+  const original = s.store.readSession.bind(s.store);
+  let reads = 0;
+  s.store.readSession = async (value) => {
+    reads++;
+    return original(value);
+  };
+  await s.store.sessionSummaries();
+  await s.store.sessionSummaries();
   assert.equal(reads, 0, "summary cache decodes only changed snapshots");
-  await s.store.mutateSession(id, state => { state.statusReason = "updated"; });
+  await s.store.mutateSession(id, (state) => {
+    state.statusReason = "updated";
+  });
   assert.equal((await s.store.sessionSummaries())[0]!.statusReason, "updated");
 });
 
-test("stale runtime snapshot cannot overwrite a newer STOP decision", async t => {
-  const s = await setup(); t.after(s.cleanup);
+test("stale runtime snapshot cannot overwrite a newer STOP decision", async (t) => {
+  const s = await setup();
+  t.after(s.cleanup);
   const id = await launch(s, await minimal(s), "write ownership acceptance");
-  const stale = await wait(() => s.store.readSession(id), "SUCCESS"); await delay(100);
-  const current = await s.store.mutateSession(id, state => { state.status = "STOPPED"; state.statusReason = "new controller decision"; });
+  const stale = await wait(() => s.store.readSession(id), "SUCCESS");
+  await delay(100);
+  const current = await s.store.mutateSession(id, (state) => {
+    state.status = "STOPPED";
+    state.statusReason = "new controller decision";
+  });
   stale.status = "RUNNING";
-  await assert.rejects(s.store.writeSession(stale), (e: unknown) => (e as {code?:string}).code === "stale_session");
+  await assert.rejects(
+    s.store.writeSession(stale),
+    (e: unknown) => (e as { code?: string }).code === "stale_session",
+  );
   assert.deepEqual(await s.store.readSession(id), current);
 });
 
-test("snapshot decoding rejects malformed v3 data and preserves compatible legacy evidence", async t => {
-  const s = await setup(); t.after(s.cleanup);
+test("snapshot decoding rejects malformed v3 data and preserves compatible legacy evidence", async (t) => {
+  const s = await setup();
+  t.after(s.cleanup);
   const id = await launch(s, await minimal(s), "snapshot validation");
-  const valid = await wait(() => s.store.readSession(id), "SUCCESS"); await delay(100);
+  const valid = await wait(() => s.store.readSession(id), "SUCCESS");
+  await delay(100);
   const file = path.join(s.store.sessionDir(id), "state.json");
   const { decodeSession } = await import("../core/session_schema.js");
-  const legacy = structuredClone(valid); delete legacy.revision;
-  for (const v of legacy.visits) for (const a of v.attempts) { delete a.completionAccepted; delete a.fileMutation; delete a.commands; delete a.pricing; }
-  assert.equal(decodeSession(legacy,id).stateVersion,3);
+  const legacy = structuredClone(valid);
+  delete legacy.revision;
+  for (const v of legacy.visits)
+    for (const a of v.attempts) {
+      delete a.completionAccepted;
+      delete a.fileMutation;
+      delete a.commands;
+      delete a.pricing;
+    }
+  assert.equal(decodeSession(legacy, id).stateVersion, 3);
   for (const mutate of [
-    (v: any) => { delete v.graph; }, (v: any) => { v.visits=null; },
-    (v: any) => { delete v.settings; }, (v: any) => { v.activeVisitId="nonexistent"; },
-    (v: any) => { v.visits[0].attempts[0].status="fake-success"; },
-    (v: any) => { v.visits[1].attempts[0].commands[0].exitCode="0"; },
-    (v: any) => { v.id="different"; },
+    (v: any) => {
+      delete v.graph;
+    },
+    (v: any) => {
+      v.visits = null;
+    },
+    (v: any) => {
+      delete v.settings;
+    },
+    (v: any) => {
+      v.activeVisitId = "nonexistent";
+    },
+    (v: any) => {
+      v.visits[0].attempts[0].status = "fake-success";
+    },
+    (v: any) => {
+      v.visits[1].attempts[0].commands[0].exitCode = "0";
+    },
+    (v: any) => {
+      v.id = "different";
+    },
   ]) {
-    const broken = structuredClone(valid); mutate(broken);
-    await fs.writeFile(file,JSON.stringify(broken));
-    await assert.rejects(s.store.readSession(id),(e:unknown)=>(e as {code?:string}).code==="invalid_session");
-    assert.deepEqual(JSON.parse(await fs.readFile(file,"utf8")),broken,"corrupt original is never rewritten");
+    const broken = structuredClone(valid);
+    mutate(broken);
+    await fs.writeFile(file, JSON.stringify(broken));
+    await assert.rejects(
+      s.store.readSession(id),
+      (e: unknown) => (e as { code?: string }).code === "invalid_session",
+    );
+    assert.deepEqual(
+      JSON.parse(await fs.readFile(file, "utf8")),
+      broken,
+      "corrupt original is never rewritten",
+    );
   }
-  await fs.writeFile(file,"{ broken json");
-  await assert.rejects(s.store.readSession(id),/JSON이 손상/);
-  await fs.writeFile(file,JSON.stringify(valid));
+  await fs.writeFile(file, "{ broken json");
+  await assert.rejects(s.store.readSession(id), /JSON이 손상/);
+  await fs.writeFile(file, JSON.stringify(valid));
+});
+
+test("autonomous preset repairs a product BLOCKED and reaches final approval without any operator action", async (t) => {
+  const s = await setup();
+  t.after(s.cleanup);
+  let graph = await s.store.createGraph({ template: "autonomous" });
+  graph.automation!.browserVerification = false;
+  graph.defaultBinding = s.graph.defaultBinding;
+  graph = await s.store.saveGraph(graph.id, graph, graph.revision);
+  const started = await s.coordinator.start({
+    requestId: randomUUID(),
+    graphId: graph.id,
+    expectedRevision: graph.revision,
+    goal: "fixture:auto-product-blocked build the app",
+    targetProjectPath: s.target,
+    settings: quickSettings,
+  });
+  const done = await wait(() => s.store.readSession(started.id), "SUCCESS");
+  assert.equal(done.pendingApproval, null);
+  assert.equal(done.processedRequests.length, 0, "no approval/resume actions");
+  assert.deepEqual(
+    done.visits.map((v) => v.nodeId),
+    [
+      "planning",
+      "implementation",
+      "test",
+      "implementation",
+      "test",
+      "review",
+      "approval",
+    ],
+  );
+  assert.equal(done.visits[2]!.verdict, "FAIL");
+  assert.equal(done.visits.at(-1)!.verdict, "APPROVED");
+});
+test("autonomous failures stop at repair budget instead of requesting endless interventions", async (t) => {
+  const s = await setup();
+  t.after(s.cleanup);
+  let graph = await s.store.createGraph({ template: "autonomous" });
+  graph.automation!.browserVerification = false;
+  graph.automation!.maxRepairCycles = 1;
+  graph.defaultBinding = s.graph.defaultBinding;
+  graph = await s.store.saveGraph(graph.id, graph, graph.revision);
+  const started = await s.coordinator.start({
+    requestId: randomUUID(),
+    graphId: graph.id,
+    expectedRevision: graph.revision,
+    goal: "fixture:auto-product-always-blocked",
+    targetProjectPath: s.target,
+    settings: quickSettings,
+  });
+  const done = await wait(() => s.store.readSession(started.id), "PAUSED");
+  assert.match(done.statusReason!, /자동 수정 1회/);
+  assert.equal(
+    done.visits.filter((v) => v.nodeId === "implementation").length,
+    2,
+  );
+  assert.equal(
+    done.visits.some((v) => v.nodeId === "approval"),
+    false,
+  );
+});
+
+test("autonomous policy never bypasses an explicitly enabled planning approval", async (t) => {
+  const s = await setup();
+  t.after(s.cleanup);
+  let graph = await s.store.createGraph({ template: "autonomous" });
+  graph.nodes.find((n) => n.type === "planning")!.planning!.requiresApproval =
+    true;
+  graph.defaultBinding = s.graph.defaultBinding;
+  graph = await s.store.saveGraph(graph.id, graph, graph.revision);
+  const started = await s.coordinator.start({
+    requestId: randomUUID(),
+    graphId: graph.id,
+    expectedRevision: graph.revision,
+    goal: "build app",
+    targetProjectPath: s.target,
+    settings: quickSettings,
+  });
+  const held = await wait(
+    () => s.store.readSession(started.id),
+    "WAITING_USER",
+  );
+  assert.equal(held.pendingApproval!.nodeId, "planning");
+  assert.equal(held.visits.length, 1);
+});
+
+test("autonomous runtime detects hidden production writes even without native file-change events", async (t) => {
+  const s = await setup();
+  t.after(s.cleanup);
+  let graph = await s.store.createGraph({ template: "autonomous" });
+  graph.automation!.browserVerification = false;
+  graph.defaultBinding = s.graph.defaultBinding;
+  graph = await s.store.saveGraph(graph.id, graph, graph.revision);
+  const started = await s.coordinator.start({
+    requestId: randomUUID(),
+    graphId: graph.id,
+    expectedRevision: graph.revision,
+    goal: "fixture:auto-source-edit build the app",
+    targetProjectPath: s.target,
+    settings: quickSettings,
+  });
+  const done = await wait(() => s.store.readSession(started.id), "SUCCESS");
+  const tests = done.visits.filter((v) => v.nodeId === "test");
+  assert.equal(tests.length, 2);
+  assert.equal(tests[0]!.verdict, "FAIL");
+  assert.match(tests[0]!.output, /제품 파일 변경/);
+  assert.equal(tests[1]!.verdict, "PASS");
 });

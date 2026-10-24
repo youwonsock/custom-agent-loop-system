@@ -1,10 +1,19 @@
-import { AgentNode, NodeVisit, SessionAction, SessionState } from "../shared/domain";
+import {
+  AgentNode,
+  NodeVisit,
+  SessionAction,
+  SessionState,
+} from "../shared/domain";
 import { AppError } from "./errors";
 import { transition } from "./graph";
 import { advanceConvergence } from "./requirement_ledger";
 
 /** Pure domain transitions. Callers own locks, process lifecycle and persistence. */
-export function applyApproval(s: SessionState, action: SessionAction, now = new Date().toISOString()): void {
+export function applyApproval(
+  s: SessionState,
+  action: SessionAction,
+  now = new Date().toISOString(),
+): void {
   if (s.processedRequests.includes(action.requestId)) return;
   if (s.status === "RUNNING" || s.status === "RECOVERING")
     throw new AppError(
@@ -26,11 +35,7 @@ export function applyApproval(s: SessionState, action: SessionAction, now = new 
     const visit = s.visits.find((v) => v.id === pending.visitId)!;
     const plan = visit.plans.find((p) => p.id === action.choiceId);
     if (!plan || plan.revision !== action.expectedRevision)
-      throw new AppError(
-        409,
-        "계획 문서 버전이 변경되었습니다.",
-        "stale_plan",
-      );
+      throw new AppError(409, "계획 문서 버전이 변경되었습니다.", "stale_plan");
     if (action.type === "edit_plan") {
       if (
         typeof action.body !== "string" ||
@@ -77,14 +82,10 @@ export function prepareManualResume(s: SessionState, now = Date.now()): void {
   }
   if (s.visits.length >= s.visitLimit)
     s.visitLimit +=
-      s.settings.maxIterations *
-      Math.max(1, s.graph.nodes.length) *
-      2;
+      s.settings.maxIterations * Math.max(1, s.graph.nodes.length) * 2;
   if (s.completedIterations >= s.iterationLimit)
     s.iterationLimit += s.settings.maxIterations;
-  const active = s.visits.find(
-    (v) => v.id === s.activeVisitId,
-  );
+  const active = s.visits.find((v) => v.id === s.activeVisitId);
   if (active && ["paused", "running"].includes(active.status)) {
     active.status = "running";
     active.recoveryCount++;
@@ -96,7 +97,11 @@ export function prepareManualResume(s: SessionState, now = Date.now()): void {
   }
 }
 
-export function advanceVisit(s: SessionState, node: AgentNode, visit: NodeVisit): void {
+export function advanceVisit(
+  s: SessionState,
+  node: AgentNode,
+  visit: NodeVisit,
+): void {
   if (!visit.transitionCommitted) {
     if (node.id === s.graph.entrypoints.cycleCompletion) {
       s.completedIterations++;
@@ -109,6 +114,32 @@ export function advanceVisit(s: SessionState, node: AgentNode, visit: NodeVisit)
     visit.transitionCommitted = true;
   }
   const failed = visit.status === "failed";
+  if (
+    s.graph.automation &&
+    failed &&
+    ["test", "review", "approval"].includes(node.type)
+  ) {
+    const failures = s.visits.filter(
+      (v) =>
+        v.status === "failed" &&
+        v.transitionCommitted &&
+        s.graph.nodes.some(
+          (n) =>
+            n.id === v.nodeId &&
+            ["test", "review", "approval"].includes(n.type),
+        ),
+    ).length;
+    s.currentNodeId =
+      failures > s.graph.automation.maxRepairCycles
+        ? "PAUSED"
+        : s.graph.entrypoints.reentry;
+    s.statusReason =
+      failures > s.graph.automation.maxRepairCycles
+        ? `자동 수정 ${s.graph.automation.maxRepairCycles}회 한도를 소진했습니다. 실패 근거를 보존하고 정지했습니다.`
+        : `검증 실패를 구현에 전달해 자동 수정합니다 (${failures}/${s.graph.automation.maxRepairCycles}).`;
+    s.activeVisitId = null;
+    return;
+  }
   s.currentNodeId =
     failed &&
     ["review", "approval"].includes(node.type) &&
@@ -118,15 +149,21 @@ export function advanceVisit(s: SessionState, node: AgentNode, visit: NodeVisit)
   s.activeVisitId = null;
 }
 
-export function stopSession(s: SessionState, reason = "사용자가 실행을 중지했습니다."): void {
+export function stopSession(
+  s: SessionState,
+  reason = "사용자가 실행을 중지했습니다.",
+): void {
   s.status = "STOPPED";
   s.statusReason = reason;
   s.automaticRecovery = null;
-  const visit = s.visits.find(v => v.id === s.activeVisitId);
+  const visit = s.visits.find((v) => v.id === s.activeVisitId);
   if (visit?.status === "running") visit.status = "paused";
 }
-export function interruptSession(s: SessionState, message?: string | null): void {
-  const visit = s.visits.find(v => v.id === s.activeVisitId);
+export function interruptSession(
+  s: SessionState,
+  message?: string | null,
+): void {
+  const visit = s.visits.find((v) => v.id === s.activeVisitId);
   if (visit?.status === "running") visit.status = "paused";
   s.automaticRecovery = null;
   s.interruptMessage = message ?? "사용자가 중단 분석을 요청했습니다.";
@@ -134,8 +171,13 @@ export function interruptSession(s: SessionState, message?: string | null): void
   s.activeVisitId = null;
 }
 export function beginResume(s: SessionState): void {
-  if (s.status === "SUCCESS") throw new AppError(409, "완료된 세션은 재개할 수 없습니다. 새 세션을 만드세요.");
-  if (s.pendingApproval || s.pendingAccess) throw new AppError(409, "현재 계획 또는 접근 요청을 먼저 승인하세요.");
+  if (s.status === "SUCCESS")
+    throw new AppError(
+      409,
+      "완료된 세션은 재개할 수 없습니다. 새 세션을 만드세요.",
+    );
+  if (s.pendingApproval || s.pendingAccess)
+    throw new AppError(409, "현재 계획 또는 접근 요청을 먼저 승인하세요.");
   s.status = "RUNNING";
   s.statusReason = "저장된 실행 설정으로 재개하고 있습니다.";
 }

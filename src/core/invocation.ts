@@ -14,8 +14,14 @@ export async function buildInvocation(
     fullAccess: boolean;
     allowedPaths: string[];
     resumeId?: string;
+    nativeApprovalReview?: boolean;
   },
-): Promise<{ binary: string; args: string[]; env: Record<string, string>; transport?: "pipe" }> {
+): Promise<{
+  binary: string;
+  args: string[];
+  env: Record<string, string>;
+  transport?: "pipe";
+}> {
   const executable = await resolveExecutable(c.binary),
     readonly = isReadOnly(node.type);
   const env = Object.fromEntries(
@@ -23,6 +29,9 @@ export async function buildInvocation(
       (v): v is [string, string] => typeof v[1] === "string",
     ),
   );
+  env.PATH = [path.dirname(process.execPath), env.PATH ?? ""]
+    .filter(Boolean)
+    .join(path.delimiter);
   let args: string[];
   if (c.type === "codex") {
     args = [
@@ -37,9 +46,16 @@ export async function buildInvocation(
         : opts.fullAccess
           ? "danger-full-access"
           : "workspace-write",
-      "-c", "allow_login_shell=false",
-      "-c", `shell_environment_policy.set.PATH=${JSON.stringify([path.dirname(process.execPath), env.PATH ?? ""].filter(Boolean).join(path.delimiter))}`,
+      "-c",
+      "allow_login_shell=false",
+      "-c",
+      `shell_environment_policy.set.PATH=${JSON.stringify(env.PATH)}`,
     ];
+    if (opts.nativeApprovalReview && !readonly && !opts.fullAccess) {
+      // Native reviewer authorizes individual commands; --approve-for-me already selects workspace-write.
+      args.splice(args.indexOf("--sandbox"), 2);
+      args.splice(1, 0, "--approve-for-me");
+    }
     for (const dir of opts.allowedPaths) args.push("--add-dir", dir);
     if (b.variant)
       args.push("-c", `model_reasoning_effort=${JSON.stringify(b.variant)}`);
@@ -95,20 +111,24 @@ export async function buildInvocation(
         ...permission,
       },
     });
-    const protocol = c.type !== "kilo" ? "" :
-      '\n\nNative tool protocol: use the exact schema supplied by this CLI. Never send an empty tool input. After a schema error, correct the missing fields before trying again; do not repeat the same invalid call. ' +
-      (readonly
-        ? 'Use only permitted read-only tools and inspect prior actual test evidence. Never request write or shell execution permissions.'
-        : 'The write tool requires both filePath (absolute path) and content (string). Preserve existing tests and use bash to run them before deciding whether additional coverage is necessary. ' +
-          (process.platform === "win32"
-            ? 'The tool shell is Windows PowerShell: use npm.cmd and npx.cmd to avoid npm.ps1 execution policy errors, or invoke node.exe directly. Use PowerShell syntax, not Bash for/do/done loops or &&. Do not change the host execution policy.'
-            : ""));
+    const protocol =
+      c.type !== "kilo"
+        ? ""
+        : "\n\nNative tool protocol: use the exact schema supplied by this CLI. Never send an empty tool input. After a schema error, correct the missing fields before trying again; do not repeat the same invalid call. " +
+          (readonly
+            ? "Use only permitted read-only tools and inspect prior actual test evidence. Never request write or shell execution permissions."
+            : "The write tool requires both filePath (absolute path) and content (string). Preserve existing tests and use bash to run them before deciding whether additional coverage is necessary. " +
+              (process.platform === "win32"
+                ? "The tool shell is Windows PowerShell: use npm.cmd and npx.cmd to avoid npm.ps1 execution policy errors, or invoke node.exe directly. Use PowerShell syntax, not Bash for/do/done loops or &&. Do not change the host execution policy."
+                : ""));
     args.push(opts.prompt + protocol);
   }
   return {
     binary: executable.file,
     args: [...executable.prefix, ...args],
     env,
-    ...(c.type === "kilo" && process.platform === "win32" ? { transport: "pipe" as const } : {}),
+    ...(c.type === "kilo" && process.platform === "win32"
+      ? { transport: "pipe" as const }
+      : {}),
   };
 }

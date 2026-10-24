@@ -51,6 +51,19 @@ export function validateGraphDocument(input: unknown): AgentGraphDocument {
     g.edges.length > 500
   )
     throw new AppError(400, "그래프 문서 형식이 잘못되었습니다.");
+  if (
+    g.automation &&
+    (!Number.isInteger(g.automation.maxRepairCycles) ||
+      g.automation.maxRepairCycles < 1 ||
+      g.automation.maxRepairCycles > 20 ||
+      typeof g.automation.nativeApprovalReview !== "boolean" ||
+      (g.automation.browserVerification !== undefined &&
+        typeof g.automation.browserVerification !== "boolean"))
+  )
+    throw new AppError(
+      400,
+      "자동 수정 횟수는 1~20이며 네이티브 승인 검토 설정이 필요합니다.",
+    );
   const nodeIds = new Set<string>(),
     edgeIds = new Set<string>();
   for (const n of g.nodes) {
@@ -149,6 +162,17 @@ export function validateGraphDocument(input: unknown): AgentGraphDocument {
     ...(g.defaultBinding
       ? { defaultBinding: cleanBinding(g.defaultBinding) }
       : {}),
+    ...(g.automation
+      ? {
+          automation: {
+            maxRepairCycles: g.automation.maxRepairCycles,
+            nativeApprovalReview: g.automation.nativeApprovalReview,
+            ...(g.automation.browserVerification !== undefined
+              ? { browserVerification: g.automation.browserVerification }
+              : {}),
+          },
+        }
+      : {}),
     viewport: { x: g.viewport.x, y: g.viewport.y, zoom: g.viewport.zoom },
     updatedAt:
       typeof g.updatedAt === "string" ? g.updatedAt : new Date().toISOString(),
@@ -233,4 +257,24 @@ export function createGraph(
     viewport: { x: 0, y: 0, zoom: 1 },
     updatedAt: new Date().toISOString(),
   };
+}
+
+/** Explicit opt-in preset; existing graphs and manual plan gates remain unchanged. */
+export function createAutonomousGraph(
+  name = "자율 제작·검증 루프",
+): AgentGraphDocument {
+  const graph = createGraph(name);
+  graph.automation = {
+    maxRepairCycles: 3,
+    nativeApprovalReview: true,
+    browserVerification: true,
+  };
+  graph.nodes.find((n) => n.type === "planning")!.planning = {
+    requiresApproval: false,
+    optionsCount: 1,
+  };
+  graph.edges.find(
+    (e) => e.source === "test" && e.outcome === "failure",
+  )!.target = "implementation";
+  return graph;
 }
