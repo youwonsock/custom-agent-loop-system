@@ -62,6 +62,8 @@ test("autonomous preset is opt-in, persisted, bounded and still requires tests/f
   assert.equal(createGraph().automation, undefined);
   assert.equal(createAutonomousGraph().automation!.verificationContract,true);
   assert.equal(createAutonomousGraph().automation!.authoredNodeTests,true);
+  assert.equal(createAutonomousGraph().automation!.testSourceGuard,true);
+  assert.equal(createAutonomousGraph().automation!.reserveFinalizationBudget,true);
   assert.equal(createGraph().nodes[0]!.planning!.requiresApproval, true);
   const copy = validateGraphDocument(g);
   assert.deepEqual(copy.automation, g.automation);
@@ -386,7 +388,7 @@ test("autonomous browser instructions never direct read-only roles to create spe
   const prompt=buildNodePrompt(state,node,visit);
   const writable=["implementation","test"].includes(node.type);
   assert.equal(prompt.includes("Execute this exact platform-owned command directly"),writable);
-  assert.equal(prompt.includes("Create the spec only if absent"),writable);
+  assert.equal(prompt.includes("Create the spec only if absent"),node.type==="implementation"|| (node.type==="test"&&!g.automation!.testSourceGuard));
   if(!writable)assert.match(prompt,/never execute it or create\/edit the spec/);
  }
 });

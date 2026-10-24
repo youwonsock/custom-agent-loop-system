@@ -3,6 +3,7 @@ import { evaluateRequirementCoverage, latestRequirementStatuses } from "./requir
 import { acceptedVisit, currentTestProof, currentNodeTestProof } from "./verification_evidence";
 import { nodeTestProofProblem, nodeScopeAuditProblem, nodeInspectionProblem } from "./node_test_policy";
 import { contractProofMissing } from "./verification_contract";
+import { currentVerificationSources } from "./test_source_guard";
 import { sessionBudgetReason } from "./session_budget";
 
 /** Every path to SUCCESS, including recovered snapshots, passes this gate. */
@@ -28,6 +29,7 @@ export function successBlockers(state: SessionState): string[] {
   if (!final || !currentTestProof(state, final).length)
     blockers.push("현재 구현의 모든 필수 요구사항을 검사한 실제 테스트 PASS 기록이 필요합니다.");
   if (final) {
+    if(state.graph.automation?.testSourceGuard&&!currentVerificationSources(state,final))blockers.push("현재 검증의 고정 소스 snapshot이 없습니다.");
     const ownProblem=nodeTestProofProblem(state.verificationContract?.manifest?.nodeTests,currentNodeTestProof(state,final))??nodeScopeAuditProblem(state.verificationContract?.manifest?.nodeTests,final.output);
     if(ownProblem)blockers.push(ownProblem);
     const testIndex=state.visits.reduce((last,v,index)=>state.graph.nodes.find(n=>n.id===v.nodeId)?.type==="test"&&v.status==="succeeded"?index:last,-1);

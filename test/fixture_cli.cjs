@@ -245,7 +245,7 @@ if (args[0] === "debug" && args[1] === "config") {
     } else if (type === "implementation") {
       fs.writeFileSync(
         path.join(process.cwd(), "artifact.txt"),
-        "implemented goal\n",
+        prompt.includes("fixture:contract-early-fail")&&calls.implementation===1?"broken\n":"implemented goal\n",
       );
       if (prompt.includes("fixture:contract-runner-repair")) fs.writeFileSync("package.json", JSON.stringify({ scripts: { test: calls.implementation === 1 ? "node tests/verify-acceptance.mjs || node tests/verify-acceptance.mjs" : "node tests/verify-acceptance.mjs" } }));
       if(prompt.includes("fixture:contract-own-node")){
@@ -296,6 +296,12 @@ if (args[0] === "debug" && args[1] === "config") {
       emit({ type: "item.completed", item: { id: "acceptance", type: "command_execution", command: "node --test acceptance.test.cjs", exit_code: blocked || productBlocked ? 1 : 0, status: "completed", aggregated_output: productBlocked ? "AssertionError: implementation incomplete" : blocked ? "Error: listen EPERM: operation not permitted 127.0.0.1" : "# pass 1\n# fail 0" } });
     }
     if (prompt.includes("=== JSON REPORT v1 ===") && ["test", "review", "approval"].includes(type)) {
+      if (type === "test" && calls.test===1 && (prompt.includes("fixture:contract-hidden-guard")||prompt.includes("fixture:contract-policy-guard"))) {
+        fs.writeFileSync("verification/guard-child.pid",String(process.pid));
+        if(prompt.includes("fixture:contract-hidden-guard"))fs.writeFileSync("artifact.txt","unexpected test repair\n");
+        else emit({type:"tool_use",part:{id:"blocked-write",tool:"write",state:{status:"error",input:{filePath:path.resolve("artifact.txt"),content:"unexpected repair"},error:"Error: [AGENT_GRAPH_TEST_POLICY] Test role cannot edit source before execution"}}});
+        setTimeout(()=>fs.writeFileSync("verification/forbidden-late-write","not stopped"),5000);setInterval(()=>{},1000);return;
+      }
       if (type === "test") {
         const manifest = JSON.parse(fs.readFileSync(".agent-graph/verification.json", "utf8"));
         for (const check of manifest.checks) {
@@ -307,6 +313,7 @@ if (args[0] === "debug" && args[1] === "config") {
             ? spawnSync(process.execPath,words.slice(1),{cwd:process.cwd(),encoding:"utf8"})
             : spawnSync(observedCommand, { shell: true, cwd: process.cwd(), encoding: "utf8" });
           emit({ type: "item.completed", item: { id: check.id, type: "command_execution", command: observedCommand, exit_code: executed.status, status: "completed", aggregated_output: executed.stdout + executed.stderr } });
+          if(prompt.includes("fixture:contract-early-fail")&&executed.status!==0){fs.writeFileSync("verification/guard-child.pid",String(process.pid));setTimeout(()=>fs.writeFileSync("verification/forbidden-late-write","not stopped"),5000);setInterval(()=>{},1000);return;}
         }
       }
       const own=JSON.parse(fs.readFileSync(".agent-graph/verification.json","utf8")).nodeTests;

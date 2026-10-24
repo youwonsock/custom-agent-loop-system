@@ -32,6 +32,8 @@ for (const required of [
   "dist/src/core/node_test_worker.js",
   "dist/src/core/node_test_verification.js",
   "dist/src/core/inspection_evidence.js",
+  "dist/src/core/test_source_guard.js",
+  "dist/src/core/stage_budget.js",
   "dist/web/index.html",
   "dist/runtime_defaults.json",
   "scripts/fix-pty-permissions.js",

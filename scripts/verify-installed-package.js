@@ -93,6 +93,12 @@ async function main() {
       await hooks["tool.execute.before"]({tool:"bash"},output);
       if (plugin.id !== "agent-graph-check-protocol" || output.args.command !== "npm test")
         throw new Error("Installed native verification protocol failed.");
+      process.env.AGENT_GRAPH_KILO_CHECKS = JSON.stringify({cwd:project,commands:["npm test"],testSourcesReadOnly:true});
+      const guarded = await plugin.server();
+      let prevented=false;
+      try { await guarded["tool.execute.before"]({tool:"write"},{args:{filePath:path.join(project,"app.mjs"),content:"unexpected"}}); }
+      catch(error) { prevented=String(error).includes("[AGENT_GRAPH_TEST_POLICY]"); }
+      if(!prevented)throw Error("Installed test source guard did not prevent a native write.");
     } finally {
       if (previousProtocol === undefined) delete process.env.AGENT_GRAPH_KILO_CHECKS;
       else process.env.AGENT_GRAPH_KILO_CHECKS = previousProtocol;

@@ -3,6 +3,7 @@ import { AppError } from "./errors";
 import { safeId, validateGraphDocument } from "./graph";
 import { executionSettings } from "./settings";
 import { validContractSnapshot, validateManifest } from "./verification_contract";
+import { validSourceHashes } from "./test_source_guard";
 import { validNodeTestProof } from "./node_test_policy";
 
 type Obj = Record<string, unknown>;
@@ -26,10 +27,11 @@ function attempt(v: unknown): boolean {
     (v.commands === undefined || array(v.commands, receipt)) && (v.completionAccepted === undefined || typeof v.completionAccepted === "boolean") &&
     (v.readFiles === undefined || (Array.isArray(v.readFiles)&&v.readFiles.length<=1000&&v.readFiles.every(text))) &&
     (v.fileMutation === undefined || typeof v.fileMutation === "boolean") &&
+    (v.verificationInvalidation === undefined || (object(v.verificationInvalidation)&&text(v.verificationInvalidation.at)&&text(v.verificationInvalidation.reason)&&array(v.verificationInvalidation.files,text))) &&
     (v.pricing === undefined || (object(v.pricing) && member(v.pricing.status,["free","paid","unknown"]) && member(v.pricing.source,["native_flag","native_cost","unavailable"]) && text(v.pricing.checkedAt) && text(v.pricing.reason)));
 }
 function visit(v: unknown): boolean {
-  return object(v) && safeId(v.id) && safeId(v.nodeId) && count(v.number) && member(v.status, ["running", "waiting_approval", "succeeded", "failed", "paused"]) &&
+  return object(v) && (v.stageDeadlineAt===undefined||(text(v.stageDeadlineAt)&&Number.isFinite(Date.parse(v.stageDeadlineAt)))) && (v.verificationSourceHashes===undefined||validSourceHashes(v.verificationSourceHashes)) && safeId(v.id) && safeId(v.nodeId) && count(v.number) && member(v.status, ["running", "waiting_approval", "succeeded", "failed", "paused"]) &&
     text(v.startedAt) && nullableText(v.completedAt) && array(v.attempts, attempt) && text(v.output) &&
     (v.verdict === null || member(v.verdict, ["PASS","FAIL","BLOCKED","APPROVED","REJECTED"])) && array(v.plans, plan) &&
     (v.selectedPlanId === null || count(v.selectedPlanId)) && text(v.cycleStartedAt) && text(v.cycleDeadlineAt) && count(v.recoveryCount) &&

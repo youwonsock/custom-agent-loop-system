@@ -1,8 +1,10 @@
 import { projectCommandKey } from "./verification_evidence";
+import { TEST_POLICY, testCommandAllowed } from "./test_source_guard";
 
 export interface KiloCheckProtocol {
   cwd: string;
   commands: string[];
+  testSourcesReadOnly?: boolean;
 }
 
 // Only display-only wrappers around an exact registered check are repaired.
@@ -27,8 +29,12 @@ export function registeredCheckCommand(command: string, protocol: KiloCheckProto
 export function kiloCheckHooks(protocol: KiloCheckProtocol) {
   return {
     "tool.execute.before": async (input: { tool: string }, output: { args: Record<string, unknown> }) => {
+      if(protocol.testSourcesReadOnly&&/^(?:write|edit|multiedit|apply_patch|delete|move|rename)$/i.test(input.tool))
+        throw Error(`${TEST_POLICY} Test role cannot edit product, test, package or frozen files. Return FAIL; implementation owns repairs.`);
       if (input.tool === "bash" && typeof output.args.command === "string")
         output.args.command = registeredCheckCommand(output.args.command, protocol);
+      if(protocol.testSourcesReadOnly&&input.tool==="bash"&&(!testCommandAllowed(String(output.args.command??""),protocol.cwd,protocol.commands)))
+        throw Error(`${TEST_POLICY} Test role permits registered foreground checks, read-only inspection and mkdir verification only. No repair scripts, custom execution or source writes. Use native read for diagnosis and return FAIL for implementation. Command: ${String(output.args.command??"").slice(0,600)}`);
     },
   };
 }

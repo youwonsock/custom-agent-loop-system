@@ -51,6 +51,8 @@ import { productionHashes } from "./verification_sources";
 import { successBlockers } from "./success_gate";
 import { lockContract, contractViolation, verificationRunnerProblem } from "./verification_contract";
 import { sessionBudgetReason, pauseForBudget } from "./session_budget";
+import { stageDeadline, stageBudgetReason } from "./stage_budget";
+import { TEST_POLICY, TEST_FAILED, testSources, sourceDifference, testPolicyEvent, failedRegisteredCheck, currentVerificationSources } from "./test_source_guard";
 
 export interface RuntimeHooks {
   onState?: (state: SessionState) => void;
@@ -167,6 +169,13 @@ export class GraphRuntime {
   }
   private async budgetStop(reason: string): Promise<void> {
     pauseForBudget(this.state,reason);this.stopRequested=true;await this.save();
+  }
+  private async stageStop(reason:string,visit:NodeVisit):Promise<void>{
+    this.state.status="PAUSED";this.state.statusReason=reason;this.state.automaticRecovery=null;visit.status="paused";this.stopRequested=true;await this.save();
+  }
+  private verificationFailure(node:AgentNode,reason:string):Completion{
+    const verdict=node.type==="test"?"FAIL":"REJECTED";
+    return {valid:true,reason,failureKind:null,output:`[ORCHESTRATOR_VERIFICATION_FAILURE]\n${reason}\nVERDICT: ${verdict}\n[PHASE_DONE]`,verdict,plans:[],researchBlocked:false,environmentBlocked:null};
   }
   private async contractStop(): Promise<boolean> {
     const reason = await contractViolation(this.state);
@@ -388,6 +397,9 @@ export class GraphRuntime {
           return;
         }
         if (visit.status === "paused") visit.status = "running";
+        if(this.state.graph.automation?.reserveFinalizationBudget&&!visit.stageDeadlineAt){
+          const end=stageDeadline(this.state,node,visit);if(end!==undefined){visit.stageDeadlineAt=new Date(end).toISOString();await this.save();}
+        }
         if (!isReadOnly(node.type) && this.state.accessMode === "ask") {
           const ref = this.state.approvedPlanRef;
           const approved = ref
@@ -495,6 +507,13 @@ export class GraphRuntime {
     node: AgentNode,
     visit: NodeVisit,
   ): Promise<Completion | null> {
+    const sourceGuard=!!this.state.graph.automation?.testSourceGuard;
+    if(sourceGuard&&["review","approval"].includes(node.type)){
+      const expected=currentVerificationSources(this.state,visit);
+      if(!expected)return this.verificationFailure(node,"현재 테스트 역할의 고정 소스 snapshot이 없습니다. 구현과 전체 테스트를 다시 수행해야 합니다.");
+      const changed=sourceDifference(expected,await testSources(this.state.targetProjectPath));
+      if(changed.length)return this.verificationFailure(node,`테스트 이후 소스가 변경되어 증거를 무효화했습니다: ${changed.join(", ")}. 구현과 모든 등록 검사를 다시 수행해야 합니다.`);
+    }
     if (this.state.graph.automation?.verificationContract && node.type === "test" && this.state.verificationContract?.status !== "locked") {
       try { this.state.verificationContract = await lockContract(this.state,"implementation"); await this.save(); }
       catch(error) { return { valid:true,reason:`검증 계약 준비 실패: ${messageOf(error)}`,failureKind:null,output:`검증 계약 준비 실패: ${messageOf(error)}\n구현 역할에서 .agent-graph/verification.json과 인수 검사를 준비하세요.\nVERDICT: FAIL\n[PHASE_DONE]`,verdict:"FAIL",plans:[],researchBlocked:false,environmentBlocked:null }; }
@@ -506,7 +525,7 @@ export class GraphRuntime {
     let testInputs: Record<string, string> | null = null;
     if (this.state.graph.automation && node.type === "test") {
       try {
-        testInputs = await productionHashes(this.state.targetProjectPath);
+        testInputs = sourceGuard?await testSources(this.state.targetProjectPath):await productionHashes(this.state.targetProjectPath);
       } catch (error) {
         visit.status = "paused";
         this.state.status = "WAITING_USER";
@@ -522,7 +541,7 @@ export class GraphRuntime {
       )!;
     const contextMessage = (message: string) =>
       `[${node.name} · ${connection.label}] ${message}`;
-    const deadline = Date.parse(visit.cycleDeadlineAt),
+    const deadline = Math.min(Date.parse(visit.cycleDeadlineAt),this.state.graph.automation?.reserveFinalizationBudget&&visit.stageDeadlineAt?Date.parse(visit.stageDeadlineAt):Infinity),
       cycleAttempts = () =>
         visit.attempts.filter(
           (a) => Date.parse(a.startedAt) >= Date.parse(visit.cycleStartedAt),
@@ -545,6 +564,8 @@ export class GraphRuntime {
       if (await this.contractStop()) return null;
       const budget = sessionBudgetReason(this.state,true);
       if (budget) { await this.budgetStop(budget); return null; }
+      const stageReason=stageBudgetReason(this.state,node,visit,true);
+      if(stageReason){await this.stageStop(stageReason,visit);return null;}
       const normal = cycleAttempts().filter(
         (a) => a.mode === "standard",
       ).length;
@@ -569,6 +590,7 @@ export class GraphRuntime {
         fullAccess: this.state.accessMode === "full_access",
         allowedPaths: this.state.additionalAllowedPaths,
         nativeApprovalReview: this.state.graph.automation?.nativeApprovalReview,
+        testSourcesReadOnly:sourceGuard&&node.type==="test",
         ...(this.state.graph.automation?.verificationContract && this.state.verificationContract?.status === "locked"
           ? {verificationCommands: this.state.verificationContract.manifest!.checks.map(c => c.command)} : {}),
         disableWrite: this.state.visits.some(v =>
@@ -612,6 +634,8 @@ export class GraphRuntime {
       await this.save();
       let progressWrites = Promise.resolve(),
         lastPersist = 0;
+      let policyReason:string|null=null,sourceChanges:string[]=[];
+      const registered=this.state.verificationContract?.manifest?.checks.map(c=>c.command)??[];
       const result = await new ProcessSupervisor().run({
         ...invocation,
         cwd: this.state.targetProjectPath,
@@ -646,6 +670,25 @@ export class GraphRuntime {
           )
           .map(([, value]) => value!),
         pollControl: () => claimNextControlRequest(this.controls()),
+        ...(sourceGuard&&node.type==="test"&&testInputs?{
+          sourcesGuarded:true,
+          pollPolicy:async()=>{
+            try{sourceChanges=sourceDifference(testInputs!,await testSources(this.state.targetProjectPath));}
+            catch(error){sourceChanges=[`소스 snapshot 읽기 실패: ${messageOf(error)}`];}
+            if(sourceChanges.length)policyReason=`${TEST_POLICY} 테스트 역할의 소스 변경을 즉시 중단했습니다: ${sourceChanges.join(", ")}. 구현 역할에서 수정한 뒤 모든 등록 검사를 새로 실행해야 합니다.`;
+            return policyReason;
+          },
+          eventPolicy:(event:Record<string,unknown>,evidence:SupervisorResult["evidence"])=>{
+            policyReason??=testPolicyEvent(event);
+            const failed=failedRegisteredCheck(evidence.commands,this.state.targetProjectPath,registered);
+            if(!policyReason&&failed){const part=event.part as {state?:{output?:unknown;error?:unknown}}|undefined,item=event.item as {aggregated_output?:unknown}|undefined;
+              const output=part?.state?.output??part?.state?.error??item?.aggregated_output;
+              const text=typeof output==="string"?output:"";
+              policyReason=`${TEST_FAILED} 등록 검사 실패: ${failed.command} (exit ${failed.exitCode??"unknown"}). 테스트 역할은 제품이나 테스트를 수정하지 않습니다. 구현에서 원인을 고친 뒤 전체 검사를 다시 실행하세요.\n${text.length>6000?text.slice(0,2000)+"\n...\n"+text.slice(-4000):text}`;
+            }
+            return policyReason;
+          },
+        }:{}),
         onOutput: (text) => this.hooks.onLog?.(visit.id, id, text),
         onProgress: (progress) => {
           const activityChanged = attempt.activity !== progress.activity;
@@ -683,7 +726,7 @@ export class GraphRuntime {
       attempt.commands = result.evidence.commands;
       attempt.readFiles=result.evidence.readFiles;
       attempt.fileMutation = result.evidence.fileMutation;
-      if (result.evidence.fileMutation) {visit.verifiedCommands = [];delete visit.nodeTestProof;}
+      if (result.evidence.fileMutation && !(sourceGuard&&node.type==="test")) {visit.verifiedCommands = [];delete visit.nodeTestProof;}
       if (["test", "review", "approval"].includes(node.type))
         visit.verifiedCommands = mergeProjectReceipts(
           this.state.targetProjectPath,
@@ -714,6 +757,20 @@ export class GraphRuntime {
         await this.finishControl(result.controlRequest);
         return null;
       }
+      let guardedInputs:Record<string,string>|undefined;
+      if(sourceGuard&&node.type==="test"&&testInputs){
+        try{guardedInputs=await testSources(this.state.targetProjectPath);sourceChanges=[...new Set([...sourceChanges,...sourceDifference(testInputs,guardedInputs)])];}
+        catch(error){sourceChanges.push(`소스 snapshot 읽기 실패: ${messageOf(error)}`);}
+        const nativeSources=(result.evidence.changedFiles??[]).filter(f=>! /^(?:verification|artifacts|test-results|playwright-report|coverage)(?:\/|$)/.test(f.replace(/\\/g,"/")));
+        sourceChanges=[...new Set([...sourceChanges,...nativeSources])];
+        result.evidence.fileMutation=sourceChanges.length>0;attempt.fileMutation=result.evidence.fileMutation;
+        if(sourceChanges.length||policyReason){
+          policyReason??=`${TEST_POLICY} 테스트 역할의 제품·테스트 소스 변경을 반려했습니다: ${sourceChanges.join(", ")}. 구현과 전체 검증을 다시 수행해야 합니다.`;
+          attempt.verificationInvalidation={at:new Date().toISOString(),reason:policyReason,files:sourceChanges};
+          visit.verifiedCommands=[];delete visit.nodeTestProof;delete visit.verificationSourceHashes;
+          attempt.failureKind=policyReason.startsWith(TEST_FAILED)?"process_exit":"role_violation";attempt.message=policyReason;attempt.completionAccepted=false;
+        }
+      }
       const budgetAfter = sessionBudgetReason(this.state);
       if (budgetAfter) { await this.budgetStop(budgetAfter); return null; }
       if (await this.contractStop()) return null;
@@ -721,7 +778,17 @@ export class GraphRuntime {
       if (protectedWrites.length) {
         this.state.status="BLOCKED";this.state.statusReason=`고정 검증 파일의 쓰기가 관측됐습니다: ${protectedWrites.join(", ")}`;this.state.automaticRecovery=null;visit.status="paused";await this.save();return null;
       }
-      if (testInputs && result.outcome === "succeeded") {
+      if(sourceGuard&&node.type==="test"&&policyReason){
+        const environment=result.evidence.commands.find(c=>c.environmentError)?.environmentError;
+        if(environment){this.state.status="WAITING_USER";this.state.statusReason=environment;visit.status="paused";await this.save();return null;}
+        if(result.diagnostics.terminalError&&["auth","permission","model_unavailable"].includes(result.diagnostics.terminalError.kind)){
+          this.state.status="WAITING_USER";this.state.statusReason=result.diagnostics.terminalError.message;visit.status="paused";await this.save();return null;
+        }
+        await this.save();return this.verificationFailure(node,policyReason);
+      }
+      const stageAfter=stageBudgetReason(this.state,node,visit);
+      if(stageAfter){await this.stageStop(stageAfter,visit);return null;}
+      if (testInputs && !sourceGuard && result.outcome === "succeeded") {
         let changed: string[];
         try {
           const after = await productionHashes(this.state.targetProjectPath);
@@ -738,6 +805,11 @@ export class GraphRuntime {
           result.evidence.fileMutation = true;
           attempt.fileMutation = true;
         }
+      }
+      if(sourceGuard&&["review","approval"].includes(node.type)&&result.outcome==="succeeded"){
+        const expected=currentVerificationSources(this.state,visit);
+        const changes=expected?sourceDifference(expected,await testSources(this.state.targetProjectPath)):["missing test source snapshot"];
+        if(changes.length){attempt.verificationInvalidation={at:new Date().toISOString(),reason:"테스트 이후 소스 변경",files:changes};return this.verificationFailure(node,`테스트 이후 소스가 변경되어 승인 근거를 무효화했습니다: ${changes.join(", ")}`);}
       }
       let nodeProof:NodeTestProof|undefined, nodeProofError:string|undefined;
       if(this.state.verificationContract?.manifest?.nodeTests&&["test","review","approval"].includes(node.type)&&result.outcome==="succeeded"){
@@ -764,6 +836,7 @@ export class GraphRuntime {
       );
       if(nodeProofError&&completion.valid&&["FAIL","REJECTED"].includes(completion.verdict??""))completion.reason=`자체 Node 검증: ${nodeProofError}`;
       if(completion.valid&&completion.verdict==="PASS"&&node.type==="test"&&nodeProof)visit.nodeTestProof=nodeProof;
+      if(completion.valid&&completion.verdict==="PASS"&&node.type==="test"&&sourceGuard&&guardedInputs)visit.verificationSourceHashes=guardedInputs;
       if (completion.valid && node.type === "planning" && this.state.graph.automation) {
         const requested=this.outside(`${this.state.goal}\n${this.state.graph.nodes.map(n=>n.instructions).join("\n")}`);
         const unrequested=[...new Set(completion.plans.flatMap(plan=>this.outside(plan.body,requested)))];
@@ -869,6 +942,8 @@ export class GraphRuntime {
   ): Promise<void> {
     const budget = sessionBudgetReason(this.state,true);
     if (budget) { await this.budgetStop(budget); return; }
+    const stageReason=stageBudgetReason(this.state,node,visit,true);
+    if(stageReason){await this.stageStop(stageReason,visit);return;}
     const s = this.state.settings,
       pricing = this.pricing.get(node.id) ?? modelPricing();
     if (

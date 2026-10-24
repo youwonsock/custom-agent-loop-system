@@ -60,7 +60,9 @@ export function validateGraphDocument(input: unknown): AgentGraphDocument {
       (g.automation.browserVerification !== undefined &&
         typeof g.automation.browserVerification !== "boolean") ||
       (g.automation.verificationContract !== undefined && typeof g.automation.verificationContract !== "boolean") ||
-      (g.automation.authoredNodeTests !== undefined && typeof g.automation.authoredNodeTests !== "boolean"))
+      (g.automation.authoredNodeTests !== undefined && typeof g.automation.authoredNodeTests !== "boolean") ||
+      (g.automation.testSourceGuard !== undefined && typeof g.automation.testSourceGuard !== "boolean") ||
+      (g.automation.reserveFinalizationBudget !== undefined && typeof g.automation.reserveFinalizationBudget !== "boolean"))
   )
     throw new AppError(
       400,
@@ -174,6 +176,8 @@ export function validateGraphDocument(input: unknown): AgentGraphDocument {
               : {}),
             ...(g.automation.verificationContract !== undefined ? { verificationContract: g.automation.verificationContract } : {}),
             ...(g.automation.authoredNodeTests !== undefined ? { authoredNodeTests:g.automation.authoredNodeTests } : {}),
+            ...(g.automation.testSourceGuard !== undefined ? {testSourceGuard:g.automation.testSourceGuard} : {}),
+            ...(g.automation.reserveFinalizationBudget !== undefined ? {reserveFinalizationBudget:g.automation.reserveFinalizationBudget} : {}),
           },
         }
       : {}),
@@ -269,11 +273,13 @@ export function createAutonomousGraph(
 ): AgentGraphDocument {
   const graph = createGraph(name);
   graph.automation = {
-    maxRepairCycles: 3,
+    maxRepairCycles: 5,
     nativeApprovalReview: true,
     browserVerification: true,
     verificationContract: true,
     authoredNodeTests: true,
+    testSourceGuard: true,
+    reserveFinalizationBudget: true,
   };
   graph.nodes.find((n) => n.type === "planning")!.planning = {
     requiresApproval: false,

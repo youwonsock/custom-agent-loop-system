@@ -91,6 +91,10 @@ export interface ProcessSupervisorOptions {
   pollControl?: () => Promise<ClaimedControlRequest | null>;
   onProgress?: (progress: SupervisorProgress) => Promise<void> | void;
   onOutput?: (text: string) => void;
+  /** Trusted runtime policy; never inferred from ordinary model prose. */
+  sourcesGuarded?: boolean;
+  pollPolicy?: () => Promise<string|null>;
+  eventPolicy?: (event:AnyObj,evidence:EventEvidence) => string|null;
 }
 
 export interface SupervisorResult {
@@ -488,7 +492,7 @@ export class ProcessSupervisor {
       return true;
     };
 
-    const commands = new CommandTracker(options.cwd);
+    const commands = new CommandTracker(options.cwd,options.sourcesGuarded);
     const inspections = new InspectionTracker(options.cwd);
     const processEvent = (event: AnyObj): void => {
       commands.observe(event);
@@ -497,6 +501,8 @@ export class ProcessSupervisor {
       evidence.commands = commands.receipts;
       mutations.observe(event);
       evidence.fileMutation ||= mutations.hasMutation;
+      const policyReason=options.eventPolicy?.(event,evidence);
+      if(policyReason)void terminate("process_exit",policyReason.startsWith("[AGENT_GRAPH_TEST_FAILED]")?"process_exit":"role_violation",policyReason,false);
       diagnosticCollector.observeEvent(event);
       const search =
         completedSearch(event) ??
@@ -663,12 +669,13 @@ export class ProcessSupervisor {
     armInitialTransportTimer();
     armProgressWindowTimer();
 
-    if (options.pollControl) {
+    if (options.pollControl || options.pollPolicy) {
       controlTimer = setInterval(() => {
         if (controlPollRunning || terminating || resolved) return;
         controlPollRunning = true;
-        options.pollControl!()
-          .then((claimed) => {
+        (options.pollControl?.()??Promise.resolve(null))
+          .then(async (claimed) => {
+            if(!claimed&&!terminating&&!resolved){const reason=await options.pollPolicy?.();if(reason&&!terminating&&!resolved)void terminate("process_exit","role_violation",reason,false);}
             if (!claimed || terminating || resolved) return;
             controlRequest = claimed;
             const message =

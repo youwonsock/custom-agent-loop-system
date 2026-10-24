@@ -138,11 +138,14 @@ export async function runNodeTestVerification(options:{target:string;manifest:Ve
     const pkg=JSON.parse(await fs.readFile(await inside(root,"package.json"),"utf8"));
     if(pkg.scripts?.test!==nodeTestScript(policy))throw Error(`npm test must run exactly the authored scope files: ${nodeTestScript(policy)}`);
     for(const scope of policy.scopes)await inside(root,scope.file);
+    const problems:string[]=[];
+    const failed=(error:unknown)=>{if(controller.signal.aborted||!report.processesStopped)throw error;problems.push(error instanceof Error?error.message:String(error));};
     for(const[scopeIndex,scope]of policy.scopes.entries()){
       const item=report.scopes[scopeIndex]!;item.status="failed";item.baseline=await job(scope);
-      const problem=baselineProblem(item.baseline,scope);if(problem)throw Error(`${scope.id}: ${problem}`);
+      const problem=baselineProblem(item.baseline,scope);if(problem){failed(Error(`${scope.id}: ${problem}`));continue;}
       for(const[index,challenge]of scope.challenges.entries()){
         const evidence=item.challenges[index]!;evidence.status="failed";
+        try{
         evidence.control=await job(scope,challenge,false);
         const controlProblem=baselineProblem(evidence.control,scope);if(controlProblem)throw Error(`${challenge.id} control: ${controlProblem}`);
         evidence.mutant=await job(scope,challenge,true);
@@ -150,10 +153,12 @@ export async function runNodeTestVerification(options:{target:string;manifest:Ve
         evidence.killedBy=[...new Set(evidence.mutant.cases.filter(c=>scope.cases.includes(c.name)&&!c.passed&&!c.skip&&!c.todo&&c.errors.some(e=>e.code==="ERR_ASSERTION")).map(c=>c.name))];
         if(evidence.mutant.summary.success||!evidence.killedBy.length){evidence.error="Required authored assertions did not detect this production defect.";throw Error(`${scope.id}/${challenge.id}: ${evidence.error}`);}
         evidence.status="passed";
+        }catch(error){evidence.error=error instanceof Error?error.message:String(error);failed(error);}
       }
-      item.status="passed";
+      if(item.challenges.every(c=>c.status==="passed"))item.status="passed";
     }
     if(!same(report.sourceHashes,await sourceHashes(root,out)))throw Error("Original project source/tests changed during own Node verification.");
+    if(problems.length)throw Error(problems.join("\n"));
     report.allPassed=true;
   } catch(error){report.error=error instanceof Error?error.message:String(error);}
   finally {

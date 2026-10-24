@@ -291,11 +291,11 @@ export default function GraphInspector({
                     change((g) => {
                       if (e.target.checked)
                         g.automation = {
-                          maxRepairCycles: 3,
+                          maxRepairCycles: 5,
                           nativeApprovalReview: false,
                           browserVerification: true,
                           verificationContract: true,
-                          authoredNodeTests: true,
+                          authoredNodeTests: true, testSourceGuard: true, reserveFinalizationBudget: true,
                         };
                       else delete g.automation;
                     })
@@ -311,6 +311,14 @@ export default function GraphInspector({
                       checked={Boolean(draft.automation.authoredNodeTests)}
                       onChange={e=>change(g=>{g.automation!.authoredNodeTests=e.target.checked;if(e.target.checked)g.automation!.verificationContract=true;})}/>
                     npm 테스트에 자체 영역·결함 탐지 계약 필수
+                  </label>
+                  <label className="checkbox">
+                    <input type="checkbox" aria-label="테스트 소스 수정 차단" checked={Boolean(draft.automation.testSourceGuard)} onChange={e=>change(g=>{g.automation!.testSourceGuard=e.target.checked;})}/>
+                    테스트는 소스 고정·실패 즉시 구현으로 반환
+                  </label>
+                  <label className="checkbox">
+                    <input type="checkbox" aria-label="검토 승인 예산 보존" checked={Boolean(draft.automation.reserveFinalizationBudget)} onChange={e=>change(g=>{g.automation!.reserveFinalizationBudget=e.target.checked;})}/>
+                    단계별 마감으로 후속 검토·승인 시간 보존
                   </label>
                   <label>
                     자동 수정 횟수

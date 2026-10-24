@@ -125,7 +125,7 @@ export function isVerificationCommand(command: string, cwd?: string): boolean {
 
 /** Receipts come only from native completed tool events, after redaction. */
 export class CommandTracker {
-  constructor(private readonly cwd?: string) {}
+  constructor(private readonly cwd?: string,private readonly sourcesGuarded=false) {}
   readonly receipts: CommandReceipt[] = [];
   private readonly pending = new Map<string, string>();
   private record(
@@ -165,7 +165,7 @@ export class CommandTracker {
     if (this.receipts.length > 64) this.receipts.shift();
   }
   observe(event: Obj): void {
-    if (fileMutation(event)) this.receipts.length = 0;
+    if (!this.sourcesGuarded && fileMutation(event)) this.receipts.length = 0;
     const item = obj(event.item),
       part = obj(event.part),
       state = obj(part.state);
@@ -241,6 +241,7 @@ export function acceptedVisit(visit: NodeVisit, cwd?: string): boolean {
     visit.status === "succeeded" &&
     !!visit.completedAt &&
     attempt?.completionAccepted === true &&
+    !attempt.verificationInvalidation &&
     attempt.status === "succeeded" &&
     !attempt.failureKind &&
     !!attempt.endedAt &&
@@ -260,6 +261,7 @@ export function failedVerificationCommand(
 export function visitCommands(visit: NodeVisit,cwd?:string): CommandReceipt[] {
   let commands: CommandReceipt[] = [];
   for (const attempt of visit.attempts ?? []) {
+    if(attempt.verificationInvalidation){commands=[];continue;}
     if (attempt.fileMutation) commands = [];
     commands = mergeProjectReceipts(cwd,commands, attempt.commands);
   }

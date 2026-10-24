@@ -1440,7 +1440,7 @@ test("autonomous runtime detects hidden production writes even without native fi
   const tests = done.visits.filter((v) => v.nodeId === "test");
   assert.equal(tests.length, 2);
   assert.equal(tests[0]!.verdict, "FAIL");
-  assert.match(tests[0]!.output, /제품 파일 변경/);
+  assert.match(tests[0]!.output, /제품.*변경/);
   assert.equal(tests[1]!.verdict, "PASS");
 });
 
@@ -1460,6 +1460,15 @@ async function contracted(s: Awaited<ReturnType<typeof setup>>, supplied = true,
   }
   return graph;
 }
+for(const mode of ["fixture:contract-early-fail","fixture:contract-hidden-guard","fixture:contract-policy-guard"])test(`${mode} returns promptly to implementation with invalid proof and completes a fresh immutable test/approval cycle`,async t=>{
+ const s=await setup();t.after(s.cleanup);const graph=await contracted(s),id=await launch(s,graph,mode);
+ const done=await wait(()=>s.store.readSession(id),"SUCCESS"),tests=done.visits.filter(v=>v.nodeId==="test");
+ assert.equal(tests.length,2);assert.equal(tests[0]!.verdict,"FAIL");assert.equal(tests[0]!.attempts.length,1);assert.ok(tests[0]!.attempts[0]!.verificationInvalidation);assert.deepEqual(tests[0]!.verifiedCommands,[]);
+ assert.ok(Date.parse(tests[0]!.completedAt!)-Date.parse(tests[0]!.startedAt)<4500);assert.equal(await fs.stat(path.join(s.target,"verification/forbidden-late-write")).then(()=>true,()=>false),false);
+ assert.equal(tests[1]!.verdict,"PASS");assert.ok(tests[1]!.verificationSourceHashes?.["artifact.txt"]);assert.equal(done.visits.at(-1)!.verdict,"APPROVED");assert.deepEqual(done.processedRequests,[]);
+ if(mode.includes("hidden"))assert.ok(tests[0]!.attempts[0]!.verificationInvalidation!.files.includes("artifact.txt"));
+ if(mode.includes("policy"))assert.equal(tests[0]!.attempts[0]!.fileMutation,false);
+});
 test("supplied frozen contract executes a real protected assertion and JSON reports through final approval", async t => {
   const s = await setup(); t.after(s.cleanup);
   const graph = await contracted(s), id = await launch(s, graph, "fixture:contract-workflow");

@@ -19,6 +19,7 @@ export async function buildInvocation(
     nativeApprovalReview?: boolean;
     verificationCommands?: string[];
     disableWrite?: boolean;
+    testSourcesReadOnly?: boolean;
   },
 ): Promise<{
   binary: string;
@@ -110,7 +111,7 @@ export async function buildInvocation(
       : {};
     delete env.AGENT_GRAPH_KILO_CHECKS;
     const guardedChecks = c.type === "kilo" && !readonly && opts.verificationCommands?.length;
-    if (guardedChecks) env.AGENT_GRAPH_KILO_CHECKS = JSON.stringify({cwd: opts.cwd, commands: opts.verificationCommands});
+    if (guardedChecks) env.AGENT_GRAPH_KILO_CHECKS = JSON.stringify({cwd: opts.cwd, commands: opts.verificationCommands,...(opts.testSourcesReadOnly?{testSourcesReadOnly:true}:{})});
     const recoveryAgents: Record<string, {tools?: Record<string, unknown>}> = Object.create(null);
     if (c.type === "kilo" && !readonly && opts.disableWrite) {
       // Kilo resolves effective agents before plugin config hooks; write=false
@@ -148,7 +149,7 @@ export async function buildInvocation(
               (opts.disableWrite
                 ? "The write tool is disabled in this attempt after observed schema failures; Kilo also excludes its shared native edit group. Do not call write/edit or invent content for a failed empty call. Use permitted bash commands with small, safely quoted heredocs to create or update files; preserve frozen acceptance files. "
                 : "The write tool requires both filePath (absolute path) and content (string). Keep each write small; never send {}. ") +
-              "Preserve existing tests and use bash to run them before deciding whether additional coverage is necessary. " +
+              (opts.testSourcesReadOnly ? "This test role cannot edit ANY source, tests, package or configuration. Execute exact registered checks and inspect via read/glob/grep or read-only shell commands. On first failure report FAIL with concrete diagnostics; implementation owns every repair. " : "Preserve existing tests and use bash to run them before deciding whether additional coverage is necessary. ") +
               (process.platform === "win32"
                 ? "The tool shell is Windows PowerShell: use npm.cmd and npx.cmd to avoid npm.ps1 execution policy errors, or invoke node.exe directly. Use PowerShell syntax, not Bash for/do/done loops or &&. Do not change the host execution policy."
                 : ""));

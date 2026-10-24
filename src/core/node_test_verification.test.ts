@@ -102,3 +102,12 @@ test("new autonomous npm contracts require own-suite policy while historical gra
  delete state.graph.automation!.authoredNodeTests;
  assert.equal((await lockContract(state,"supplied")).status,"locked");
 });
+test("one quality run reports weak assertions across multiple scopes instead of consuming a repair visit per first failure",async t=>{
+ const s=await setup(t,"import test from 'node:test';test('value:correct',()=>{});");
+ s.manifest.nodeTests!.scopes.push({...s.manifest.nodeTests!.scopes[0]!,id:"http",file:"test/http.test.mjs",cases:["http:boundary"],challenges:[{id:"wrong-http",adapter,targets:["value.mjs"]}]});
+ await fs.writeFile(path.join(s.root,"test/http.test.mjs"),"import test from 'node:test';test('http:boundary',()=>{});");
+ await fs.writeFile(path.join(s.root,"package.json"),JSON.stringify({type:"module",scripts:{test:nodeTestScript(s.manifest.nodeTests!)}}));
+ const result=await runNodeTestVerification({target:s.root,manifest:s.manifest});
+ assert.equal(result.allPassed,false);assert.deepEqual(result.scopes.map(x=>x.status),["failed","failed"]);assert.match(result.error!,/wrong-value/);assert.match(result.error!,/wrong-http/);
+ assert.equal(result.workers.length,6);assert.equal(result.processesStopped,true);assert.equal(result.workspacesRemoved,true);
+});

@@ -41,7 +41,7 @@ export interface AgentGraphDocument {
   nodes: AgentNode[];
   edges: GraphEdge[];
   defaultBinding?: ExecutionBinding;
-  automation?: { maxRepairCycles: number; nativeApprovalReview: boolean; browserVerification?: boolean; verificationContract?: boolean; authoredNodeTests?:boolean };
+  automation?: { maxRepairCycles: number; nativeApprovalReview: boolean; browserVerification?: boolean; verificationContract?: boolean; authoredNodeTests?:boolean; testSourceGuard?:boolean; reserveFinalizationBudget?:boolean };
   entrypoints: {
     start: string | null;
     reentry: string | null;
@@ -166,6 +166,7 @@ export interface CommandReceipt {
   environmentError: string | null;
 }
 export interface AttemptRecord {
+  verificationInvalidation?: {at:string;reason:string;files:string[]};
   readFiles?: string[];
   /** Written only after runtime completion validation; absent legacy evidence fails closed. */
   completionAccepted?: boolean;
@@ -199,6 +200,8 @@ export interface PlanChoice {
   revision: number;
 }
 export interface NodeVisit {
+  stageDeadlineAt?: string;
+  verificationSourceHashes?: Record<string,string>;
   verifiedCommands?: CommandReceipt[];
   nodeTestProof?: NodeTestProof;
   id: string;
