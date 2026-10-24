@@ -64,6 +64,30 @@ async function main() {
     );
     const project = path.join(temporary, "project");
     await fs.mkdir(project);
+    const core = path.join(installed, "dist", "src", "core");
+    const plugin = require(path.join(core, "kilo_protocol_plugin.js"));
+    const previousProtocol = process.env.AGENT_GRAPH_KILO_CHECKS;
+    try {
+      process.env.AGENT_GRAPH_KILO_CHECKS = JSON.stringify({cwd:project,commands:["npm test"]});
+      const hooks = await plugin.server(), output = {args:{command:"npm test 2>&1 | tail -20"}};
+      await hooks["tool.execute.before"]({tool:"bash"},output);
+      if (plugin.id !== "agent-graph-check-protocol" || output.args.command !== "npm test")
+        throw new Error("Installed native verification protocol failed.");
+    } finally {
+      if (previousProtocol === undefined) delete process.env.AGENT_GRAPH_KILO_CHECKS;
+      else process.env.AGENT_GRAPH_KILO_CHECKS = previousProtocol;
+    }
+    const {buildInvocation} = require(path.join(core, "invocation.js"));
+    const graph = require(path.join(core, "graph.js")).createAutonomousGraph();
+    const invocation = await buildInvocation(
+      {id:"kilo",label:"Kilo",type:"kilo",binary:path.join(repo,"test","fixture_cli.cjs")},
+      {connectionId:"kilo",modelId:"fixture/fixture-model"},
+      graph.nodes.find(n=>n.type==="implementation"),
+      {prompt:"Installed native protocol smoke",cwd:project,fullAccess:false,allowedPaths:[],verificationCommands:["npm test"],disableWrite:true},
+    );
+    if (JSON.parse(invocation.env.KILO_CONFIG_CONTENT).agent.fixture.tools.write !== false)
+      throw new Error("Installed native write fallback failed.");
+    process.stdout.write("Installed Kilo protocol verified: native hook, invocation-local write fallback, no model calls.\n");
     for (const type of ["codex", "claude", "opencode", "kilo"]) {
       const result = await queryModels(
         {
