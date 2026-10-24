@@ -1,9 +1,11 @@
-import test, { after } from "node:test";
+import test from "node:test";
 import assert from "node:assert/strict";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { randomUUID } from "node:crypto";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { createServer } from "./app";
 import { AgentGraphDocument, SessionState } from "../shared/domain";
 import { delay } from "../core/resilience";
@@ -12,9 +14,15 @@ const origin = "http://127.0.0.1:4317",
   binary = path.resolve(__dirname, "../../../test/fixture_cli.cjs");
 // ConPTY drains output for about a second per role before reporting process exit.
 const sessionWaitMs = process.platform === "win32" ? 20_000 : 10_000;
-after(() => {
-  console.log("Server suite resources at teardown:", process.getActiveResourcesInfo());
-});
+const execute = promisify(execFile);
+// Match production's worker isolation: ConPTY may retain native handles in the
+// calling process even after every runtime assertion and lease release passes.
+async function runManualRuntime(root: string, id: string): Promise<void> {
+  await execute(process.execPath, [path.join(__dirname, "worker.js"), root, id, "manual"], {
+    timeout: sessionWaitMs,
+    windowsHide: true,
+  });
+}
 const quickSettings = {
   maxAgentAttempts: 1,
   maxCompletionRecoveryAttempts: 1,
@@ -431,7 +439,6 @@ test("recovered terminal snapshots fail closed without current test evidence and
   const id = await launch(s, await minimal(s), "verified recovery");
   const completed = await wait(() => s.store.readSession(id), "SUCCESS");
   await delay(100);
-  const { GraphRuntime } = await import("../core/runtime.js");
   const calls = await fs.readFile(
     path.join(s.target, ".fixture-calls.json"),
     "utf8",
@@ -451,7 +458,7 @@ test("recovered terminal snapshots fail closed without current test evidence and
         for (const a of v.attempts) delete a.completionAccepted;
     snapshot.revision = (await s.store.readSession(id)).revision;
     await s.store.writeSession(snapshot);
-    await new GraphRuntime(s.store, id).run("manual");
+    await runManualRuntime(s.root, id);
     const held = await s.store.readSession(id);
     assert.equal(held.status, "PAUSED", mode);
     assert.equal(held.currentNodeId, "PAUSED");
@@ -463,7 +470,7 @@ test("recovered terminal snapshots fail closed without current test evidence and
       "gate cannot spend on an automatic repair",
     );
   }
-  await new GraphRuntime(s.store, id).run("manual");
+  await runManualRuntime(s.root, id);
   const repaired = await s.store.readSession(id);
   assert.equal(repaired.status, "SUCCESS", repaired.statusReason!);
   assert.deepEqual(
@@ -479,7 +486,6 @@ test("legacy failure edges cannot turn test FAIL or approval REJECTED into SUCCE
   const completed = await wait(() => s.store.readSession(id), "SUCCESS");
   await delay(100);
   await fs.rm(path.join(s.target, "artifact.txt"));
-  const { GraphRuntime } = await import("../core/runtime.js");
   for (const nodeId of ["test", "approval"]) {
     const snapshot = structuredClone(completed);
     snapshot.status = "PAUSED";
@@ -490,7 +496,7 @@ test("legacy failure edges cannot turn test FAIL or approval REJECTED into SUCCE
     )!.target = "SUCCESS";
     snapshot.revision = (await s.store.readSession(id)).revision;
     await s.store.writeSession(snapshot);
-    await new GraphRuntime(s.store, id).run("manual");
+    await runManualRuntime(s.root, id);
     const held = await s.store.readSession(id);
     assert.equal(held.status, "PAUSED", held.statusReason!);
     assert.equal(
