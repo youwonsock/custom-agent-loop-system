@@ -35,5 +35,5 @@ export type GraphInspectorModel = Pick<StudioFields,
 >;
 
 export type RunComposerModel = Pick<StudioFields,
-  "goalRef" | "goal" | "setGoal" | "target" | "setTarget" | "browse" | "directoryBusy" | "accessMode" | "setAccessMode" | "maxIterations" | "setMaxIterations" | "starting" | "start" | "issues" | "conflict"
+  "goalRef" | "goal" | "setGoal" | "target" | "setTarget" | "browse" | "directoryBusy" | "accessMode" | "setAccessMode" | "maxIterations" | "setMaxIterations" | "sessionMinutes" | "setSessionMinutes" | "maxSessionAttempts" | "setMaxSessionAttempts" | "starting" | "start" | "issues" | "conflict"
 >;

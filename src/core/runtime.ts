@@ -47,6 +47,8 @@ import { currentTestProof, mergeReceipts } from "./verification_evidence";
 import { modelPricing } from "./model_pricing";
 import { productionHashes } from "./verification_sources";
 import { successBlockers } from "./success_gate";
+import { lockContract, contractViolation } from "./verification_contract";
+import { sessionBudgetReason, pauseForBudget } from "./session_budget";
 
 export interface RuntimeHooks {
   onState?: (state: SessionState) => void;
@@ -156,9 +158,20 @@ export class GraphRuntime {
   }
   private async poll(): Promise<boolean> {
     const request = await claimNextControlRequest(this.controls());
-    if (!request) return false;
-    await this.finishControl(request);
-    return true;
+    if (request) { await this.finishControl(request); return true; }
+    const budget = sessionBudgetReason(this.state);
+    if (budget) { await this.budgetStop(budget); return true; }
+    return false;
+  }
+  private async budgetStop(reason: string): Promise<void> {
+    pauseForBudget(this.state,reason);this.stopRequested=true;await this.save();
+  }
+  private async contractStop(): Promise<boolean> {
+    const reason = await contractViolation(this.state);
+    if (!reason) return false;
+    this.state.status="BLOCKED";this.state.statusReason=reason;this.state.automaticRecovery=null;this.stopRequested=true;
+    const visit=this.state.visits.find(v=>v.id===this.state.activeVisitId);if(visit)visit.status="paused";
+    await this.save();return true;
   }
   async run(mode: "start" | "manual" | "automatic" = "start"): Promise<void> {
     this.state = await this.store.readSession(this.sessionId);
@@ -175,6 +188,8 @@ export class GraphRuntime {
       leaseTtlMs: settings.leaseTtlMs,
     });
     const acquired = await this.owner.acquire();
+    const budgetTimer = this.state.executionBudget ? setTimeout(() => this.abort.abort(new Error("전체 실행 시간 예산 소진")), Math.max(1,Date.parse(this.state.executionBudget.deadlineAt)-Date.now())) : undefined;
+    budgetTimer?.unref();
     try {
       await ensureControlQueue(this.controls());
       await recoverClaimedControlRequests(this.controls());
@@ -213,6 +228,7 @@ export class GraphRuntime {
       this.state.automaticRecovery = null;
       await this.save();
       if ((await this.poll()) && this.stopRequested) return;
+      if (await this.contractStop()) return;
       // Only bindings referenced by this immutable run are queried; no CLI scan.
       for (const connection of this.state.connections) {
         // Interrupt cancels metadata lookup as well as coding. Recheck the same
@@ -293,6 +309,7 @@ export class GraphRuntime {
         if (await this.poll()) {
           if (this.stopRequested) return;
         }
+        if (await this.contractStop()) return;
         const id = this.state.currentNodeId;
         if (id === "SUCCESS" || id === "PAUSED") {
           const blockers = id === "SUCCESS" ? successBlockers(this.state) : [];
@@ -379,7 +396,7 @@ export class GraphRuntime {
               this.state.targetProjectPath,
               ...this.state.additionalAllowedPaths,
             ],
-          );
+          ).filter(file => path.resolve(file) !== path.resolve(__dirname,"../server/cli.js"));
           if (extra.length) {
             this.state.pendingAccess = {
               paths: extra,
@@ -441,6 +458,8 @@ export class GraphRuntime {
         this.state = await this.store.readSession(this.sessionId);
         return;
       }
+      const budget = sessionBudgetReason(this.state);
+      if (budget && (!this.activePid || checkProcessLiveness(this.activePid)==="dead")) { await this.budgetStop(budget); return; }
       this.state.status =
         this.activePid && checkProcessLiveness(this.activePid) !== "dead"
           ? "BLOCKED"
@@ -448,6 +467,7 @@ export class GraphRuntime {
       this.state.statusReason = messageOf(error);
       await this.save();
     } finally {
+      clearTimeout(budgetTimer);
       this.abort.abort();
       await this.owner.release();
     }
@@ -476,6 +496,10 @@ export class GraphRuntime {
     node: AgentNode,
     visit: NodeVisit,
   ): Promise<Completion | null> {
+    if (this.state.graph.automation?.verificationContract && node.type === "test" && this.state.verificationContract?.status !== "locked") {
+      try { this.state.verificationContract = await lockContract(this.state,"implementation"); await this.save(); }
+      catch(error) { return { valid:true,reason:`검증 계약 준비 실패: ${messageOf(error)}`,failureKind:null,output:`검증 계약 준비 실패: ${messageOf(error)}\n구현 역할에서 .agent-graph/verification.json과 인수 검사를 준비하세요.\nVERDICT: FAIL\n[PHASE_DONE]`,verdict:"FAIL",plans:[],researchBlocked:false,environmentBlocked:null }; }
+    }
     let testInputs: Record<string, string> | null = null;
     if (this.state.graph.automation && node.type === "test") {
       try {
@@ -515,6 +539,9 @@ export class GraphRuntime {
       if (await this.poll()) {
         return null;
       }
+      if (await this.contractStop()) return null;
+      const budget = sessionBudgetReason(this.state,true);
+      if (budget) { await this.budgetStop(budget); return null; }
       const normal = cycleAttempts().filter(
         (a) => a.mode === "standard",
       ).length;
@@ -564,7 +591,7 @@ export class GraphRuntime {
         lastProgressAt: null as string | null,
         activity: "initial_transport",
         deadlineAt: new Date(
-          Math.min(Date.now() + s.phaseTimeoutMs, deadline),
+          Math.min(Date.now() + s.phaseTimeoutMs, deadline, this.state.executionBudget ? Date.parse(this.state.executionBudget.deadlineAt) : Infinity),
         ).toISOString(),
         requestedModelId: binding.modelId,
         actualModelId: null as string | null,
@@ -589,7 +616,7 @@ export class GraphRuntime {
           s.phaseTimeoutMs,
           Math.max(1, deadline - Date.now()),
         ),
-        absoluteDeadlineAtMs: deadline,
+        absoluteDeadlineAtMs: Math.min(deadline, this.state.executionBudget ? Date.parse(this.state.executionBudget.deadlineAt) : Infinity),
         terminationGraceMs: s.terminationGraceMs,
         killTimeoutMs: s.killTimeoutMs,
         maxInMemoryOutputBytes: s.maxInMemoryOutputBytes,
@@ -676,6 +703,13 @@ export class GraphRuntime {
         await this.finishControl(result.controlRequest);
         return null;
       }
+      const budgetAfter = sessionBudgetReason(this.state);
+      if (budgetAfter) { await this.budgetStop(budgetAfter); return null; }
+      if (await this.contractStop()) return null;
+      const protectedWrites = (result.evidence.changedFiles??[]).filter(file => this.state.verificationContract?.hashes?.[file.replace(/\\/g,"/")] !== undefined);
+      if (protectedWrites.length) {
+        this.state.status="BLOCKED";this.state.statusReason=`고정 검증 파일의 쓰기가 관측됐습니다: ${protectedWrites.join(", ")}`;this.state.automaticRecovery=null;visit.status="paused";await this.save();return null;
+      }
       if (testInputs && result.outcome === "succeeded") {
         let changed: string[];
         try {
@@ -702,6 +736,7 @@ export class GraphRuntime {
         visit.verifiedCommands ?? result.evidence.commands,
         currentTestProof(this.state, visit),
         this.state.graph.automation,
+        this.state.verificationContract,
       );
       if (completion.environmentBlocked) {
         visit.output = completion.output;
@@ -798,6 +833,8 @@ export class GraphRuntime {
     visit: NodeVisit,
     reason: string,
   ): Promise<void> {
+    const budget = sessionBudgetReason(this.state,true);
+    if (budget) { await this.budgetStop(budget); return; }
     const s = this.state.settings,
       pricing = this.pricing.get(node.id) ?? modelPricing();
     if (
@@ -812,6 +849,9 @@ export class GraphRuntime {
             s.automaticRecoveryBackoffMs.length - 1,
           )
         ]!;
+      if (this.state.executionBudget && Date.now()+delayMs >= Date.parse(this.state.executionBudget.deadlineAt)) {
+        await this.budgetStop("남은 전체 실행 시간 안에 자동 복구를 시작할 수 없습니다.");return;
+      }
       visit.automaticCycles++;
       visit.status = "paused";
       this.state.automaticRecovery = {

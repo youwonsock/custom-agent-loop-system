@@ -106,7 +106,13 @@ test("graph editing, model connection, plan editing/approval and complete execut
     path: "artifacts/screenshots/editor-desktop.png",
     fullPage: true,
   });
+  await page.getByLabel("전체 시간 예산").fill("45");
+  await page.getByLabel("전체 에이전트 시도 한도").fill("18");
+  const submitted = page.waitForRequest(request => request.method() === "POST" && request.url().endsWith("/api/sessions"));
   await page.getByRole("button", { name: "그래프 실행", exact: false }).click();
+  const budget = (await submitted).postDataJSON().settings;
+  expect(budget.sessionTimeoutMs).toBe(45 * 60000);
+  expect(budget.maxSessionAttempts).toBe(18);
   await expect(
     page.getByRole("heading", { name: "계획을 검토하고 승인하세요" }),
   ).toBeVisible();

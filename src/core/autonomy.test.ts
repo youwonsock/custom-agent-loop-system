@@ -46,8 +46,10 @@ const result = (text: string): SupervisorResult => ({
   evidence: emptyEvidence(),
   diagnostics: emptyCliDiagnostics(),
 });
-const g = createAutonomousGraph(),
-  requirements = deriveRequirementLedger("Build the complete app").items;
+const g = createAutonomousGraph();
+// Existing policy cases exercise the backwards-compatible legacy report profile.
+g.automation!.verificationContract = false;
+const requirements = deriveRequirementLedger("Build the complete app").items;
 const report = (status = "SATISFIED", verdict = "PASS", extra = "") =>
   `[REQUIREMENT_EVIDENCE]\nREQ_ID: REQ-001\nSTATUS: ${status}\nEVIDENCE: actual check\nCHECK_COMMAND: npm test\n[/REQUIREMENT_EVIDENCE]\n${extra}\nVERDICT: ${verdict}\n[PHASE_DONE]`;
 const receipt = {
@@ -58,6 +60,7 @@ const receipt = {
 };
 test("autonomous preset is opt-in, persisted, bounded and still requires tests/final approval", () => {
   assert.equal(createGraph().automation, undefined);
+  assert.equal(createAutonomousGraph().automation!.verificationContract,true);
   assert.equal(createGraph().nodes[0]!.planning!.requiresApproval, true);
   const copy = validateGraphDocument(g);
   assert.deepEqual(copy.automation, g.automation);

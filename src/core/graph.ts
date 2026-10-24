@@ -58,7 +58,8 @@ export function validateGraphDocument(input: unknown): AgentGraphDocument {
       g.automation.maxRepairCycles > 20 ||
       typeof g.automation.nativeApprovalReview !== "boolean" ||
       (g.automation.browserVerification !== undefined &&
-        typeof g.automation.browserVerification !== "boolean"))
+        typeof g.automation.browserVerification !== "boolean") ||
+      (g.automation.verificationContract !== undefined && typeof g.automation.verificationContract !== "boolean"))
   )
     throw new AppError(
       400,
@@ -170,6 +171,7 @@ export function validateGraphDocument(input: unknown): AgentGraphDocument {
             ...(g.automation.browserVerification !== undefined
               ? { browserVerification: g.automation.browserVerification }
               : {}),
+            ...(g.automation.verificationContract !== undefined ? { verificationContract: g.automation.verificationContract } : {}),
           },
         }
       : {}),
@@ -268,6 +270,7 @@ export function createAutonomousGraph(
     maxRepairCycles: 3,
     nativeApprovalReview: true,
     browserVerification: true,
+    verificationContract: true,
   };
   graph.nodes.find((n) => n.type === "planning")!.planning = {
     requiresApproval: false,

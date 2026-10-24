@@ -294,6 +294,7 @@ export default function GraphInspector({
                           maxRepairCycles: 3,
                           nativeApprovalReview: false,
                           browserVerification: true,
+                          verificationContract: true,
                         };
                       else delete g.automation;
                     })
@@ -303,6 +304,7 @@ export default function GraphInspector({
               </label>
               {draft.automation && (
                 <>
+                  <p className="muted">검증 계약: {draft.automation.verificationContract ? "보호 파일·필수 검사 고정" : "기존 그래프 정책"}</p>
                   <label>
                     자동 수정 횟수
                     <input

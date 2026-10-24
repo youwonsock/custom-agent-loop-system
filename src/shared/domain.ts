@@ -41,7 +41,7 @@ export interface AgentGraphDocument {
   nodes: AgentNode[];
   edges: GraphEdge[];
   defaultBinding?: ExecutionBinding;
-  automation?: { maxRepairCycles: number; nativeApprovalReview: boolean; browserVerification?: boolean };
+  automation?: { maxRepairCycles: number; nativeApprovalReview: boolean; browserVerification?: boolean; verificationContract?: boolean };
   entrypoints: {
     start: string | null;
     reentry: string | null;
@@ -100,6 +100,9 @@ export type SessionStatus =
   | "SUCCESS"
   | "FAILED";
 export interface ExecutionSettings {
+  /** Optional in historical v3 snapshots; all newly started sessions set these. */
+  sessionTimeoutMs?: number;
+  maxSessionAttempts?: number;
   maxIterations: number;
   maxAgentAttempts: number;
   maxCompletionRecoveryAttempts: number;
@@ -116,6 +119,26 @@ export interface ExecutionSettings {
   maxInMemoryOutputBytes: number;
   maxAutomaticRecoveryCycles: number;
   automaticRecoveryBackoffMs: number[];
+}
+export interface VerificationManifest {
+  version: 1;
+  protectedFiles: string[];
+  checks: Array<{ id: string; command: string; requirements: string[] }>;
+}
+export interface VerificationContract {
+  version: 1;
+  status: "pending" | "locked";
+  origin?: "supplied" | "implementation";
+  lockedAt?: string;
+  manifest?: VerificationManifest;
+  hashes?: Record<string, string>;
+  digest?: string;
+}
+export interface SessionBudget {
+  startedAt: string;
+  deadlineAt: string;
+  maxAttempts: number;
+  exhaustedReason: string | null;
 }
 export interface CommandReceipt {
   id: string;
@@ -176,6 +199,8 @@ export interface NodeVisit {
 }
 export interface SessionState {
   stateVersion: 3;
+  verificationContract?: VerificationContract;
+  executionBudget?: SessionBudget;
   /** Monotonic persistence revision; absent in legacy version-3 snapshots. */
   revision?: number;
   id: string;

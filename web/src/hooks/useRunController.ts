@@ -21,6 +21,7 @@ export function useRunController(data: Pick<StudioData, "view" | "setView" | "se
   } = graph;
   const [accessMode, setAccessMode] = useState<"ask" | "full_access">("ask"),
     [maxIterations, setMaxIterations] = useState(20), [starting, setStarting] = useState(false),
+    [sessionMinutes,setSessionMinutes] = useState(60), [maxSessionAttempts,setMaxSessionAttempts] = useState(24),
     [selectedRun, setSelectedRun] = useState<string | null>(null);
   const [run, setRun] = useState<SessionState | undefined>();
   const [log, setLog] = useState(""),
@@ -46,7 +47,7 @@ export function useRunController(data: Pick<StudioData, "view" | "setView" | "se
         goal,
         targetProjectPath: target,
         accessMode,
-        settings: { maxIterations },
+        settings: { maxIterations, sessionTimeoutMs: sessionMinutes*60000, maxSessionAttempts },
       });
       setSessions(values => mergeSessions(values, [sessionSummary(state)]));
       setRun(state);
@@ -155,6 +156,7 @@ export function useRunController(data: Pick<StudioData, "view" | "setView" | "se
     setAccessMode,
     maxIterations,
     setMaxIterations,
+    sessionMinutes,setSessionMinutes,maxSessionAttempts,setMaxSessionAttempts,
     starting,
     selectedRun,
     setSelectedRun,

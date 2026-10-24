@@ -1267,6 +1267,9 @@ test("snapshot decoding rejects malformed v3 data and preserves compatible legac
   const { decodeSession } = await import("../core/session_schema.js");
   const legacy = structuredClone(valid);
   delete legacy.revision;
+  delete legacy.executionBudget;
+  delete legacy.settings.sessionTimeoutMs;
+  delete legacy.settings.maxSessionAttempts;
   for (const v of legacy.visits)
     for (const a of v.attempts) {
       delete a.completionAccepted;
@@ -1276,6 +1279,9 @@ test("snapshot decoding rejects malformed v3 data and preserves compatible legac
     }
   assert.equal(decodeSession(legacy, id).stateVersion, 3);
   for (const mutate of [
+    (v: any) => { v.executionBudget.deadlineAt = "invalid"; },
+    (v: any) => { v.executionBudget.maxAttempts = 0; },
+    (v: any) => { v.verificationContract = { version: 1, status: "locked" }; },
     (v: any) => {
       delete v.graph;
     },
@@ -1320,6 +1326,7 @@ test("autonomous preset repairs a product BLOCKED and reaches final approval wit
   const s = await setup();
   t.after(s.cleanup);
   let graph = await s.store.createGraph({ template: "autonomous" });
+  graph.automation!.verificationContract = false; // legacy-policy coverage; contract cases are separate below
   graph.automation!.browserVerification = false;
   graph.defaultBinding = s.graph.defaultBinding;
   graph = await s.store.saveGraph(graph.id, graph, graph.revision);
@@ -1353,6 +1360,7 @@ test("autonomous failures stop at repair budget instead of requesting endless in
   const s = await setup();
   t.after(s.cleanup);
   let graph = await s.store.createGraph({ template: "autonomous" });
+  graph.automation!.verificationContract = false; // legacy-policy coverage; contract cases are separate below
   graph.automation!.browserVerification = false;
   graph.automation!.maxRepairCycles = 1;
   graph.defaultBinding = s.graph.defaultBinding;
@@ -1381,6 +1389,7 @@ test("autonomous policy never bypasses an explicitly enabled planning approval",
   const s = await setup();
   t.after(s.cleanup);
   let graph = await s.store.createGraph({ template: "autonomous" });
+  graph.automation!.verificationContract = false; // legacy-policy coverage; contract cases are separate below
   graph.nodes.find((n) => n.type === "planning")!.planning!.requiresApproval =
     true;
   graph.defaultBinding = s.graph.defaultBinding;
@@ -1405,6 +1414,7 @@ test("autonomous runtime detects hidden production writes even without native fi
   const s = await setup();
   t.after(s.cleanup);
   let graph = await s.store.createGraph({ template: "autonomous" });
+  graph.automation!.verificationContract = false; // legacy-policy coverage; contract cases are separate below
   graph.automation!.browserVerification = false;
   graph.defaultBinding = s.graph.defaultBinding;
   graph = await s.store.saveGraph(graph.id, graph, graph.revision);
@@ -1422,4 +1432,146 @@ test("autonomous runtime detects hidden production writes even without native fi
   assert.equal(tests[0]!.verdict, "FAIL");
   assert.match(tests[0]!.output, /제품 파일 변경/);
   assert.equal(tests[1]!.verdict, "PASS");
+});
+
+async function contracted(s: Awaited<ReturnType<typeof setup>>, supplied = true, failing = false, second = false) {
+  let graph = await s.store.createGraph({ template: "autonomous" });
+  graph.automation!.browserVerification = false;
+  graph.automation!.maxRepairCycles = 1;
+  graph.defaultBinding = s.graph.defaultBinding;
+  graph = await s.store.saveGraph(graph.id, graph, graph.revision);
+  if (supplied) {
+    await fs.mkdir(path.join(s.target, ".agent-graph"));
+    await fs.mkdir(path.join(s.target, "tests"));
+    await fs.writeFile(path.join(s.target, "tests/verify-acceptance.mjs"), `import { readFileSync } from 'node:fs'; import assert from 'node:assert/strict'; assert.equal(readFileSync('artifact.txt','utf8'), ${JSON.stringify(failing ? "incorrect artifact\n" : "implemented goal\n")});`);
+    const check = { id: "acceptance", command: "node tests/verify-acceptance.mjs", requirements: ["REQ-001"] };
+    await fs.writeFile(path.join(s.target, ".agent-graph/verification.json"), JSON.stringify({ version: 1, protectedFiles: ["tests/verify-acceptance.mjs"], checks: [check, ...(second ? [{ ...check, id: "second", command: "node tests/verify-acceptance.mjs --second" }] : [])] }));
+  }
+  return graph;
+}
+test("supplied frozen contract executes a real protected assertion and JSON reports through final approval", async t => {
+  const s = await setup(); t.after(s.cleanup);
+  const graph = await contracted(s), id = await launch(s, graph, "fixture:contract-workflow");
+  const done = await wait(() => s.store.readSession(id), "SUCCESS");
+  assert.equal(done.verificationContract!.origin, "supplied");
+  assert.equal(done.verificationContract!.status, "locked");
+  assert.equal(done.pendingApproval, null);
+  assert.equal(done.processedRequests.length, 0);
+  assert.deepEqual(done.visits.map(v => v.nodeId), ["planning", "implementation", "test", "review", "approval"]);
+  assert.ok(done.visits.slice(2).every(v => v.output.includes("[REPORT_PROTOCOL: json-v1]")));
+  assert.equal(done.visits[2]!.attempts[0]!.commands![0]!.exitCode, 0);
+  assert.equal(done.visits.at(-1)!.verdict, "APPROVED");
+});
+test("a model-authored contract freezes before test and reaches final approval without operator actions", async t => {
+  const s = await setup(); t.after(s.cleanup);
+  const id = await launch(s, await contracted(s, false), "fixture:contract-create");
+  const done = await wait(() => s.store.readSession(id), "SUCCESS");
+  assert.equal(done.verificationContract!.origin, "implementation");
+  assert.equal(done.processedRequests.length, 0);
+});
+test("a claimed JSON PASS cannot hide an actual failing protected assertion", async t => {
+  const s = await setup(); t.after(s.cleanup);
+  const id = await launch(s, await contracted(s, true, true), "fixture:contract-workflow");
+  const done = await wait(() => s.store.readSession(id), "PAUSED");
+  assert.ok(done.visits.some(v => v.nodeId === "test" && v.verdict === "FAIL"));
+  assert.equal(done.visits.some(v => v.nodeId === "approval"), false);
+  assert.ok(done.visits.filter(v => v.nodeId === "test").every(v => v.attempts[0]!.commands![0]!.exitCode === 1));
+});
+test("every registered check is mandatory even if another check covers all requirement IDs", async t => {
+  const s = await setup(); t.after(s.cleanup);
+  const id = await launch(s, await contracted(s, true, false, true), "fixture:contract-omit-check");
+  const done = await wait(() => s.store.readSession(id), "PAUSED");
+  assert.equal(done.visits.some(v => v.nodeId === "approval"), false);
+  assert.match(done.statusReason!, /second|한도|예산/);
+});
+for (const mode of ["fixture:contract-tamper", "fixture:contract-tamper-restore"]) test(`${mode} blocks protected writes before test execution`, async t => {
+  const s = await setup(); t.after(s.cleanup);
+  const id = await launch(s, await contracted(s), mode);
+  let done = await s.store.readSession(id);
+  const until = Date.now() + sessionWaitMs;
+  while (done.status !== "BLOCKED" && Date.now() < until) { await delay(30); done = await s.store.readSession(id); }
+  assert.equal(done.status, "BLOCKED", done.statusReason!);
+  assert.match(done.statusReason!, /고정 검증 파일/);
+  assert.equal(done.visits.some(v => v.nodeId === "test"), false);
+});
+test("a missing verification contract returns a bounded implementation repair rather than SUCCESS", async t => {
+  const s = await setup(); t.after(s.cleanup);
+  const id = await launch(s, await contracted(s, false), "fixture:contract-missing");
+  const done = await wait(() => s.store.readSession(id), "PAUSED");
+  assert.equal(done.visits.filter(v => v.nodeId === "implementation").length, 2);
+  assert.equal(done.visits.some(v => v.nodeId === "approval"), false);
+  assert.ok(done.visits.some(v => /검증 계약/.test(v.output)));
+});
+test("whole-session attempts stop before another call and cannot be renewed by manual resume", async t => {
+  const s = await setup(); t.after(s.cleanup);
+  const id = await launch(s, await contracted(s), "fixture:contract-workflow", { maxSessionAttempts: 2 });
+  const done = await wait(() => s.store.readSession(id), "PAUSED");
+  assert.equal(done.visits.reduce((n, v) => n + v.attempts.length, 0), 2);
+  assert.match(done.statusReason!, /전체 네이티브 시도 2회/);
+  await delay(200);
+  const resume = await s.request("POST", `/api/sessions/${id}/actions`, { requestId: randomUUID(), type: "resume" });
+  assert.equal(resume.statusCode, 409);
+  assert.equal((await s.store.readSession(id)).executionBudget!.deadlineAt, done.executionBudget!.deadlineAt);
+});
+test("whole-session wall time terminates continuous native progress and persists across automatic reconciliation", async t => {
+  const s = await setup(); t.after(s.cleanup);
+  const id = await launch(s, await minimal(s), "fixture:progress-budget-once", { sessionTimeoutMs: process.platform === "win32" ? 4500 : 1200, phaseTimeoutMs: 10000, phaseRecoveryBudgetMs: 12000, idleTimeoutMs: 5000, maxAutomaticRecoveryCycles: 1 });
+  const done = await wait(() => s.store.readSession(id), "PAUSED");
+  assert.match(done.statusReason!, /전체 실행 시간 예산/);
+  assert.equal(done.automaticRecovery, null);
+  assert.equal(done.visits.flatMap(v => v.attempts).some(a => a.pid !== null), false);
+  const attempts = done.visits.flatMap(v => v.attempts).length;
+  await s.store.mutateSession(id, state => { state.status = "RECOVERING"; state.automaticRecovery = { count: 1, resumeAt: new Date(0).toISOString() }; });
+  await delay(100);
+  await (s.coordinator as unknown as { reconcile(): Promise<void> }).reconcile();
+  const reconciled = await s.store.readSession(id);
+  assert.equal(reconciled.status, "PAUSED");
+  assert.equal(reconciled.visits.flatMap(v => v.attempts).length, attempts);
+  assert.equal(reconciled.automaticRecovery, null);
+});
+
+test("a free provider cannot schedule another recovery after the global native-attempt cap", async t => {
+  const s = await setup(true); t.after(s.cleanup);
+  await setModelPricing(s, { isFree: true });
+  const id = await launch(s, await minimal(s), "fixture:network", { maxSessionAttempts: 1, maxAutomaticRecoveryCycles: 3 });
+  const done = await wait(() => s.store.readSession(id), "PAUSED");
+  assert.match(done.statusReason!, /전체 네이티브 시도 1회/);
+  assert.equal(done.automaticRecovery, null);
+  assert.equal(done.visits.flatMap(v => v.attempts).length, 1);
+  await delay(1100);
+  assert.equal((await s.store.readSession(id)).visits.flatMap(v => v.attempts).length, 1);
+});
+test("an invalid supplied contract is rejected before any agent CLI is invoked", async t => {
+  const s = await setup(); t.after(s.cleanup);
+  const graph = await contracted(s);
+  await fs.writeFile(path.join(s.target, ".agent-graph/verification.json"), "{invalid");
+  const response = await s.request("POST", "/api/sessions", { requestId: randomUUID(), graphId: graph.id, expectedRevision: graph.revision, goal: "fixture:contract-workflow", targetProjectPath: s.target, settings: quickSettings });
+  assert.equal(response.statusCode, 400, response.body);
+  assert.match(response.body, /검증 계약/);
+  assert.equal((await s.store.sessions()).length, 0);
+  await assert.rejects(fs.access(path.join(s.target, "artifact.txt")));
+});
+
+test("the whole-session deadline also cancels model-catalog preflight without an agent call", async t => {
+  const s = await setup(); t.after(s.cleanup);
+  await fs.writeFile(path.join(s.target, ".fixture-slow-query"), "hold metadata request");
+  const id = await launch(s, await minimal(s), "preflight global deadline", { sessionTimeoutMs: process.platform === "win32" ? 4500 : 1200 });
+  const done = await wait(() => s.store.readSession(id), "PAUSED");
+  assert.match(done.statusReason!, /전체 실행 시간 예산/);
+  assert.equal(done.visits.length, 0);
+  const pid = Number(await fs.readFile(path.join(s.target, ".fixture-query-pid"), "utf8"));
+  const { checkProcessLiveness } = await import("../core/resilience.js");
+  assert.equal(checkProcessLiveness(pid), "dead");
+});
+
+test("unchanged approval waits expire under the original wall-clock budget without another agent call", async t => {
+  const s = await setup(true); t.after(s.cleanup);
+  const id = await launch(s, s.graph, "approval wait global deadline", { sessionTimeoutMs: process.platform === "win32" ? 4500 : 1200 });
+  const held = await wait(() => s.store.readSession(id), "WAITING_USER");
+  assert.ok(held.pendingApproval);
+  const done = await wait(() => s.store.readSession(id), "PAUSED");
+  assert.match(done.statusReason!, /전체 실행 시간 예산/);
+  assert.equal(done.pendingApproval, null);
+  assert.equal(done.pendingAccess, null);
+  assert.equal(done.visits.flatMap(v => v.attempts).length, held.visits.flatMap(v => v.attempts).length);
 });

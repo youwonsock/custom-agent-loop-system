@@ -1,4 +1,6 @@
 {
+  "sessionTimeoutMs": 3600000,
+  "maxSessionAttempts": 24,
   "maxIterations": 20,
   "phaseTimeoutMs": 900000,
   "idleTimeoutMs": 300000,

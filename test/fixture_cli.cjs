@@ -3,6 +3,7 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const http = require("node:http");
+const { spawnSync } = require("node:child_process");
 const readline = require("node:readline");
 const args = process.argv.slice(2),
   emit = (e) => process.stdout.write(JSON.stringify(e) + "\n");
@@ -237,6 +238,20 @@ if (args.includes("app-server")) {
         path.join(process.cwd(), "artifact.txt"),
         "implemented goal\n",
       );
+      if (prompt.includes("fixture:contract-create")) {
+        fs.mkdirSync(".agent-graph", { recursive: true });
+        fs.mkdirSync("tests", { recursive: true });
+        fs.writeFileSync("tests/verify-acceptance.mjs", 'import { readFileSync } from "node:fs"; import assert from "node:assert/strict"; assert.equal(readFileSync("artifact.txt", "utf8"), "implemented goal\\n");');
+        fs.writeFileSync(".agent-graph/verification.json", JSON.stringify({ version: 1, protectedFiles: ["tests/verify-acceptance.mjs"], checks: [{ id: "acceptance", command: "node tests/verify-acceptance.mjs", requirements: reqs }] }));
+      }
+      if (prompt.includes("fixture:contract-tamper")) {
+        const file = "tests/verify-acceptance.mjs", original = fs.readFileSync(file);
+        fs.appendFileSync(file, "\n// changed protected assertion\n");
+        if (prompt.includes("fixture:contract-tamper-restore")) {
+          fs.writeFileSync(file, original);
+          emit({ type: "item.completed", item: { type: "file_change", changes: [{ path: file, kind: "update" }], status: "completed" } });
+        }
+      }
       text = evidence + "\nImplementation complete.";
     } else if (type === "test")
       text =
@@ -260,9 +275,20 @@ if (args.includes("app-server")) {
     emit({ type: "thread.started", thread_id: "fixture-session" });
     if (["review", "approval"].includes(type) && prompt.includes(`fixture:${type}-check-fail-once`) && calls[type] === 1)
       emit({ type: "item.completed", item: { id: "extra-check", type: "command_execution", command: "node --test extra.test.cjs", exit_code: 1, status: "completed", aggregated_output: "# fail 1" } });
-    if (type === "test") {
+    if (type === "test" && !prompt.includes("=== JSON REPORT v1 ===")) {
       const blocked = prompt.includes("fixture:environment-once") && calls[type] === 1;
       emit({ type: "item.completed", item: { id: "acceptance", type: "command_execution", command: "node --test acceptance.test.cjs", exit_code: blocked || productBlocked ? 1 : 0, status: "completed", aggregated_output: productBlocked ? "AssertionError: implementation incomplete" : blocked ? "Error: listen EPERM: operation not permitted 127.0.0.1" : "# pass 1\n# fail 0" } });
+    }
+    if (prompt.includes("=== JSON REPORT v1 ===") && ["test", "review", "approval"].includes(type)) {
+      if (type === "test") {
+        const manifest = JSON.parse(fs.readFileSync(".agent-graph/verification.json", "utf8"));
+        for (const check of manifest.checks) {
+          if (prompt.includes("fixture:contract-omit-check") && check.id === "second") continue;
+          const executed = spawnSync(process.execPath, ["tests/verify-acceptance.mjs"], { cwd: process.cwd(), encoding: "utf8" });
+          emit({ type: "item.completed", item: { id: check.id, type: "command_execution", command: check.command, exit_code: executed.status, status: "completed", aggregated_output: executed.stdout + executed.stderr } });
+        }
+      }
+      text = "[AGENT_REPORT]\n" + JSON.stringify({ version: 1, verdict: type === "test" ? "PASS" : "APPROVED", requirements: reqs.map(id => ({ id, status: "SATISFIED", evidence: "inspected actual acceptance artifact and receipts" })) }) + "\n[/AGENT_REPORT]";
     }
     if (prompt.includes("인터넷 검색")) {
       emit({
@@ -281,7 +307,7 @@ if (args.includes("app-server")) {
         type: "agent_message",
         text:
           text +
-          (prompt.includes("fixture:incomplete-once") && calls[type] === 1
+          (prompt.includes("=== JSON REPORT v1 ===") || (prompt.includes("fixture:incomplete-once") && calls[type] === 1)
             ? ""
             : "\n[PHASE_DONE]"),
       },

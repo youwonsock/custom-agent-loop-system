@@ -4,6 +4,7 @@ import {
   AgentNode,
   CommandReceipt,
   PlanChoice,
+  VerificationContract,
 } from "../shared/domain";
 import { SupervisorResult } from "./process_supervisor";
 import {
@@ -19,6 +20,8 @@ import {
   isVerificationCommand,
   isBrowserVerificationCommand,
 } from "./verification_evidence";
+import { renderStructuredReport } from "./report_protocol";
+import { missingContractReceipts } from "./verification_contract";
 export const requiresResearch = (goal: string): boolean =>
   /(?:인터넷|웹)\s*(?:을|를|에서|으로)?\s*(?:검색|조사|찾)|\b(?:search|browse|research|look\s*up)(?:\s+the)?\s+(?:internet|web)\b|\b(?:internet|web)\s+(?:search|research)\b/i.test(
     goal.replace(/\s+/g, " "),
@@ -74,8 +77,9 @@ export function validateCompletion(
   commands: CommandReceipt[] = result.evidence.commands,
   priorTestProof: CommandReceipt[] = [],
   automation?: AgentGraphDocument["automation"],
+  contract?: VerificationContract,
 ): Completion {
-  const output = result.assistantText.replace(/\r\n/g, "\n").trim();
+  let output = result.assistantText.replace(/\r\n/g, "\n").trim();
   const answer: Completion = {
     valid: true,
     reason: null,
@@ -105,6 +109,11 @@ export function validateCompletion(
       "읽기 전용 역할에서 파일 변경이 관측되었습니다.",
       "role_violation",
     );
+  try {
+    const rendered = renderStructuredReport(output, node, requirements, node.type === "test" ? commands : priorTestProof, contract);
+    if (automation?.verificationContract && contract?.status === "locked" && ["test","review","approval"].includes(node.type) && rendered === null) return fail("고정 검증 계약은 AGENT_REPORT JSON v1 보고가 필요합니다.");
+    if (rendered !== null) { output = rendered; answer.output = rendered; }
+  } catch (error) { return fail(`구조화 보고 보완 필요: ${error instanceof Error ? error.message : String(error)}`); }
   const productionEdits = (result.evidence.changedFiles ?? []).filter(
     (file) =>
       !/^(?:test|tests|verification|\.agent-graph|artifacts|test-results|playwright-report)(?:\/|$)|(?:^|\/)[^/]+\.(?:test|spec)\.[cm]?[jt]sx?$|^playwright\.config\.[cm]?[jt]s$/.test(
@@ -227,6 +236,13 @@ export function validateCompletion(
       answer.verdict = node.type === "test" ? "FAIL" : "REJECTED";
       answer.reason = `관측된 검증 명령이 성공하지 않았습니다: ${failed.command} (exit ${failed.exitCode ?? "unknown"}).`;
       return answer;
+    }
+  }
+  if (answer.verdict === "PASS" || answer.verdict === "APPROVED") {
+    const missing = missingContractReceipts(contract, node.type === "test" ? commands : priorTestProof, !!automation?.verificationContract);
+    if (missing.length) {
+      if (node.type === "test") return fail(`검증 계약의 실제 성공 기록이 필요합니다: ${missing.join(", ")}. 계약의 해당 명령만 단독 foreground 호출로 실행하세요.`);
+      answer.verdict = "REJECTED"; answer.reason = `검증 계약의 테스트 기록이 부족합니다: ${missing.join(", ")}`; return answer;
     }
   }
   if (answer.verdict === "PASS") {

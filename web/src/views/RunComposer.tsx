@@ -1,7 +1,7 @@
 import type { RunComposerModel } from "./viewModels";
 
 export default function RunComposer({ controller }: { controller: RunComposerModel }) {
-  const { goalRef, goal, setGoal, target, setTarget, browse, directoryBusy, accessMode, setAccessMode, maxIterations, setMaxIterations, starting, start, issues, conflict } = controller;
+  const { goalRef, goal, setGoal, target, setTarget, browse, directoryBusy, accessMode, setAccessMode, maxIterations, setMaxIterations, sessionMinutes, setSessionMinutes, maxSessionAttempts, setMaxSessionAttempts, starting, start, issues, conflict } = controller;
   return (
         <section className="run-composer">
           <div className="composer-main">
@@ -57,6 +57,12 @@ export default function RunComposer({ controller }: { controller: RunComposerMod
                 value={maxIterations}
                 onChange={(e) => setMaxIterations(Number(e.target.value))}
               />
+            </label>
+            <label>전체 시간 (분)
+              <input aria-label="전체 시간 예산" type="number" min={1} max={10080} value={sessionMinutes} onChange={e=>setSessionMinutes(Number(e.target.value))}/>
+            </label>
+            <label>전체 에이전트 시도
+              <input aria-label="전체 에이전트 시도 한도" title="CLI 실행 단위이며 내부 모델 턴 수와 다릅니다" type="number" min={1} max={10000} value={maxSessionAttempts} onChange={e=>setMaxSessionAttempts(Number(e.target.value))}/>
             </label>
             <button
               className="button primary run-button"

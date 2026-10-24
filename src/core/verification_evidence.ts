@@ -142,7 +142,7 @@ export class CommandTracker {
       exitCode: code,
       environmentError: blocked ? blocked[0].slice(0, 300) : null,
     };
-    const old = this.receipts.findIndex((r) => r.command === receipt.command);
+    const old = this.receipts.findIndex((r) => checkCommandKey(r.command) === checkCommandKey(receipt.command));
     if (old >= 0) this.receipts.splice(old, 1);
     this.receipts.push(receipt);
     if (this.receipts.length > 64) this.receipts.shift();
@@ -211,7 +211,7 @@ export function mergeReceipts(
   ...groups: (CommandReceipt[] | undefined)[]
 ): CommandReceipt[] {
   const latest = new Map<string, CommandReceipt>();
-  for (const r of groups.flatMap((g) => g ?? [])) latest.set(r.command, r);
+  for (const r of groups.flatMap((g) => g ?? [])) latest.set(checkCommandKey(r.command), r);
   return [...latest.values()].slice(-64);
 }
 

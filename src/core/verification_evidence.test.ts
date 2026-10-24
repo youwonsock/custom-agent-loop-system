@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { outsidePaths } from "./access_paths";
-import { CommandTracker, currentTestProof, isVerificationCommand } from "./verification_evidence";
+import { CommandTracker, currentTestProof, isVerificationCommand, mergeReceipts } from "./verification_evidence";
 import { SessionState, NodeVisit } from "../shared/domain";
 import { createGraph } from "./graph";
 import { buildNodePrompt } from "./prompt";
@@ -83,4 +83,18 @@ test("only writable roles receive test-execution instructions; audits inspect ex
     assert.equal(prompt.includes("must not execute tests or start servers"), !writable);
     if (node.type === "test") assert.match(prompt, /EVIDENCE: concrete observed check or artifact\nCHECK_COMMAND: exact executed foreground test command/);
   }
+});
+
+
+test("the latest real rerun replaces a failed receipt across log redirects, while masked failures never qualify", () => {
+  const tracker = new CommandTracker();
+  tracker.observe(codex("npm test", 1));
+  const failed = [...tracker.receipts];
+  tracker.observe(codex("npm test > verification/model-tests.txt 2>&1", 0));
+  assert.equal(tracker.receipts.length, 1);
+  assert.equal(tracker.receipts[0]!.exitCode, 0);
+  assert.equal(mergeReceipts(failed, tracker.receipts).length, 1);
+  assert.equal(mergeReceipts(failed, tracker.receipts)[0]!.exitCode, 0);
+  tracker.observe(codex("npm test || true", 0));
+  assert.equal(tracker.receipts.length, 1);
 });

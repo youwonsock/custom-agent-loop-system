@@ -13,6 +13,8 @@ test("autonomous preset UI persists browser checks, repair budget and native rev
   await page
     .getByRole("button", { name: "자율 제작 그래프", exact: true })
     .click();
+  await expect(page.getByLabel("전체 시간 예산")).toHaveValue("60");
+  await expect(page.getByLabel("전체 에이전트 시도 한도")).toHaveValue("24");
   await expect(page.getByLabel("자동 수정 루프")).toBeChecked();
   await expect(page.getByLabel("실제 브라우저 검증 필수")).toBeChecked();
   await expect(page.getByLabel("네이티브 자동 승인 검토")).toBeChecked();
@@ -88,6 +90,9 @@ test("real browser failure is autonomously repaired through final approval with 
     expect(state.status).toBe("SUCCESS");
     expect(states).not.toContain("WAITING_USER");
     expect(state.pendingApproval).toBeNull();
+    expect(state.verificationContract?.status).toBe("locked");
+    expect(state.verificationContract?.origin).toBe("implementation");
+    expect(state.visits.at(-1)?.output).toContain("[REPORT_PROTOCOL: json-v1]");
     expect(state.visits.map((v) => v.nodeId)).toEqual([
       "planning",
       "implementation",

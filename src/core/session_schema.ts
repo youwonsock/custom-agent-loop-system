@@ -2,6 +2,7 @@ import { SessionState } from "../shared/domain";
 import { AppError } from "./errors";
 import { safeId, validateGraphDocument } from "./graph";
 import { executionSettings } from "./settings";
+import { validContractSnapshot, validateManifest } from "./verification_contract";
 
 type Obj = Record<string, unknown>;
 const object = (v: unknown): v is Obj => !!v && typeof v === "object" && !Array.isArray(v);
@@ -46,7 +47,7 @@ export function decodeSession(value: unknown, expectedId: string): SessionState 
   try { validateGraphDocument(s.graph); } catch { invalid("graph"); }
   require(array(s.connections, c => object(c) && safeId(c.id) && member(c.type,["codex","claude","kilo","opencode"]) && text(c.label) && text(c.binary)), "connections");
   require(object(s.bindings) && Object.values(s.bindings).every(binding), "bindings");
-  require(object(s.settings) && Object.keys(executionSettings()).every(key => key in (s.settings as Obj)), "settings");
+  require(object(s.settings) && Object.keys(executionSettings()).filter(key=>!["sessionTimeoutMs","maxSessionAttempts"].includes(key)).every(key => key in (s.settings as Obj)), "settings");
   try { executionSettings(s.settings as SessionState["settings"]); } catch { invalid("settings"); }
   require(array(s.visits, visit), "visits/attempts");
   require(nullableText(s.currentNodeId) && nullableText(s.activeVisitId) && nullableText(s.interruptMessage), "execution references");
@@ -63,6 +64,16 @@ export function decodeSession(value: unknown, expectedId: string): SessionState 
   require(array(r.evidence, e => object(e) && text(e.requirementId) && text(e.stageId) && text(e.role) && member(e.status,["SATISFIED","PARTIAL","FAILED","BLOCKED"]) && text(e.summary) && nullableText(e.attemptId) && text(e.recordedAt)), "requirements.evidence");
   require(object(s.convergence) && count(s.convergence.stagnantCycles) && array(s.convergence.history, h => object(h) && count(h.loopCount) && count(h.score) && text(h.signature) && array(h.unresolvedRequirementIds,text) && text(h.recordedAt)), "convergence");
   const state = value as unknown as SessionState;
+  if (s.executionBudget !== undefined) {
+    const b = s.executionBudget;
+    require(object(b) && text(b.startedAt) && Number.isFinite(Date.parse(b.startedAt)) && text(b.deadlineAt) && Date.parse(b.deadlineAt)>Date.parse(b.startedAt) && count(b.maxAttempts) && (b.maxAttempts as number)>0 && nullableText(b.exhaustedReason), "executionBudget");
+  }
+  if (s.verificationContract !== undefined) {
+    require(validContractSnapshot(s.verificationContract), "verificationContract");
+    if (state.verificationContract?.status === "locked") {
+      try { validateManifest(state.verificationContract.manifest,state.requirements.items.map(r=>r.id),!!state.graph.automation?.browserVerification); } catch { invalid("verificationContract.manifest"); }
+    }
+  }
   const visits = new Set(state.visits.map(v => v.id)), nodes = new Set(state.graph.nodes.map(n => n.id));
   require(visits.size === state.visits.length && state.visits.every(v=>nodes.has(v.nodeId)), "visit identities");
   require(state.activeVisitId === null || visits.has(state.activeVisitId), "activeVisitId");

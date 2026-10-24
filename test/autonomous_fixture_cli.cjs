@@ -47,7 +47,7 @@ if (type === "implementation") {
     `<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/styles.css"></head><body><h1>Autonomous browser fixture</h1><div id="board">${Array.from({ length: 16 }, (_, i) => '<div class="cell">' + i + "</div>").join("")}</div><button id="move">Move</button><output id="score"></output><script>let score=Number(localStorage.getItem('score')||0);document.querySelector('#score').textContent=score;document.querySelector('#move').onclick=()=>{score++;localStorage.setItem('score',score);document.querySelector('#score').textContent=score};</script></body></html>`,
   );
   fs.mkdirSync(".agent-graph", { recursive: true });
-  fs.writeFileSync(
+  if (!fs.existsSync(".agent-graph/browser.json")) fs.writeFileSync(
     ".agent-graph/browser.json",
     JSON.stringify({
       version: 1,
@@ -72,6 +72,7 @@ if (type === "implementation") {
       ],
     }),
   );
+  if (!fs.existsSync(".agent-graph/verification.json")) fs.writeFileSync(".agent-graph/verification.json", JSON.stringify({ version: 1, protectedFiles: [".agent-graph/browser.json"], checks: [{ id: "browser", command: check, requirements: reqs }] }));
   emit({
     type: "item.completed",
     item: {
@@ -131,7 +132,9 @@ if (type !== "planning")
       .join("\n") +
     "\n" +
     text;
+const structured = prompt.includes("=== JSON REPORT v1 ===");
+if (structured) text = "[AGENT_REPORT]\n" + JSON.stringify({ version: 1, verdict: type === "test" ? verdict === "SATISFIED" ? "PASS" : "FAIL" : "APPROVED", requirements: reqs.map(id => ({ id, status: verdict, evidence: "Actual generated-server browser assertions and source-bound report" })) }) + "\n[/AGENT_REPORT]";
 emit({
   type: "item.completed",
-  item: { id: "answer", type: "agent_message", text: text + "\n[PHASE_DONE]" },
+  item: { id: "answer", type: "agent_message", text: text + (structured ? "" : "\n[PHASE_DONE]") },
 });

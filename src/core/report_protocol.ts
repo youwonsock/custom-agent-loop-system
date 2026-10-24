@@ -1,0 +1,34 @@
+import { AgentNode, CommandReceipt, VerificationContract } from "../shared/domain";
+import { RequirementItem } from "./requirement_ledger";
+import { checkCommandKey } from "./verification_evidence";
+type Obj=Record<string,unknown>;
+const object=(v:unknown):v is Obj=>!!v&&typeof v==="object"&&!Array.isArray(v);
+/** Model-authored judgments; receipt facts are attached by the engine only. */
+export function renderStructuredReport(text:string,node:AgentNode,requirements:RequirementItem[],commands:CommandReceipt[],contract?:VerificationContract):string|null {
+  const start=text.lastIndexOf("[AGENT_REPORT]");
+  if(start<0)return null;
+  const end=text.indexOf("[/AGENT_REPORT]",start);
+  if(end<0)throw Error("AGENT_REPORT JSON의 닫는 표식이 없습니다.");
+  let body=text.slice(start+"[AGENT_REPORT]".length,end).trim();
+  if(body.startsWith("```"))body=body.replace(/^```(?:json)?\s*/,"").replace(/\s*```$/,"");
+  const report:unknown=JSON.parse(body);
+  if(!object(report)||report.version!==1||!Array.isArray(report.requirements)||report.requirements.length>requirements.length)throw Error("보고는 version:1, verdict, requirements JSON이어야 합니다.");
+  const verdict=String(report.verdict),allowed=node.type==="test"?["PASS","FAIL","BLOCKED"]:["APPROVED","REJECTED","BLOCKED"];
+  if(!allowed.includes(verdict)||!["test","review","approval"].includes(node.type))throw Error("현재 역할의 JSON verdict가 잘못되었습니다.");
+  if(contract?.status!=="locked")throw Error("구조화 보고에는 고정된 검증 계약이 필요합니다.");
+  if(report.blockedKind!==undefined&&!["product","test_setup","external"].includes(String(report.blockedKind)))throw Error("blockedKind는 product, test_setup, external 중 하나여야 합니다.");
+  const research=text.slice(0,start).split("\n").filter(line=>/^(?:SOURCE:\s*https?:\/\/\S+|(?:VERIFIED_FACT|LIMITATION):\s*\S+)/i.test(line));
+  const seen=new Set<string>(),lines=[`[REPORT_PROTOCOL: json-v1]`,`CONTRACT_DIGEST: ${contract.digest}`,...research];
+  for(const item of report.requirements){
+    if(!object(item)||typeof item.id!=="string"||!requirements.some(r=>r.id===item.id)||seen.has(item.id)||!["SATISFIED","PARTIAL","FAILED","BLOCKED"].includes(String(item.status))||typeof item.evidence!=="string"||!item.evidence.trim()||item.evidence.length>2000)throw Error("요구사항 JSON의 id/status/evidence를 확인하세요. 중복·알 수 없는 ID·빈 근거는 허용하지 않습니다.");
+    seen.add(item.id);
+    const checks=contract.manifest!.checks.filter(c=>c.requirements.includes(item.id as string));
+    const observed=checks.flatMap(c=>{const r=commands.find(r=>checkCommandKey(r.command)===checkCommandKey(c.command));return r?[{check:c.id,receipt:r}]:[];});
+    const evidence=item.evidence.replace(/[\r\n]+/g," ").replace(/\[(\/?(?:REQUIREMENT_EVIDENCE|PHASE_DONE|AGENT_REPORT))\]/gi,"〈$1〉");
+    const effectiveStatus=observed.some(o=>o.receipt.exitCode!==0||o.receipt.environmentError)?"FAILED":item.status;
+    lines.push(`[REQUIREMENT_EVIDENCE]\nREQ_ID: ${item.id}\nSTATUS: ${effectiveStatus}\nEVIDENCE: ${evidence}${observed.length?` | Native receipts: ${observed.map(r=>`${r.check}=${r.receipt.id} (exit ${r.receipt.exitCode ?? "unknown"})`).join(", ")}`:""}${observed.length?`\nCHECK_COMMAND: ${observed[0]!.receipt.command}`:""}\n[/REQUIREMENT_EVIDENCE]`);
+  }
+  if(report.blockedKind)lines.push(`BLOCKED_KIND: ${report.blockedKind}`);
+  lines.push(node.type==="test"?`VERDICT: ${verdict}`:verdict==="BLOCKED"?"VERDICT: BLOCKED":verdict,"[PHASE_DONE]");
+  return lines.join("\n\n");
+}
