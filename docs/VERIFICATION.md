@@ -1,5 +1,28 @@
 # 구현 검증 및 수정 기록
 
+## 2026-10-24 자율 실행 경로 개선
+
+제품·테스트 커밋 `e3b98c55285afd69060411ba978a977237127a77`의 깨끗한 상태에서 Node 24.21.0 / macOS arm64로 검증했다. 사용 방법과 정책은 [AUTONOMOUS_WORKFLOW.md](AUTONOMOUS_WORKFLOW.md)에 기록했다.
+
+- 자율 프리셋은 계획 1개 자동 선택, 제한된 실패 수정(기본 3회), 선택적 실제 브라우저 증거 강제를 제공한다. 기존 수동 계획·접근 승인·STOP·무료/유료 복구 한도는 유지한다.
+- 테스트의 product/test_setup BLOCKED는 자율 실행에서 실패 경로로 돌리고, 제품 변경은 네이티브 경로와 전후 해시로 반려한다. 실제 권한·인증·사람 증거는 대기한다. 형식 보완은 현재 네이티브 기록의 유무·성공/실패에 따라 처리한다.
+- 플랫폼 verify-browser가 실제 생성 서버·Chromium·DOM/입력/저장 assertion을 실행하고 실행별 로그·화면·trace·해시를 보존한다. 실제 성공 명령이 없으면 보고서만으로 통과하지 않는다. 소스 변경·취소·브라우저 미설치·정리 불확실은 성공으로 승격하지 않으며 외부 서버를 재사용/종료하지 않는다.
+- Codex 명령별 네이티브 자동 승인 검토를 쓰기 역할에만 opt-in으로 연결하고 Node 경로를 자식 환경에 고정했다. 사용자 전역 승인 정책은 바꾸지 않는다. 그래프 v2의 선택적 automation 필드와 개발 CLI 명령만 추가했으며 기존 세션 v3는 그대로 읽는다.
+
+| 검사 | 결과 |
+| --- | --- |
+| 코어·서버·CLI | 201 통과, Windows ConPTY 전용 1 제외, 실패 0 |
+| Chromium GUI | 25/25; 기존 20개와 자율 기능 5개 포함 |
+| 실제 자율 흐름 | 결정적 CLI fixture + 실제 Chromium·생성 서버. 가로 넘침 FAIL → 자동 구현 수정 → 실제 재검사 PASS → 읽기 전용 검토·최종 승인 → SUCCESS, 운영자 제어 요청 0 |
+| 기존 실제 모델 산출물 복사본 | Luna/Kilo 각각 새 검증기로 37단계 통과; 원본 소스와 동일, 서버 자동 종료 |
+| 타입·빌드·개발 도구·macOS 실행기·패키지 내용/설치 | 통과 |
+| 초기 그래프 JavaScript | 448,199 / 500,000 bytes |
+| 운영 의존성 audit | 실패: high 1, moderate 1 (body-parser, fast-uri); 종합 verify:platform 종료 코드 1 유지 |
+
+package.json·lockfile은 기존 `9530dec`와 같다. 의존성 버전은 변경하지 않았으며 기존 lockfile에 보고되는 취약점 때문에 전체 검사가 모두 통과했다고 기록하지 않는다. 실제 모델의 새 무인 추론 실행과 Windows/Linux 원격 CI는 이번 변경에서 미실행이며 새 Actions 링크도 없다. 앞선 실제 모델의 운영자 보조 완주와 이번 결정적 무인 오케스트레이션 검증은 구분한다.
+
+증거: `/Users/supercent/Desktop/agent graph test/autonomy-hardening-20261024/TEST_RESULTS.md`, `OPERATOR_INTERVENTION_ANALYSIS.md`, `RESULTS.json`, 최종 suite 요약·로그·실패 이력·fixture 상태·브라우저 보고서/trace와 정리 확인. 생성한 서버와 worker lease 종료를 확인했고 원격 push는 수행하지 않았다.
+
 ## 2026-10-24 실제 제작 재검증 완료
 
 제품·회귀 검사 커밋: `c66a916077ceffc0f6e5e43bdea583a55e1c3e21` → `9cfcda6dfcb95bb39b26e6d81b489b925dade5d1` (`codex/verified-completion`). 아래 실제 실행은 2026-10-24 KST에 완료했고 이후 변경은 검증 문서다.
