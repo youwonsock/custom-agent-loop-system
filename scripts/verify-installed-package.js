@@ -3,6 +3,7 @@ const os = require("node:os");
 const path = require("node:path");
 const { execFileSync, spawn } = require("node:child_process");
 const { once } = require("node:events");
+const { checkUris, checkBodyParser } = require("../test/helpers/dependency-security.cjs");
 
 async function main() {
   const npmCli = process.env.npm_execpath;
@@ -51,6 +52,8 @@ async function main() {
       "custom-agent-loop-system",
     );
     const cli = path.join(installed, "dist", "src", "server", "cli.js");
+    const security = { uriConsumers: checkUris(installed), bodyParser: await checkBodyParser(installed) };
+    process.stdout.write(`Installed dependency security: ${JSON.stringify(security)}\n`);
     const help = execFileSync(process.execPath, [cli, "--help"], {
       encoding: "utf8",
     });
