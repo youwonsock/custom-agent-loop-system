@@ -12,8 +12,11 @@ export function outsidePaths(text: string, roots: string[]): string[] {
       if (match[3]) {
         const start = match.index! + match[0].indexOf(match[3]);
         const suffix = line.slice(start);
-        const root = [...roots].sort((a, b) => b.length - a.length).find(r => suffix === r || suffix.startsWith(r + "/") || suffix.startsWith(r + "\\"));
-        if (root) value = root + (suffix.slice(root.length).match(/^[^\s"'`),;]*/)?.[0] ?? "");
+        const root = [...roots].sort((a, b) => b.length - a.length).find(r => suffix.startsWith(r) && /^(?:[\s\/\\"'`),;]|[.:](?:\s|$)|$)/.test(suffix.slice(r.length)));
+        if (root) {
+          const rest = suffix.slice(root.length);
+          value = root + (/^[\/\\]/.test(rest) ? rest.match(/^[^\s"'`),;]*/)?.[0] ?? "" : "");
+        }
       }
       if (!/^(?:[A-Za-z]:[\\/]|\/)/.test(value)) continue;
       const explicit = /\bFILE_ACCESS:\s*/.test(line.slice(0, match.index));

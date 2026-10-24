@@ -1575,3 +1575,18 @@ test("unchanged approval waits expire under the original wall-clock budget witho
   assert.equal(done.pendingAccess, null);
   assert.equal(done.visits.flatMap(v => v.attempts).length, held.visits.flatMap(v => v.attempts).length);
 });
+
+test("masked npm scripts return to implementation and repair autonomously without weakening the frozen tests", async t => {
+  const s = await setup(); t.after(s.cleanup);
+  const graph = await contracted(s), file = path.join(s.target, ".agent-graph/verification.json");
+  const manifest = JSON.parse(await fs.readFile(file, "utf8"));
+  manifest.checks.push({ id: "node", command: "npm test", requirements: ["REQ-001"] });
+  await fs.writeFile(file, JSON.stringify(manifest));
+  const id = await launch(s, graph, "fixture:contract-runner-repair");
+  const done = await wait(() => s.store.readSession(id), "SUCCESS");
+  assert.equal(done.processedRequests.length, 0);
+  assert.deepEqual(done.visits.map(v => v.nodeId), ["planning","implementation","test","implementation","test","review","approval"]);
+  assert.match(done.visits[2]!.output, /마스킹/);
+  assert.equal(done.visits[2]!.attempts.length, 0, "a bad runner does not spend a test-agent call");
+  assert.ok(done.visits[4]!.attempts[0]!.commands!.some(c => c.command === "npm test" && c.exitCode === 0));
+});

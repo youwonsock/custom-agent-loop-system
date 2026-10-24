@@ -3,7 +3,7 @@ import * as path from "node:path";
 import { createHash } from "node:crypto";
 import { CommandReceipt, SessionState, VerificationContract, VerificationManifest } from "../shared/domain";
 import { inside } from "./verification_sources";
-import { isVerificationCommand, isBrowserVerificationCommand, checkCommandKey } from "./verification_evidence";
+import { isVerificationCommand, isBrowserVerificationCommand, checkCommandKey, canonicalCommand } from "./verification_evidence";
 export const CONTRACT_FILE = ".agent-graph/verification.json";
 const sha = (data: string | Buffer) => createHash("sha256").update(data).digest("hex");
 const plain = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
@@ -75,4 +75,35 @@ export function missingContractReceipts(c: VerificationContract | undefined, com
 
 export function contractProofMissing(state: SessionState, commands: CommandReceipt[]): string[] {
   return missingContractReceipts(state.verificationContract, commands, !!state.graph.automation?.verificationContract);
+}
+
+/** Reject observable shell failure masking in registered package runners before testing. */
+export async function verificationRunnerProblem(state: SessionState): Promise<string|null> {
+  if (state.verificationContract?.status !== "locked") return null;
+  const scripts = state.verificationContract.manifest!.checks.flatMap(check => {
+    const command = checkCommandKey(canonicalCommand(check.command));
+    const match = command.match(/^(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?((?:test|check|verify)[\w:-]*)(?:\s|$)/);
+    return match ? [match[1]!] : [];
+  });
+  if (!scripts.length) return null;
+  try {
+    const root = await fs.realpath(state.targetProjectPath);
+    const file = await inside(root, "package.json");
+    if ((await fs.stat(file)).size > 1024*1024) return "package.json이 너무 큽니다.";
+    const pkg = JSON.parse(await fs.readFile(file,"utf8"));
+    const seen = new Set<string>();
+    const inspect = (name: string): string|null => {
+      if (seen.has(name)) return null;
+      seen.add(name);
+      if (seen.size > 100) return "검증 package script 참조가 너무 많습니다.";
+      const body = pkg.scripts?.[name];
+      if (typeof body !== "string" || !body.trim()) return `필수 package script가 없습니다: ${name}`;
+      const stripped = body.replace(/2>&1/g, "");
+      if (/\|\||\||--(?:passWithNoTests|if-present)\b|(?:^|[;&]\s*)(?:true|exit\s+0)\b/.test(stripped) || stripped.replace(/&&/g, "").includes("&")) return `필수 package script의 실패 마스킹·파이프·백그라운드 실행을 반려했습니다: ${name}`;
+      for (const ref of body.matchAll(/\bnpm\s+run\s+([\w:-]+)/g)) { const reason = inspect(ref[1]!); if (reason) return reason; }
+      return null;
+    };
+    for (const script of scripts) { const reason=inspect(script); if(reason)return reason; }
+    return null;
+  } catch (error) { return `필수 package runner를 확인할 수 없습니다: ${error instanceof Error?error.message:String(error)}`; }
 }

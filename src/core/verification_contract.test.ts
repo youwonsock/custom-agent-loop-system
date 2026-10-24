@@ -30,3 +30,12 @@ test("contract snapshots pin initial files and manifest across mutations, deleti
  await fs.rm(path.join(root,"tests/verify-acceptance.mjs"));assert.match((await contractViolation(state))!,/읽을/);
  const corrupted=structuredClone(state.verificationContract);corrupted.manifest!.checks[0]!.command="echo passed";assert.equal(validContractSnapshot(corrupted),false);
 });
+
+test("registered npm verification rejects failure-masking scripts, including referenced runners", async t => {
+ const { verificationRunnerProblem } = await import("./verification_contract.js");
+ const root=await fs.mkdtemp(path.join(os.tmpdir(),"contract-runner-")); t.after(()=>fs.rm(root,{recursive:true,force:true}));
+ const state={targetProjectPath:root,verificationContract:{status:"locked",manifest:{checks:[{command:"npm test > verification/model-tests.txt 2>&1"}]}}}as unknown as SessionState;
+ for(const script of ["node --test || node --test", "node --test | cat", "node --test &", "node --test; exit 0", "npm run optional --if-present", "vitest --passWithNoTests"]){await fs.writeFile(path.join(root,"package.json"),JSON.stringify({scripts:{test:script}}));assert.match((await verificationRunnerProblem(state))!,/마스킹/,script);}
+ await fs.writeFile(path.join(root,"package.json"),JSON.stringify({scripts:{test:"npm run unit",unit:"node --test || true"}}));assert.match((await verificationRunnerProblem(state))!,/마스킹/);
+ for(const script of ["node --test tests/*.test.mjs", "node --test tests/engine.test.mjs && node --test tests/http.test.mjs", "node --test > verification/model-tests.txt 2>&1"]){await fs.writeFile(path.join(root,"package.json"),JSON.stringify({scripts:{test:script}}));assert.equal(await verificationRunnerProblem(state),null,script);}
+});

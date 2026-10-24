@@ -238,6 +238,7 @@ if (args.includes("app-server")) {
         path.join(process.cwd(), "artifact.txt"),
         "implemented goal\n",
       );
+      if (prompt.includes("fixture:contract-runner-repair")) fs.writeFileSync("package.json", JSON.stringify({ scripts: { test: calls.implementation === 1 ? "node tests/verify-acceptance.mjs || node tests/verify-acceptance.mjs" : "node tests/verify-acceptance.mjs" } }));
       if (prompt.includes("fixture:contract-create")) {
         fs.mkdirSync(".agent-graph", { recursive: true });
         fs.mkdirSync("tests", { recursive: true });
@@ -284,7 +285,7 @@ if (args.includes("app-server")) {
         const manifest = JSON.parse(fs.readFileSync(".agent-graph/verification.json", "utf8"));
         for (const check of manifest.checks) {
           if (prompt.includes("fixture:contract-omit-check") && check.id === "second") continue;
-          const executed = spawnSync(process.execPath, ["tests/verify-acceptance.mjs"], { cwd: process.cwd(), encoding: "utf8" });
+          const executed = spawnSync(check.command, { shell: true, cwd: process.cwd(), encoding: "utf8" });
           emit({ type: "item.completed", item: { id: check.id, type: "command_execution", command: check.command, exit_code: executed.status, status: "completed", aggregated_output: executed.stdout + executed.stderr } });
         }
       }

@@ -11,6 +11,9 @@ test("prompt path scan preserves spaces, URL targets and actual external request
   const root = "/Users/me/Desktop/agent graph test/game";
   for (const text of ["HTTP GET /styles.css should return 200", "GET /../results/goal.txt", "URL /?check=1", "GET /%2e%2e%2fresults%2fgoal.txt", `Read "${root}/main.js"`, `Read \`${root}/main.js\``, "fetch https://example.com/styles.css"])
     assert.deepEqual(outsidePaths(text, [root]), [], text);
+  for (const suffix of [" with all requirements", ". Then test", ", then test", "; implement", ")"]) assert.deepEqual(outsidePaths(`Create the app in ${root}${suffix}`, [root]), []);
+  assert.deepEqual(outsidePaths(`Read ${root}-outside/file.txt`, [root]), ["/Users/me/Desktop/agent"]);
+  assert.deepEqual(outsidePaths(`Read ${root}/../outside.txt`, [root]), [`${root}/../outside.txt`]);
   assert.deepEqual(outsidePaths('Read /tmp/outside.txt', [root]), ["/tmp/outside.txt"]);
   assert.deepEqual(outsidePaths(`Read "${root}/../outside file.txt"`, [root]), [`${root}/../outside file.txt`]);
   assert.deepEqual(outsidePaths('HTTP test needs FILE_ACCESS: /secret/file.txt', [root]), ["/secret/file.txt"]);

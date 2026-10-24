@@ -47,7 +47,7 @@ import { currentTestProof, mergeReceipts } from "./verification_evidence";
 import { modelPricing } from "./model_pricing";
 import { productionHashes } from "./verification_sources";
 import { successBlockers } from "./success_gate";
-import { lockContract, contractViolation } from "./verification_contract";
+import { lockContract, contractViolation, verificationRunnerProblem } from "./verification_contract";
 import { sessionBudgetReason, pauseForBudget } from "./session_budget";
 
 export interface RuntimeHooks {
@@ -499,6 +499,10 @@ export class GraphRuntime {
     if (this.state.graph.automation?.verificationContract && node.type === "test" && this.state.verificationContract?.status !== "locked") {
       try { this.state.verificationContract = await lockContract(this.state,"implementation"); await this.save(); }
       catch(error) { return { valid:true,reason:`검증 계약 준비 실패: ${messageOf(error)}`,failureKind:null,output:`검증 계약 준비 실패: ${messageOf(error)}\n구현 역할에서 .agent-graph/verification.json과 인수 검사를 준비하세요.\nVERDICT: FAIL\n[PHASE_DONE]`,verdict:"FAIL",plans:[],researchBlocked:false,environmentBlocked:null }; }
+    }
+    if (node.type === "test") {
+      const problem = await verificationRunnerProblem(this.state);
+      if (problem) return { valid:true,reason:problem,failureKind:null,output:`검증 runner 준비 실패: ${problem}\n구현 역할에서 필수 runner를 수정한 뒤 다시 검증하세요.\nVERDICT: FAIL\n[PHASE_DONE]`,verdict:"FAIL",plans:[],researchBlocked:false,environmentBlocked:null };
     }
     let testInputs: Record<string, string> | null = null;
     if (this.state.graph.automation && node.type === "test") {
