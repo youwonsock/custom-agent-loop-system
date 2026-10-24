@@ -507,3 +507,19 @@ Actions 실행은 네 작업 모두 성공했고, OS별 플랫폼 artifact 3개�
 최종 성공 전 별도 개발 시험의 중지 1회와 이전 버전의 자연 PAUSED 시험은 성공 실행과 구분해 보존했다. 큰 정수 검증·터치 중복 오류의 실제 실패 재현과 정상 산출물에서 인수 검사 4/4 통과도 별도로 남겼다. 이번 실행이 생성한 로그·상태·화면·trace만 사용자 지정 Desktop 폴더에 저장했고, 사용자 홈 인증/과거 세션은 복사하지 않았다. 소유 서버·워커와 확인한 포트 16개를 정리했고 SUCCESS 이력은 유지했다.
 
 상세 로컬 결과: `/Users/supercent/Desktop/agent graph test/kilo-autonomy-verified-20261024-191418/TEST_RESULTS.md`, 기계 요약 `RESULTS.json`, `results/final-evidence.json`, `results/cleanup-verification.json`. 이는 이번 환경·목표의 성공 근거이며 공급자 상시 가용성, 실제 청구액, 모든 임의 목표의 무인 완주를 보장하는 기록은 아니다.
+
+## 테스트 역할·근거·후속 예산 보존 — 2026-10-25
+
+최신 실제 검증 코드: `ce9d64fdcb09ef44e9decb3d6684ae6fdd0ac3be`. macOS arm64 / Node 24.21.0의 깨끗한 작업 트리에서 코어·서버·CLI **273 통과, Windows 전용 ConPTY 1 제외, 실패 0**, 도구 10/10, Chromium GUI 25/25, macOS 실행기 4/4, 패키지 75개 파일·설치 smoke, 운영 의존성 audit 취약점 0을 확인했다. `verify:platform` 다음 `verify:browser`를 순차 실행했다. 새 Windows/Linux 원격 CI·push·main 병합은 수행하지 않았으므로 이번 코드의 Actions 링크는 없다.
+
+새 자율 프리셋은 테스트의 native 쓰기/임의 실행과 첫 등록 검사 실패를 실행 전 차단 또는 즉시 FAIL로 구현에 반환한다. 숨은 소스 변경도 250ms polling 및 종료 후 해시로 확인한다. verification 출력 준비와 소스 변경을 구분하고, 원시 명령을 보존하면서 무효화 이유·파일·시각을 기록한다. Test PASS 입력 snapshot은 검토·최종 승인 전후와 성공 시점에 다시 확인한다. 전체 60분/24회와 고정 역할 마감·후속 호출 예약을 유지하고, 미완료 단계는 PAUSED로 보존한다. native 일괄 프로세스 종료 차단, 짧은 정책 이벤트의 마스킹 지연 수정, 안전한 출력 폴더 준비·절대 경로 정규화, 실제 검사 종료코드 보존도 포함한다. 선택 필드 없는 기존 그래프와 REST/SSE/공개 CLI·저장 버전은 유지하며 의존성 버전은 변경하지 않았다.
+
+세 번째 새 프로젝트의 실제 모델 `kilo/kilo-auto/free` 실행은 제작 → Test PASS → 독립 검토 APPROVED → 최종 승인 APPROVED → **SUCCESS**로 끝났다. 세션 `8f7e2957-1906-4282-931a-f23a72c9b33d`, 2026-10-25 06:21:21~06:47:21 KST, 약 26분·native CLI 10회, 시작 후 운영자 대상/플랫폼 수정·피드백·수동 승인·재개·중지·예산 변경은 0회다. 보호 검사 6개만 제공했고 이전 게임·자체 테스트를 복사하지 않았다. Test 역할의 보고서 파일 쓰기와 상태 echo 조회는 실행 전에 차단돼 구현으로 자동 반환됐고, 세 번째 Test는 여섯 필수 검사를 모두 새로 실행해 통과했다. 검토도 canonical 품질 보고서 읽기를 한 번 자동 보완했다.
+
+자체 Node 테스트는 엔진 8·컨트롤러 6·저장 6·HTTP 5로 총 25개 통과했다. 네 영역 no-op 제어와 선언된 실제 제품 결함 12개 탐지를 확인했다. 고정 엔진 13그룹/4,000비교·컨트롤러 12그룹·실제 Chromium 인수 4그룹과 플랫폼 브라우저 39단계도 통과했다. 두 독립 승인 역할은 각각 자체 테스트 네 파일과 품질 보고서를 native read로 읽었다. 보호 파일 6개, Test 입력 snapshot 19개, 실행 dist 183개의 무결성과 기능 증거 21개 항목이 일치했다. 테스트 역할의 실제 소스 변경은 0회다. 자연 SUCCESS 뒤 workflow stop 없이 관리 서버를 종료했고, 기록 PID 129개·포트 7개 및 해당 실행 폴더 cwd 프로세스가 모두 정리됐다.
+
+**전체 관찰 결과는 PASS_WITH_FINDINGS다.** 플랫폼의 기능 무인 완주는 성공했지만 계획 역할이 대상의 부모 검증 폴더와 사용자 Kilo 설정 폴더를 glob 조회한 2건이 확인됐다. 성공한 외부 파일 내용 읽기는 확인되지 않았고 외부 실행 state.json 읽기는 실패했다. 인증/과거 세션 원본을 별도 수집하지 않았으나 target-only 탐색 제약을 완전히 충족했다고 판단하지 않는다. native 읽기/탐색 범위 보완은 남은 우선순위이며 현재 가드를 OS 샌드박스로 해석하지 않는다. 보고서를 파일로 쓰려는 모델 행동·조회 상태 표현·동일 보고서의 경로 차이에 따른 복구 비용도 남아 있다. 무료 상태는 native 메타데이터 기준이고 실제 청구액 및 공급자 내부 요청/토큰 예산은 측정하지 않았다.
+
+첫 실제 시도 `571cea1c-074e-49f5-9eb3-199ba79dc2e7` / `d69903d`는 광범위 pkill 반복 때문에 운영자 안전 중단 1회로 STOPPED(약 30분/4호출)됐다. 두 번째 `e16de1b5-7224-45c0-a943-92e602691839` / `efe1225`는 준비·조회 오차단 및 지연 뒤 고정 구현 마감에 PAUSED(약 42분/13호출), 운영자 제어 0회다. 이 실패들을 성공으로 세거나 재시작 이력을 숨기지 않았다. 초기 요구사항 개수 불일치 API 요청은 세션/모델 생성 전 거절된 사전 점검으로 별도 보존했다.
+
+상세 결과: `/Users/supercent/Desktop/agent graph test/kilo-normalized-verification-20261025-061825/TEST_RESULTS.md`, `RESULTS.json`, `FINDINGS.md`, `results/native-scope-audit.json`, `results/hardening-evidence.json`, `results/cleanup-verification.json`. `results/workflow-evaluation.json`의 21개 기능 PASS와 범위 감사의 미해결 사항을 분리해 보존한다. 1·2차의 상세 로그와 중단/정리 증거도 각각의 Desktop 실행 폴더에 남아 있다.
