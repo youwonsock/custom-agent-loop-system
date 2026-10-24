@@ -362,3 +362,27 @@ test("a cancelled verification creates no browser or server and can never report
   assert.match(report.error!, /cancelled before start/);
   assert.equal(report.steps.length, 0);
 });
+
+
+test("partial native receipts request missing execution instead of report-only recovery", () => {
+ const node=g.nodes.find(n=>n.type==="test")!;
+ const visit={id:"partial",nodeId:node.id,attempts:[],output:report(),verifiedCommands:[{...receipt,command:browserVerificationCommand()}]} as unknown as NodeVisit;
+ const state={id:"session",graph:g,goal:"Build app",requirements:deriveRequirementLedger("Build app"),visits:[visit],accessMode:"ask",additionalAllowedPaths:[],targetProjectPath:"/work"} as unknown as SessionState;
+ const partial=buildNodePrompt(state,node,visit,"missing npm receipt");
+ assert.match(partial,/Only SOME checks have accepted native receipts/);
+ assert.match(partial,/CHECK_COMMAND: npm test/);
+ assert.doesNotMatch(partial,/Repair the report without editing files or rerunning checks/);
+ visit.verifiedCommands!.push(receipt);
+ assert.match(buildNodePrompt(state,node,visit,"format only"),/Repair the report without editing files or rerunning checks/);
+});
+test("autonomous browser instructions never direct read-only roles to create specs or execute checks", () => {
+ for(const node of g.nodes){
+  const visit={id:"v",nodeId:node.id,attempts:[],output:""} as unknown as NodeVisit;
+  const state={id:"session",graph:g,goal:"Build app",requirements:deriveRequirementLedger("Build app"),visits:[visit],accessMode:"ask",additionalAllowedPaths:[],targetProjectPath:"/work"} as unknown as SessionState;
+  const prompt=buildNodePrompt(state,node,visit);
+  const writable=["implementation","test"].includes(node.type);
+  assert.equal(prompt.includes("Execute this exact platform-owned command directly"),writable);
+  assert.equal(prompt.includes("Create the spec only if absent"),writable);
+  if(!writable)assert.match(prompt,/never execute it or create\/edit the spec/);
+ }
+});

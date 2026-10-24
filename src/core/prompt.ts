@@ -5,7 +5,10 @@ import { browserVerificationCommand } from "./browser_command";
 import {
   currentTestProof,
   failedVerificationCommand,
+  checkCommandKey,
+  isVerificationCommand,
 } from "./verification_evidence";
+import { parseRequirementEvidence } from "./requirement_ledger";
 export function buildRecoveryMessage(
   kind: FailureKind,
   message: string,
@@ -104,12 +107,19 @@ export function buildNodePrompt(
       "=== AUTONOMOUS WORKFLOW ===",
       "After starting, complete implementation, tests, review and final approval without requesting routine operator feedback. Repair product defects in implementation; tests may change acceptance tests but must not edit production code. Never create an operator-only evidence prerequisite unless the original user goal explicitly requires a human. Existing human approval/access gates remain binding. For a fixable product/test-setup blocker, report BLOCKED_KIND: product or BLOCKED_KIND: test_setup with concrete evidence and VERDICT: BLOCKED; it will follow the failed verification repair path. Real permissions, authentication, external services and explicitly human evidence use BLOCKED_KIND: external and remain blocked. Never relabel an actual permission error as product failure.",
     );
-    if (state.graph.automation.browserVerification)
+    if (state.graph.automation.browserVerification) {
+      const writable = node.type === "implementation" || node.type === "test";
       lines.push(
-        "Actual browser execution is mandatory. Use the platform-owned browser verifier from the native CLI shell, under the existing sandbox and command approval policy:",
+        writable
+          ? "Actual browser execution is mandatory. Execute this exact platform-owned command directly, under the existing sandbox and command approval policy:"
+          : "Actual browser evidence is mandatory, but this role is READ-ONLY. Plan or audit this expected command and its existing receipts/report; never execute it or create/edit the spec in this role:",
         browserVerificationCommand(),
-        "Create .agent-graph/browser.json (version:1) with server.command argv (e.g. [node,server.mjs], a dedicated ephemeral PORT is supplied; print the actual loopback URL) and nonempty steps. Available steps: viewport(width,height), click(selector), press(key), drag(selector,direction), reload, visible(selector), text(selector,equals or contains), count(selector,equals), noOverflow, within(selector,container), snapshot(name,selector), sameSnapshot(name,selector), differentSnapshot(name,selector), noConsoleErrors. Every step has a unique id. Include actual assertions for the original goal, desktop/390px bounds, controls, reload persistence and pointer input. The helper writes verification/browser/report.json, screenshots, trace and source hashes; never author or edit that report. It runs the actual generated server, never a fallback. Install Playwright/Chromium in the target only through the CLI's normal approved tools if unavailable; never bypass a denied approval. See agent-loop verify-browser --help for the schema. Run unit tests first, then this browser command last. The helper captures its own report: do not redirect it or add echo/status wrappers. Do not edit files after checks; rerun affected checks after any edit. Run the exact command above as a single foreground command and cite it for browser requirements. If it fails on product assertions, report FAIL for implementation. A browser report without this native exit-zero receipt is not sufficient.",
+        "Browser spec contract: .agent-graph/browser.json (version:1), server.command argv (e.g. [node,server.mjs], a dedicated ephemeral PORT is supplied; print the actual loopback URL), nonempty steps with unique ids. Available steps: viewport(width,height), click(selector), press(key), drag(selector,direction), reload, visible(selector), text(selector,equals or contains), count(selector,equals), noOverflow, within(selector,container), snapshot(name,selector), sameSnapshot(name,selector), differentSnapshot(name,selector), noConsoleErrors, http(path,status,contains). Actual assertions cover the original goal, desktop/390px bounds, controls, reload persistence and pointer input. The helper writes verification/browser/report.json, screenshots, trace and source hashes; never author or edit that report. It runs the actual generated server, never a fallback. A browser report without its native exit-zero receipt is not sufficient.",
       );
+      if (writable) lines.push(
+        "Create the spec only if absent; preserve any acceptance spec supplied by the user. Run unit tests first, then the exact browser command last as a single foreground call, without redirect, echo/status wrappers or file edits afterward. If it fails on product assertions, report FAIL for implementation. The verifier resolves Playwright from its own installation as a fallback: target-local require('playwright') failure is NOT an environment blocker. Execute the command before investigating dependencies. Do not inspect platform source or search for installations when a valid successful native verifier receipt already exists. Only its actual missing-tool error warrants preparing Playwright/Chromium through normal approved tools; never bypass a denied approval.",
+      );
+    }
   }
   if (node.type === "implementation" || node.type === "test")
     lines.push(
@@ -156,6 +166,9 @@ export function buildNodePrompt(
     );
   if (recovery && node.type === "test") {
     const receipts = visit.verifiedCommands ?? [];
+    const missingChecks = [...new Set(parseRequirementEvidence(visit.output ?? "").flatMap(r =>
+      r.checkCommand && !receipts.some(c => c.exitCode === 0 && !c.environmentError && checkCommandKey(c.command) === checkCommandKey(r.checkCommand!))
+        ? [r.checkCommand] : []))];
     if (!receipts.length)
       lines.push(
         "No current accepted native verification receipt remains. Execute a fresh single foreground npm test command; read its native exit metadata and log separately. Do not reuse prior log-only PASS, prefix cd, append echo or print shell exit status. If browser verification is required, execute its exact platform command after unit tests.",
@@ -163,6 +176,11 @@ export function buildNodePrompt(
     else if (failedVerificationCommand(receipts))
       lines.push(
         "Current native receipts include a failed or incomplete check. Preserve the failure and report a complete VERDICT: FAIL; formatting cannot turn it into PASS.",
+      );
+    else if (missingChecks.length)
+      lines.push(
+        "Only SOME checks have accepted native receipts. This is missing execution evidence, not report-only formatting. Execute each missing real runner as a standalone foreground command, then the platform browser command last. Never relabel a unit/engine requirement as covered only by a browser report. Do not repeat accepted checks solely for formatting, weaken tests or copy a rejected compound/masked command; use its underlying runner directly (npm test for Node). Missing accepted receipts:",
+        ...missingChecks.filter(isVerificationCommand).map(c => `CHECK_COMMAND: ${c}`),
       );
     else
       lines.push(
