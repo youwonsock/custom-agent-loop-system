@@ -11,7 +11,7 @@
     "build": "node scripts/build.js",
     "build:launcher:mac": "node scripts/build-macos-launcher.js",
     "typecheck": "tsc --noEmit && tsc -p web/tsconfig.json --noEmit",
-    "test": "npm run build && node --test --test-concurrency=1 dist/src/core/*.test.js dist/src/server/*.test.js",
+    "test": "npm run build && node --test --test-reporter=tap --test-concurrency=1 dist/src/core/*.test.js dist/src/server/*.test.js",
     "test:tooling": "node --test test/tooling/*.test.cjs",
     "test:e2e": "playwright test",
     "test:launcher:mac": "node --test test/desktop-launcher.test.cjs",

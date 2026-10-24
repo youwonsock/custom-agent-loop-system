@@ -167,6 +167,15 @@ switch (mode) {
       process.exit(0);
     }, 30);
     break;
+  case "wrapped-secret-echo":
+    process.stdout.write(
+      '{"type":"text","id":"wrapped-secret","part":{"id":"wrapped-secret","text":"credential=top-\r\n',
+    );
+    setTimeout(() => {
+      process.stdout.write('secret\\n[PHASE_DONE]"}}\n');
+      process.exit(0);
+    }, 30);
+    break;
   case "incomplete":
     assistant("Work stopped before the completion contract.");
     process.exit(0);

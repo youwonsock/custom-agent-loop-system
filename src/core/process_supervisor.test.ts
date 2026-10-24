@@ -25,6 +25,7 @@ interface CaseResult {
   eventsCount: number;
   eventBytes: number;
   rawLogIncludesSecret: boolean;
+  parsedEventIncludesSecret: boolean;
 }
 test("file mutation, search and spend survive eviction from the recent event ring", async () => {
   const result = await runFake("evidence-flood", { maxBytes: 1024 });
@@ -155,6 +156,15 @@ test("configured secrets remain redacted when split across PTY chunks", async ()
   assert.equal(result.outcome, "succeeded");
   assert.equal(result.rawLogIncludesSecret, false);
   assert.equal(result.assistantText.includes("top-secret"), false);
+  assert.match(result.assistantText, /\[REDACTED\]/);
+});
+
+test("terminal-wrapped JSON cannot reconstruct a secret in parsed events or assistant text", async () => {
+  const result = await runFake("wrapped-secret-echo");
+  assert.equal(result.outcome, "succeeded");
+  assert.equal(result.rawLogIncludesSecret, false);
+  assert.equal(result.parsedEventIncludesSecret, false);
+  assert.doesNotMatch(result.assistantText, /top-secret/);
   assert.match(result.assistantText, /\[REDACTED\]/);
 });
 

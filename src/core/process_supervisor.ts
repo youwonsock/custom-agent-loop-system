@@ -128,6 +128,7 @@ export class ProcessSupervisor {
       stdout: new StreamingRedactor(sensitiveValues),
       stderr: new StreamingRedactor(sensitiveValues),
     };
+    const recordRedactor = new StreamingRedactor(sensitiveValues);
     const maximumRawLogBytes = Math.max(
       MIN_RAW_LOG_BYTES,
       Math.min(MAX_RAW_LOG_BYTES, options.maxInMemoryOutputBytes * 16),
@@ -560,7 +561,10 @@ export class ProcessSupervisor {
         }
         jsonReassembly[stream] = "";
         try {
-          processEvent(JSON.parse(candidate) as AnyObj);
+          // PTY wrapping can separate a secret with physical newlines. Reapply
+          // redaction after joining the record, before any event is retained.
+          const safeRecord = recordRedactor.push(candidate) + recordRedactor.flush();
+          processEvent(JSON.parse(safeRecord) as AnyObj);
           return;
         } catch {
           // Invalid JSON is retained in the raw log but cannot satisfy progress/completion.

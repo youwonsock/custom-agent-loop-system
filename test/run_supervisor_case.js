@@ -42,6 +42,7 @@ void (async () => {
       sensitiveValues:
         mode === "secret-echo" ||
         mode === "split-secret-echo" ||
+        mode === "wrapped-secret-echo" ||
         mode === "terminal-secret-after-completion"
           ? ["top-secret"]
           : [],
@@ -64,6 +65,7 @@ void (async () => {
           0,
         ),
         rawLogIncludesSecret: rawLog.includes("top-secret"),
+        parsedEventIncludesSecret: JSON.stringify(result.events).includes("top-secret"),
       }),
     );
   } finally {

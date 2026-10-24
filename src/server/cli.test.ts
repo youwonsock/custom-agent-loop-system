@@ -12,10 +12,12 @@ test("public CLI init, graphs, models, run and resume share the standalone works
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "graph-headless-"));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   const cli = path.join(__dirname, "cli.js");
-  const invoke = (...args: string[]) =>
-    execute(process.execPath, [cli, ...args, "--root", root], {
+  const invoke = (...args: string[]) => {
+    console.log("Public CLI smoke:", args[0]);
+    return execute(process.execPath, [cli, ...args, "--root", root], {
       timeout: 10_000,
     });
+  };
   assert.match((await invoke("init")).stdout, /Initialized/);
   const store = new StudioStore(root);
   const listed = JSON.parse((await invoke("graphs")).stdout);

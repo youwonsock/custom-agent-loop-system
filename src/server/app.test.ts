@@ -1,4 +1,4 @@
-import test from "node:test";
+import test, { after } from "node:test";
 import assert from "node:assert/strict";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
@@ -12,6 +12,9 @@ const origin = "http://127.0.0.1:4317",
   binary = path.resolve(__dirname, "../../../test/fixture_cli.cjs");
 // ConPTY drains output for about a second per role before reporting process exit.
 const sessionWaitMs = process.platform === "win32" ? 20_000 : 10_000;
+after(() => {
+  console.log("Server suite resources at teardown:", process.getActiveResourcesInfo());
+});
 const quickSettings = {
   maxAgentAttempts: 1,
   maxCompletionRecoveryAttempts: 1,
