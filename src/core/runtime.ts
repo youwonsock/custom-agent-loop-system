@@ -173,6 +173,9 @@ export class GraphRuntime {
     const visit=this.state.visits.find(v=>v.id===this.state.activeVisitId);if(visit)visit.status="paused";
     await this.save();return true;
   }
+  private outside(text: string, intentRoots: string[] = []): string[] {
+    return outsidePaths(text,[this.state.targetProjectPath,...this.state.additionalAllowedPaths,...intentRoots]).filter(file=>path.resolve(file)!==path.resolve(__dirname,"../server/cli.js"));
+  }
   async run(mode: "start" | "manual" | "automatic" = "start"): Promise<void> {
     this.state = await this.store.readSession(this.sessionId);
     const automaticRecoveryVisitId =
@@ -390,13 +393,7 @@ export class GraphRuntime {
                 .find((v) => v.id === ref.visitId)
                 ?.plans.find((p) => p.id === ref.choiceId)?.body ?? "")
             : "";
-          const extra = outsidePaths(
-            `${this.state.goal}\n${approved}\n${node.instructions}`,
-            [
-              this.state.targetProjectPath,
-              ...this.state.additionalAllowedPaths,
-            ],
-          ).filter(file => path.resolve(file) !== path.resolve(__dirname,"../server/cli.js"));
+          const extra = this.outside(`${this.state.goal}\n${approved}\n${node.instructions}`);
           if (extra.length) {
             this.state.pendingAccess = {
               paths: extra,
@@ -744,6 +741,14 @@ export class GraphRuntime {
         this.state.verificationContract,
         this.state.targetProjectPath,
       );
+      if (completion.valid && node.type === "planning" && this.state.graph.automation) {
+        const requested=this.outside(`${this.state.goal}\n${this.state.graph.nodes.map(n=>n.instructions).join("\n")}`);
+        const unrequested=[...new Set(completion.plans.flatMap(plan=>this.outside(plan.body,requested)))];
+        if (unrequested.length) {
+          completion.valid=false;completion.failureKind="incomplete_response";
+          completion.reason=`자율 계획에 목표가 요청하지 않은 외부 경로가 있습니다: ${unrequested.join(", ")}. Keep the plan inside the target; remove unrequested external paths and return the complete corrected plan without requesting operator access. Explicit external paths requested by the original goal retain approval gates.`;
+        }
+      }
       if (completion.environmentBlocked) {
         visit.output = completion.output;
         visit.verdict = "BLOCKED";

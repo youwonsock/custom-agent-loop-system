@@ -1599,3 +1599,21 @@ test("same-target cd commands retain native receipts through JSON binding and th
   assert.ok(done.visits.find(v=>v.nodeId==="test")!.verifiedCommands!.every(c=>c.command.startsWith("cd ")&&c.exitCode===0));
   assert.match(done.visits.at(-1)!.output,/CHECK_COMMAND: cd /);
 });
+
+test("autonomous plans repair unrequested external paths before asking an operator for access", async t => {
+ const s=await setup();t.after(s.cleanup);
+ const id=await launch(s,await contracted(s),"fixture:plan-external-once",{maxAgentAttempts:2,phaseRecoveryBudgetMs:7000});
+ const done=await wait(()=>s.store.readSession(id),"SUCCESS");
+ assert.equal(done.pendingAccess,null);assert.equal(done.processedRequests.length,0);assert.equal(done.visits[0]!.attempts.length,2);assert.match(done.visits[0]!.attempts[0]!.message!,/목표가 요청하지 않은 외부 경로/);
+});
+test("unrequested external plans exhaust bounded recovery without granting access or starting implementation", async t => {
+ const s=await setup();t.after(s.cleanup);
+ const id=await launch(s,await contracted(s),"fixture:plan-external-always",{maxAgentAttempts:2,phaseRecoveryBudgetMs:7000});
+ const done=await wait(()=>s.store.readSession(id),"PAUSED");assert.equal(done.pendingAccess,null);assert.equal(done.visits.length,1);assert.equal(done.visits[0]!.attempts.length,2);
+});
+test("an explicit original-goal external path retains its access approval gate in autonomous mode", async t => {
+ const s=await setup();t.after(s.cleanup);
+ let graph=await s.store.createGraph({template:"autonomous"});graph.automation!.verificationContract=false;graph.automation!.browserVerification=false;graph.defaultBinding=s.graph.defaultBinding;graph=await s.store.saveGraph(graph.id,graph,graph.revision);
+ const id=await launch(s,graph,"Build an artifact using FILE_ACCESS: /tmp/requested-reference.txt");
+ const held=await wait(()=>s.store.readSession(id),"WAITING_USER");assert.deepEqual(held.pendingAccess!.paths,["/tmp/requested-reference.txt"]);assert.equal(held.visits.find(v=>v.nodeId==="implementation")!.attempts.length,0);
+});

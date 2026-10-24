@@ -14,6 +14,10 @@ test("prompt path scan preserves spaces, URL targets and actual external request
   for (const suffix of [" with all requirements", ". Then test", ", then test", "; implement", ")"]) assert.deepEqual(outsidePaths(`Create the app in ${root}${suffix}`, [root]), []);
   assert.deepEqual(outsidePaths(`Read ${root}-outside/file.txt`, [root]), ["/Users/me/Desktop/agent"]);
   assert.deepEqual(outsidePaths(`Read ${root}/../outside.txt`, [root]), [`${root}/../outside.txt`]);
+  for (const line of ["button with text /keep playing/i visible", "match /win|over/gi", "hasText(/keep playing/i)"]) assert.deepEqual(outsidePaths(line,[root]),[],line);
+  assert.deepEqual(outsidePaths("Read /secret/id",[root]),["/secret/id"]);
+  assert.deepEqual(outsidePaths("FILE_ACCESS: /keep",[root]),["/keep"]);
+  assert.deepEqual(outsidePaths("match /tmp/private/i",[root]),["/tmp/private/i"]);
   assert.deepEqual(outsidePaths('Read /tmp/outside.txt', [root]), ["/tmp/outside.txt"]);
   assert.deepEqual(outsidePaths(`Read "${root}/../outside file.txt"`, [root]), [`${root}/../outside file.txt`]);
   assert.deepEqual(outsidePaths('HTTP test needs FILE_ACCESS: /secret/file.txt', [root]), ["/secret/file.txt"]);

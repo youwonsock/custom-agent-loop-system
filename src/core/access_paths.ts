@@ -21,6 +21,9 @@ export function outsidePaths(text: string, roots: string[]): string[] {
       if (!/^(?:[A-Za-z]:[\\/]|\/)/.test(value)) continue;
       const explicit = /\bFILE_ACCESS:\s*/.test(line.slice(0, match.index));
       const knownFileRoot = /^\/(?:Users|home|tmp|private|var|etc|opt|usr|Volumes|mnt|srv|root|workspace|data)(?:\/|$)/.test(value);
+      const tail = line.slice(match.index! + match[0].indexOf(match[2] ?? match[3] ?? ""));
+      const regexContext = /\b(?:text|hasText|match(?:es)?|regex(?:p)?|RegExp|pattern)\b/i.test(line.slice(0,match.index));
+      if (!explicit && !knownFileRoot && regexContext && /^\/(?:\\.|[^/\\\r\n])+\/[dgimsuvy]+(?=\s|[),;.]|$)/.test(tail)) continue;
       const httpContext = /\b(?:HTTP|GET|HEAD|POST|URL|endpoint|request|route|traversal)\b/i.test(line);
       const urlOnly = /^\/(?:\?|%[\da-f]{2})/i.test(value);
       if (!explicit && !knownFileRoot && !/^[A-Za-z]:/.test(value) && (httpContext || urlOnly)) continue;
