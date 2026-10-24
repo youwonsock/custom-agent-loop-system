@@ -28,23 +28,19 @@ export class StreamingRedactor {
   push(chunk: string): string {
     if (this.patterns.length === 0) return chunk;
     const combined = this.carry + chunk;
-    const safeBoundary = Math.max(
-      0,
-      combined.length - (this.maximumPatternLength - 1),
-    );
-    return this.consume(combined, safeBoundary);
+    return this.consume(combined, false);
   }
 
   flush(): string {
     if (this.patterns.length === 0) return "";
     const combined = this.carry;
-    return this.consume(combined, combined.length);
+    return this.consume(combined, true);
   }
 
-  private consume(combined: string, safeBoundary: number): string {
+  private consume(combined: string, final: boolean): string {
     let index = 0;
     let output = "";
-    while (index < safeBoundary) {
+    while (index < combined.length) {
       const match = this.patterns.find((pattern) =>
         combined.startsWith(pattern, index),
       );
@@ -52,6 +48,13 @@ export class StreamingRedactor {
         output += fixedLengthRedaction(match.length);
         index += match.length;
       } else {
+        // Retain only a suffix that could become a secret in the next chunk.
+        // Holding an unrelated maximum-length suffix delays complete JSON
+        // policy events until another chunk (or a watchdog timeout) arrives.
+        if (!final && combined.length - index < this.maximumPatternLength) {
+          const suffix = combined.slice(index);
+          if (this.patterns.some(pattern => pattern.startsWith(suffix))) break;
+        }
         output += combined[index];
         index += 1;
       }
