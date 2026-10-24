@@ -109,6 +109,7 @@ function kindOf(
     return "rate_limited";
   if (
     [499, 502, 504].includes(status ?? 0) ||
+    /^(?:AI_APICallError:\s*)?(?:Service Unavailable|Bad Gateway|Gateway Timeout|Internal Server Error)\b/i.test(message) ||
     /^(econnreset|econnrefused|enotfound|etimedout|networkerror|transporterror)$/.test(
       normalized,
     ) ||

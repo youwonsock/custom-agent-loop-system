@@ -26,9 +26,10 @@ switch (mode) {
     setInterval(() => { emit({type:"step_start",part:{id:`retry-${n++}`},sessionID:"ses_retryNoise"}); emit({type:"step_finish",part:{id:`done-${n++}`}}); }, 25);
     break;
   }
+  case "primary-provider-errors-without-status":
   case "primary-provider-failures": {
     let n=0;
-    setInterval(() => {console.error(`timestamp=${n++} level=ERROR message="stream error" session.id=ses_primary error.error.code=504 error.error.message="Upstream idle timeout exceeded"`);emit({type:"step_start",part:{id:`retry-${n}`}});}, 30);
+    setInterval(() => {console.error(mode === "primary-provider-errors-without-status" ? `timestamp=${n++} level=ERROR message="stream error" session.id=ses_primary error.error="AI_APICallError: Service Unavailable"` : `timestamp=${n++} level=ERROR message="stream error" session.id=ses_primary error.error.code=504 error.error.message="Upstream idle timeout exceeded"`);emit({type:"step_start",part:{id:`retry-${n}`}});}, 30);
     break;
   }
   case "unavailable-tools": {

@@ -207,3 +207,18 @@ test("duplicate logger errors do not consume retries and real progress resets a 
   c.observeLine(error.replace('timestamp=1','timestamp=3'));
   assert.equal(c.retryFailure,null);
 });
+
+
+test("native primary 5xx messages without a logged numeric status trigger bounded connection recovery", () => {
+ for(const message of ["AI_APICallError: Service Unavailable","AI_APICallError: Bad Gateway","Gateway Timeout","Internal Server Error"]){
+  assert.equal(cliDiagnostic(message).kind,"network");
+  assert.equal(cliDiagnostic({statusCode:401,message}).kind,"auth");
+  assert.equal(cliDiagnostic({statusCode:403,message}).kind,"permission");
+ }
+ const c=new CliDiagnosticCollector();
+ for(let n=0;n<3;n++) c.observeLine(`timestamp=${n} level=ERROR session.id=ses_main error.error="AI_APICallError: Service Unavailable"`);
+ assert.equal(c.retryFailure?.kind,"network");assert.equal(c.retryFailure?.statusCode,null);
+ const title=new CliDiagnosticCollector();
+ for(let n=0;n<3;n++) title.observeLine(`timestamp=${n} level=ERROR session.id=title-ses_aux agent=title error.error="AI_APICallError: Service Unavailable"`);
+ assert.equal(title.retryFailure,null);
+});

@@ -324,3 +324,9 @@ test("retry step IDs do not renew idle time, and repeated primary failures stop 
   assert.equal(tools.failureKind, "tool_arguments");
   assert.match(tools.failureMessage!, /3 consecutive/);
 });
+
+
+test("statusless native Service Unavailable loops terminate after three failures without waiting for idle timeout", async () => {
+ const result=await runFake("primary-provider-errors-without-status",{transport:750,idle:1500,phase:2500});
+ assert.equal(result.failureKind,"network");assert.equal(result.outcome,"process_exit");assert.match(result.failureMessage!,/3 repeated provider failures/);assert.equal(result.diagnostics.plainError?.statusCode,null);
+});
