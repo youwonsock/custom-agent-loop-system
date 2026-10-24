@@ -1,6 +1,7 @@
 import { AgentNode, ExecutionBinding, LocalConnection } from "../shared/domain";
 import { resolveExecutable } from "./catalog";
 import * as path from "node:path";
+import { pathToFileURL } from "node:url";
 export function isReadOnly(type: AgentNode["type"]): boolean {
   return ["planning", "review", "approval", "interrupt"].includes(type);
 }
@@ -15,6 +16,8 @@ export async function buildInvocation(
     allowedPaths: string[];
     resumeId?: string;
     nativeApprovalReview?: boolean;
+    verificationCommands?: string[];
+    disableWrite?: boolean;
   },
 ): Promise<{
   binary: string;
@@ -104,8 +107,18 @@ export async function buildInvocation(
     const native = env[key]
       ? (JSON.parse(env[key]) as Record<string, unknown>)
       : {};
+    delete env.AGENT_GRAPH_KILO_CHECKS;
+    const guardedChecks = c.type === "kilo" && !readonly && opts.verificationCommands?.length;
+    if (guardedChecks) env.AGENT_GRAPH_KILO_CHECKS = JSON.stringify({cwd: opts.cwd, commands: opts.verificationCommands});
     env[key] = JSON.stringify({
       ...native,
+      ...(guardedChecks ? {plugin: [
+        ...(Array.isArray(native.plugin) ? native.plugin : []),
+        pathToFileURL(path.join(__dirname, "kilo_protocol_plugin.js")).href,
+      ]} : {}),
+      ...(c.type === "kilo" && !readonly && opts.disableWrite ? {tools: {
+        ...((native.tools as Record<string, unknown>) ?? {}), write: false,
+      }} : {}),
       permission: {
         ...((native.permission as Record<string, unknown>) ?? {}),
         ...permission,
@@ -117,7 +130,11 @@ export async function buildInvocation(
         : "\n\nNative tool protocol: use the exact schema supplied by this CLI. Never send an empty tool input. After a schema error, correct the missing fields before trying again; do not repeat the same invalid call. " +
           (readonly
             ? "Use only permitted read-only tools: read(filePath), glob(pattern), grep(pattern) to inspect target files and prior actual test evidence. exec, exec_command, execute, bash, write and edit are unavailable in this read-only role; never call them or request shell/write permissions. For planning, use the supplied browser command/schema contract without reading the platform implementation."
-            : "Use bash with command (string) and description (string) for shell commands, never exec or exec_command. The write tool requires both filePath (absolute path) and content (string). Preserve existing tests and use bash to run them before deciding whether additional coverage is necessary. " +
+            : "Use bash with command (string) and description (string) for shell commands, never exec or exec_command. " +
+              (opts.disableWrite
+                ? "The write tool is disabled in this attempt after observed schema failures. Do not call write or invent content for a failed empty call. Use permitted bash commands with small, safely quoted heredocs to create files, or edit existing files; preserve frozen acceptance files. "
+                : "The write tool requires both filePath (absolute path) and content (string). Keep each write small; never send {}. ") +
+              "Preserve existing tests and use bash to run them before deciding whether additional coverage is necessary. " +
               (process.platform === "win32"
                 ? "The tool shell is Windows PowerShell: use npm.cmd and npx.cmd to avoid npm.ps1 execution policy errors, or invoke node.exe directly. Use PowerShell syntax, not Bash for/do/done loops or &&. Do not change the host execution policy."
                 : ""));

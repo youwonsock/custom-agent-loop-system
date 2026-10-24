@@ -567,6 +567,11 @@ export class GraphRuntime {
         fullAccess: this.state.accessMode === "full_access",
         allowedPaths: this.state.additionalAllowedPaths,
         nativeApprovalReview: this.state.graph.automation?.nativeApprovalReview,
+        ...(this.state.graph.automation?.verificationContract && this.state.verificationContract?.status === "locked"
+          ? {verificationCommands: this.state.verificationContract.manifest!.checks.map(c => c.command)} : {}),
+        disableWrite: this.state.visits.some(v =>
+          this.state.bindings[v.nodeId]?.connectionId === connection.id && v.attempts.some(a =>
+            a.failureKind === "tool_arguments" && /for the "write" tool/.test(a.message ?? ""))),
         ...(nextResume ? { resumeId: nextResume } : {}),
       });
       const id = randomUUID(),
