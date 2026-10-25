@@ -557,3 +557,17 @@ Actions 실행은 네 작업 모두 성공했고, OS별 플랫폼 artifact 3개�
 종료 뒤 workflow stop 없이 관리 포트50083·기록 호스트 식별20개·소유 VM 잔류0과 이번 런타임 데몬 종료를 확인했다. 게스트 PID를 호스트 PID로 종료하지 않았으며 PAUSED 상태 바이트·dist205개·이미지/바이너리 해시도 유지했다. 상세 결과: `/Users/supercent/Desktop/agent graph test/kilo-program-io-verified-20261025-184245/TEST_RESULTS.md`, `RESULTS.json`, `FINDINGS.md`, `results/program-io-audit.json`, `results/cleanup-verification.json`.
 
 앞선 `15d8e61` / `875adf84-9c70-4d3b-843a-4b84ee1663c4`는 이력의 브로커 명령 모방으로 개발 중지1회·STOPPED, `8979b09` / `6ffbecba-b4dd-4214-9f10-9c55db73b830`는 표식 없는 검사 거절2건을 미격리로 오집계해 제어0회·BLOCKED였다. 원시 기록·해시·정리 결과를 각각 Desktop 실행 폴더에 보존했으며 이 실패를 성공으로 세지 않았다.
+
+## README 산출물 계약·역할별 복구와 실제 Kilo 재검증 — 2026-10-25
+
+변경 커밋은 `dca32b42623ea3350744f35300d415de83932705`(필수 파일·역할 복구·독립 읽기 근거)와 `b999ab04bd947042e3ee979dfba30acda5385e94`(웹 루트 매핑의 외부 경로 오인식 수정)다. 최종 검증은 b999ab0에서 Node 24.21.0/macOS arm64로 코어 **310 통과·Windows ConPTY 1 제외·실패 0(총 311)**, 도구10·GUI25·macOS 실행기4, 패키지85개와 실제 설치 smoke·운영 npm audit 0건이다. 해당 코드의 새 Windows/Linux 원격 CI·push·merge는 하지 않았고 Actions 링크는 없다. 의존성·lockfile 및 graph2/connection1/state3/contract1 버전은 유지했다.
+
+선택 `requiredFiles` 계약은 수정 가능한 제품·문서 파일을 요구사항에 연결한다. 누락·빈 파일·일반 파일 아님·외부 경로를 구현 완료, 테스트/검토/승인 전후, SUCCESS 종단에서 검사한다. 구현에서 고치고 전체 테스트를 새로 수행한다. 소스 고정 테스트의 모순된 편집 안내를 제거하고 가장 최근 실패를 구현 복구 문맥에 별도로 전달했다. 검토/최종 승인에는 각 필수 파일을 실제 읽은 native 근거가 필요하다. 회귀 fixture에서 누락 복구, 호출 전 FAIL, 끝내 미작성 시 PAUSED, 읽기 증거 없는 승인 거절을 확인했다. 파일 존재만으로 문서 의미나 제품 동작을 통과시키지 않는다.
+
+사용 제한 최소 요청은 19:40 KST에 HTTP429/`PROMOTION_MODEL_LIMIT_REACHED`, 19:49와 20:07에는 실제 정상 응답이었다. 인증 목록·모델 목록으로 가용성을 추론하지 않았다. 첫 실제 실행 `82c793fa-d90c-455a-a589-fa394d5bf54f`/dca32b4는 19:51~20:00, 계획 호출3회로 자연 PAUSED였다. 무진행 지연 뒤 `Handle / -> index.html`을 외부 파일시스템 루트로 오인한 것을 확인했다. 실패·15개 서명 VM 명령·정리 근거를 보존한 뒤 HTTP 매핑 토큰만 구별하도록 수정했다. 명시적 `FILE_ACCESS: /` 및 같은 줄의 별도 외부 파일 접근·실제 native/VM 경계는 유지한다. 첫 보고서는 `/Users/supercent/Desktop/agent graph test/kilo-role-recovery-20261025-194012/TEST_RESULTS.md`다.
+
+최종 실제 세션 `ea2c54b1-9ec1-4175-96b5-148c1c450aa5`/b999ab0은 **20:07:35~20:17:10 KST, 575.46초·10 CLI 호출**, 자연 **PAUSED / NOT_SUCCESS**다. 보호 파일6개만 있는 새 대상에서 이전 제품/자체 테스트 복사 없이 제작했다. 계획은 1회에 통과했다. 구현의 README 누락을 실제 게이트가 거절(`completionAccepted=false`)했고 같은 구현 역할의 다음 시도가 README를 작성했다. 제품8개가 갖춰진 뒤 테스트가 시작됐다. 자체 Node25/25, 고정 엔진13그룹/4,000비교는 통과했지만 고정 컨트롤러는10/12로 실패했다. 저장 상태의 비boolean 플래그와 `2**52-1` 비거듭제곱 타일을 거절하지 못한 결함이다. 테스트 소스 수정0회로 첫 실패를 구현에 이관하고 기존 통과 근거를 무효화했다. 이후 구현은 무료 제한 응답6회로 유한 복구 한도에서 멈췄다. **전체 60분/24회 예산 소진이 아니며 14회 호출 여유가 남았다.** 자체 Node 결함 탐지 품질·실제 Chromium·새 Test PASS·독립 검토·최종 승인은 미실행/미완료다. 자체 테스트 통과를 성공으로 확대하지 않았다.
+
+두 실제 실행 모두 시작 후 사용자 제어·수동 승인·대상 수정·소스/빌드·예산 변경은0회다. 최종 서명 VM 명령 **58/58**의 시작/종료·삭제가 맞고 비정상 종료코드4건도 보존했다. native 외부 조회·미확정·감사 누락은0이며 독립 집계가 일치했다. 종료 후 관리 서버87067/포트53727 폐쇄, 기록 호스트 식별25개·소유 VM 잔류0·이번 런타임 데몬 종료와 PAUSED 상태 바이트 유지를 확인했다. 공개 실행 dist211개와 고정 파일6개도 유지했다. 게스트 PID를 호스트 PID로 종료하지 않았고 인증·과거 홈 CLI 로그를 자동 수집하지 않았다. 캐시된 VM 이미지는 남겼다.
+
+결과는 `/Users/supercent/Desktop/agent graph test/kilo-required-deliverables-20261025-200255/TEST_RESULTS.md`, `RESULTS.json`, `FINDINGS.md`, `results/deliverable-evidence.json`, `results/program-io-audit.json`, `results/native-scope-audit.json`, `results/cleanup-verification.json`에 보존한다. 제한 해소 후 재확인 heartbeat 등록은 Codex 앱 도구의 `Transport closed` 오류로 확인하지 못했으며 백그라운드 실행을 약속하지 않는다. 제한의 재설정 시각·토큰 유효성·실제 청구액·장기 가용성은 확인하지 않았다.
