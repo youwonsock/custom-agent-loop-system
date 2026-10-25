@@ -1474,14 +1474,22 @@ test("blocked broad process termination is corrected within implementation witho
  const done=await wait(()=>s.store.readSession(id),"SUCCESS"),impl=done.visits.find(v=>v.nodeId==="implementation")!;
  assert.equal(impl.attempts.length,2);assert.equal(impl.attempts[0]!.failureKind,"tool_arguments");assert.match(impl.attempts[0]!.message!,/UNSCOPED_TERMINATION/);assert.equal(impl.attempts[1]!.completionAccepted,true);assert.equal(done.visits.at(-1)!.verdict,"APPROVED");assert.deepEqual(done.processedRequests,[]);
 });
+async function nativeScopeContract(s: Awaited<ReturnType<typeof setup>>) {
+ const graph=await contracted(s);
+ // These fixtures exercise native policy events, not isolated program execution.
+ // Keep scope auditing enabled without depending on a locally prepared VM.
+ graph.automation!.programIoGuard=false;
+ assert.equal(graph.automation!.targetScopeGuard,true);
+ return s.store.saveGraph(graph.id,graph,graph.revision);
+}
 test("Kilo scope denials in every role recover without operator input and preserve an audited success",async t=>{
- const s=await setup();t.after(s.cleanup);await s.store.saveConnection({id:"fixture",label:"Fixture Kilo",type:"kilo",binary});s.graph.defaultBinding={connectionId:"fixture",modelId:"fixture/fixture-model"};const graph=await contracted(s),id=await launch(s,graph,"fixture:contract-scope-policy");
+ const s=await setup();t.after(s.cleanup);await s.store.saveConnection({id:"fixture",label:"Fixture Kilo",type:"kilo",binary});s.graph.defaultBinding={connectionId:"fixture",modelId:"fixture/fixture-model"};const graph=await nativeScopeContract(s),id=await launch(s,graph,"fixture:contract-scope-policy");
  const done=await wait(()=>s.store.readSession(id),"SUCCESS");assert.deepEqual(done.processedRequests,[]);assert.equal(done.visits.at(-1)!.verdict,"APPROVED");
  assert.deepEqual(done.visits.map(v=>v.nodeId),["planning","implementation","test","review","approval"]);
  for(const visit of done.visits)for(const attempt of visit.attempts){assert.equal(attempt.scopeAudit!.blockedCalls,1,visit.nodeId);assert.equal(attempt.scopeAudit!.outsideCalls,0);assert.equal(attempt.scopeAudit!.unresolvedCalls,0);}
 });
 test("observed outside Kilo discovery blocks the workflow instead of repairing away the evidence",async t=>{
- const s=await setup();t.after(s.cleanup);await s.store.saveConnection({id:"fixture",label:"Fixture Kilo",type:"kilo",binary});s.graph.defaultBinding={connectionId:"fixture",modelId:"fixture/fixture-model"};const graph=await contracted(s),id=await launch(s,graph,"fixture:contract-scope-escape");
+ const s=await setup();t.after(s.cleanup);await s.store.saveConnection({id:"fixture",label:"Fixture Kilo",type:"kilo",binary});s.graph.defaultBinding={connectionId:"fixture",modelId:"fixture/fixture-model"};const graph=await nativeScopeContract(s),id=await launch(s,graph,"fixture:contract-scope-escape");
  const done=await wait(()=>s.store.readSession(id),"BLOCKED");assert.match(done.statusReason!,/SCOPE_VIOLATION/);assert.equal(done.visits.length,1);assert.equal(done.visits[0]!.attempts[0]!.scopeAudit!.outsideCalls,1);assert.deepEqual(done.processedRequests,[]);
 });
 test("supplied frozen contract executes a real protected assertion and JSON reports through final approval", async t => {
