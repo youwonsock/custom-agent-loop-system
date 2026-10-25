@@ -191,6 +191,18 @@ literal 조회는 인용된 `|`/`;`와 실제 명령 연결을 구별하며, `ca
 
 무료 가격 표시는 현재 공급자 사용 가능성을 보장하지 않는다. Kilo의 `PROMOTION_MODEL_LIMIT_REACHED`/HTTP 429 응답은 공급자 제한 증거이며 인증 목록만으로 제한 해소나 토큰 유효성을 판정하지 않는다. 응답에 재설정 시각이 없으면 이를 추측하지 않는다. 유료 모델 전환이나 계정 변경 없이 별도의 최소 Auto Free 요청으로 사용 가능 여부를 확인한 후 새 전체 검증을 시작한다. 제한 중의 코드 회귀 성공은 실제 모델 제작·최종 승인 성공과 구분한다.
 
+## Codex 로컬 HTTP와 환경 오류 처리
+
+`browserVerification`을 사용하는 Codex 구현·테스트 방문은 실행별 `sandbox_workspace_write.network_access=true`와 `features.network_proxy.enabled=true`를 함께 적용한다. 목적지는 localhost/127.0.0.1/::1만 선언하고 로컬 바인딩을 허용한다. 읽기 전용 역할·일반 프로필·명시적인 full_access는 변경하지 않는다. 글로벌 config/auth는 수정하지 않는다. 프록시를 무시한 CLI가 무제한 네트워크를 열지 않도록 **codex-cli 0.162.1**을 확인하며 미검증 버전은 모델 호출 전에 BLOCKED다. 현재 확인 환경은 macOS arm64다. 다른 버전은 어댑터를 재검증해야 한다.
+
+모델 없는 native sandbox 점검에서 로컬 서버·raw encoded/malformed 요청 보존을 확인했고 외부 직접 TCP·미허용 HTTP 목적지·작업 영역 밖 쓰기는 차단됐다. Codex 네이티브 정책은 Kilo 명령별 VM 격리와 다르며 모든 내부 I/O의 VM 격리를 주장하지 않는다. macOS Chromium의 Mach/bootstrap 제한은 정확한 foreground 필수 verifier 명령만 기존 자동 승인 검토로 요청하도록 안내한다. 검토 거절을 우회하지 않으며 danger-full-access 시작 플래그나 전역 권한 변경을 사용하지 않는다. 자동 권한 검토는 그래프의 최종 제품 승인과 별개다.
+
+실패한 등록 검사의 리디렉션 경로는 target의 verification 아래 literal 소유 파일만 읽는다. 부모/파일 symlink·hardlink·영역 밖·2MiB 초과·변경 전과 같은 stale 파일·미실행/성공/마스킹/미등록 명령은 진단으로 수락하지 않는다. 실행 전 snapshot과 실제 실패 receipt를 연결하고, 열린 파일의 inode·mtime/ctime·크기를 재확인한다. 실제 실패 로그는 모델 쓰기 영역 밖의 attempt별 `-captures` 폴더에 원문과 해시·명령·종료코드 index로 보존해 이후 재실행이 원래 증거를 덮어쓰지 못하게 한다.
+
+검사 로그의 명시적 listen EPERM 등 환경 진단은 원래 nonzero exit를 유지한 채 `environmentError`에 출처·SHA-256·크기로 연결한다. 테스트는 증거를 무효화하고 WAITING_USER로 보존하며 자동 수정/무료 복구를 예약하지 않는다. 필요한 환경이 복구되면 같은 방문에서 모든 검사를 새로 실행해야 한다. 구현의 plain BLOCKED 또는 bracket/bare AGENT_REPORT JSON(blockedKind/관찰된 blocked_kind 외부 표기)도 PHASE_DONE과 함께 있어도 성공 handoff가 되지 않는다. product/test_setup blocker는 같은 구현 역할의 유한 보완으로 남긴다. 코드 예제의 보고 문자열은 외부 blocker로 사용하지 않는다.
+
+Codex 설정 근거: [공식 매뉴얼](https://developers.openai.com/codex/codex-manual.md)의 network access/policy와 automatic approval review. 실제 실행 가능성은 위 native 점검 및 별도 실제 모델 실행 결과로 확인한다. 공개 CLI/API·그래프2/연결1/세션3/계약1 버전과 기본 전체 예산은 유지한다.
+
 ## Kilo 프로그램 내부 I/O 격리
 
 새 자율 프리셋은 `programIoGuard=true`와 `targetScopeGuard=true`를 함께 사용한다. Kilo의 모델 도구 명령과 자식 프로세스는 호스트에서 실행하지 않고, 명령마다 별도 Apple container VM에서 실행한다. 모델 도구는 bash와 메모용 todowrite로 제한하며 native 파일 도구·task·MCP·외부 plugin·프로젝트 설정·LSP·formatter·snapshot·외부 skill 로딩을 차단한다. 기존 그래프에서 선택 필드가 없으면 종전 정책을 유지한다. REST/SSE·공개 agent-loop 옵션·저장 버전은 바꾸지 않는다.

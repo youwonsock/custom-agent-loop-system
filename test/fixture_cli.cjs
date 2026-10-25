@@ -7,6 +7,10 @@ const { spawnSync } = require("node:child_process");
 const readline = require("node:readline");
 const args = process.argv.slice(2),
   emit = (e) => process.stdout.write(JSON.stringify(e) + "\n");
+if(args[0]==="--version"){
+ let version="0.162.1";try{version=fs.readFileSync(path.join(process.cwd(),".fixture-codex-version"),"utf8").trim();}catch{}
+ process.stdout.write("codex-cli "+version+"\n");process.exit(0);
+}
 const model = {
   model: "fixture-model",
   id: "fixture-model",
@@ -341,6 +345,7 @@ if (args[0] === "debug" && args[1] === "config") {
         "[RESEARCH_EVIDENCE]\nSOURCE: https://example.com/observed\nVERIFIED_FACT: observed fixture research.\n" +
         text;
     }
+    if(type==="implementation"&&prompt.includes("fixture:contract-implementation-external"))text='AGENT_REPORT\n'+JSON.stringify({role:'implementation',verdict:'BLOCKED',blocked_kind:'external',handoff:'Observed listen EPERM on the required loopback server; execution environment is unavailable.'});
     emit({
       type: "item.completed",
       model: "fixture-model",

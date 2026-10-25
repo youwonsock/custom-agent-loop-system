@@ -26,6 +26,12 @@ const result = (text: string): SupervisorResult => ({
   evidence: emptyEvidence(),
   diagnostics: emptyCliDiagnostics(),
 });
+test("implementation external blockers cannot hand off successfully with PHASE_DONE, including observed bare JSON",()=>{
+ const node=createAutonomousGraph().nodes.find(n=>n.type==="implementation")!,req=deriveRequirementLedger("goal").items;
+ for(const output of ['BLOCKED_KIND: external\nVERDICT: BLOCKED\n[PHASE_DONE]','Before\nAGENT_REPORT\n{"role":"implementation","verdict":"BLOCKED","blocked_kind":"external","handoff":"listen EPERM"}\n[PHASE_DONE]','[AGENT_REPORT]\n{"version":1,"verdict":"BLOCKED","blockedKind":"external","handoff":"listen EPERM"}\n[/AGENT_REPORT]\n[PHASE_DONE]']){const c=validateCompletion(node,result(output),"goal",req,[],[],createAutonomousGraph().automation);assert.equal(c.verdict,"BLOCKED");assert.ok(c.environmentBlocked);}
+ const product=validateCompletion(node,result('AGENT_REPORT\n{"verdict":"BLOCKED","blockedKind":"product","handoff":"fix validation"}\n[PHASE_DONE]'),"goal",req,[],[],createAutonomousGraph().automation);assert.equal(product.valid,false);assert.equal(product.environmentBlocked,null);
+ const example=validateCompletion(node,result('Example only:\n```\nAGENT_REPORT\n{"verdict":"BLOCKED"}\n```\nImplemented.\n[PHASE_DONE]'),"goal",req,[],[],createAutonomousGraph().automation);assert.equal(example.environmentBlocked,null);
+});
 test("autonomous implementation accepts only an unambiguous terminal prose marker without approving tests", () => {
   const graph = createAutonomousGraph(), requirements = deriveRequirementLedger("build acceptance").items;
   const implementation = graph.nodes.find(n => n.type === "implementation")!;

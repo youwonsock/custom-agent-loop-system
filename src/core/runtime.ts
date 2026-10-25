@@ -51,6 +51,7 @@ import { productionHashes } from "./verification_sources";
 import { successBlockers } from "./success_gate";
 import { lockContract, contractViolation, verificationRunnerProblem } from "./verification_contract";
 import { deliverableProblem } from "./deliverables";
+import { prepareVerificationCaptures, addCapturedEnvironmentDiagnostics } from "./verification_capture";
 import { sessionBudgetReason, pauseForBudget } from "./session_budget";
 import { stageDeadline, stageBudgetReason } from "./stage_budget";
 import { unscopedTerminationEvent } from "./process_command_policy";
@@ -602,6 +603,7 @@ export class GraphRuntime {
         fullAccess: this.state.accessMode === "full_access",
         allowedPaths: this.state.additionalAllowedPaths,
         nativeApprovalReview: this.state.graph.automation?.nativeApprovalReview,
+        localHttpAccess: connection.type==="codex"&&!!this.state.graph.automation?.browserVerification,
         testSourcesReadOnly:sourceGuard&&node.type==="test",
         guardOwnedProcesses:this.state.graph.automation?.guardOwnedProcesses,
         ...(connection.type==="kilo"&&this.state.graph.automation?.targetScopeGuard?{scopeRoots:[this.state.targetProjectPath,...this.state.additionalAllowedPaths]}:{}),
@@ -650,6 +652,7 @@ export class GraphRuntime {
         lastPersist = 0;
       let policyReason:string|null=null,sourceChanges:string[]=[];
       const registered=this.state.verificationContract?.manifest?.checks.map(c=>c.command)??[];
+      const captures=sourceGuard&&node.type==="test"?await prepareVerificationCaptures(this.state.targetProjectPath,registered):[];
       const result = await new ProcessSupervisor().run({
         ...invocation,
         cwd: this.state.targetProjectPath,
@@ -732,6 +735,7 @@ export class GraphRuntime {
       });
       await progressWrites;
       const orphaned = result.outcome === "orphaned_process";
+      if(!orphaned)await addCapturedEnvironmentDiagnostics(result.evidence.commands,captures,path.join(this.store.visitDir(this.state.id,visit.id),`${id}-captures`));
       this.activePid = orphaned ? result.pid : null;
       this.owner.setChildPid(this.activePid);
       attempt.status = result.outcome;
@@ -805,7 +809,13 @@ export class GraphRuntime {
       }
       if(sourceGuard&&node.type==="test"&&policyReason){
         const environment=result.evidence.commands.find(c=>c.environmentError)?.environmentError;
-        if(environment){this.state.status="WAITING_USER";this.state.statusReason=environment;visit.status="paused";await this.save();return null;}
+        if(environment){
+          const reason=`검증 환경 제약: ${environment}. 제품 수정으로 반복하지 않습니다. 필요한 실행 권한·환경을 확인한 뒤 같은 방문에서 전체 검사를 다시 수행하세요.`;
+          attempt.status=attempt.failureKind=/EPERM|EACCES|permission denied|sandbox/i.test(environment)?"permission":/unreachable|disabled|ENETUNREACH|EAI_AGAIN/i.test(environment)?"network":"process_exit";
+          attempt.message=reason;attempt.completionAccepted=false;
+          if(attempt.verificationInvalidation)attempt.verificationInvalidation.reason=reason;
+          this.state.status="WAITING_USER";this.state.statusReason=reason;this.state.automaticRecovery=null;visit.status="paused";await this.save();return null;
+        }
         if(result.diagnostics.terminalError&&["auth","permission","model_unavailable"].includes(result.diagnostics.terminalError.kind)){
           this.state.status="WAITING_USER";this.state.statusReason=result.diagnostics.terminalError.message;visit.status="paused";await this.save();return null;
         }
@@ -887,6 +897,8 @@ export class GraphRuntime {
         this.state.status = "WAITING_USER";
         this.state.statusReason = completion.environmentBlocked;
         attempt.message = completion.environmentBlocked;
+        attempt.completionAccepted = false;
+        this.state.automaticRecovery = null;
         await this.save();
         return null;
       }

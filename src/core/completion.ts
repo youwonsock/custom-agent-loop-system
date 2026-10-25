@@ -24,6 +24,8 @@ import {
 import { renderStructuredReport } from "./report_protocol";
 import { missingContractReceipts } from "./verification_contract";
 import { deliverableInspectionProblem } from "./deliverables";
+import { implementationBlocker } from "./implementation_blocker";
+import { diagnosticMessage } from "./cli_diagnostics";
 import { nodeTestProofProblem, nodeScopeAuditProblem, nodeInspectionProblem } from "./node_test_policy";
 export const requiresResearch = (goal: string): boolean =>
   /(?:인터넷|웹)\s*(?:을|를|에서|으로)?\s*(?:검색|조사|찾)|\b(?:search|browse|research|look\s*up)(?:\s+the)?\s+(?:internet|web)\b|\b(?:internet|web)\s+(?:search|research)\b/i.test(
@@ -124,6 +126,17 @@ export function validateCompletion(
       "읽기 전용 역할에서 파일 변경이 관측되었습니다.",
       "role_violation",
     );
+  if(node.type==="implementation"){
+    try{
+      const observed=commands.find(c=>c.environmentError),reported=implementationBlocker(output);
+      if(observed||reported){
+        if(!observed&&reported?.kind!=="external")return fail(`구현이 ${reported?.kind} blocker를 보고했습니다. 같은 구현 역할에서 원인을 수정한 뒤 완료하세요: ${reported?.evidence}`);
+        answer.verdict="BLOCKED";
+        answer.environmentBlocked=diagnosticMessage(`구현 외부 환경 제약: ${observed?`${observed.command} → ${observed.environmentError}`:reported?.evidence}. 제품 수정이나 테스트 호출로 반복하지 않습니다.`);
+        return answer;
+      }
+    }catch(error){return fail(`구현 blocker 보고 보완 필요: ${error instanceof Error?error.message:String(error)}`);}
+  }
   try {
     const rendered = renderStructuredReport(output, node, requirements, node.type === "test" ? commands : priorTestProof, contract, cwd);
     if (automation?.verificationContract && contract?.status === "locked" && ["test","review","approval"].includes(node.type) && rendered === null) return fail("고정 검증 계약은 AGENT_REPORT JSON v1 보고가 필요합니다.");

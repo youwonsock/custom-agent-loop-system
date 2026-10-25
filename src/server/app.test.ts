@@ -1497,6 +1497,23 @@ test("supplied frozen contract executes a real protected assertion and JSON repo
   assert.equal(done.visits[2]!.attempts[0]!.commands![0]!.exitCode, 0);
   assert.equal(done.visits.at(-1)!.verdict, "APPROVED");
 });
+test("redirected HTTP permission failure waits once without product repair and resumes a fresh check after environment recovery",async t=>{
+ const s=await setup();t.after(s.cleanup);const graph=await contracted(s),file=path.join(s.target,".agent-graph/verification.json"),manifest=JSON.parse(await fs.readFile(file,"utf8"));
+ manifest.checks[0].command="node tests/verify-acceptance.mjs > verification/model-tests.txt 2>&1";await fs.writeFile(file,JSON.stringify(manifest));
+ const check="import fs from 'node:fs';import assert from 'node:assert/strict';if(!fs.existsSync('verification/environment-ready')){console.error('Error: listen EPERM: synthetic native bind denial');process.exit(1)}assert.equal(fs.readFileSync('artifact.txt','utf8'),'implemented goal\\n');";await fs.writeFile(path.join(s.target,"tests/verify-acceptance.mjs"),check);
+ const id=await launch(s,graph,"fixture:contract-captured-environment"),blocked=await wait(()=>s.store.readSession(id),"WAITING_USER");
+ assert.equal(blocked.visits.filter(v=>v.nodeId==="implementation").length,1);assert.equal(blocked.visits.filter(v=>v.nodeId==="test").length,1);assert.equal(blocked.automaticRecovery,null);assert.match(blocked.statusReason!,/listen EPERM/);
+ const testVisit=blocked.visits.at(-1)!,attempt=testVisit.attempts[0]!;assert.equal(attempt.commands![0]!.exitCode,1);assert.match(attempt.commands![0]!.environmentError!,/capture verification\/model-tests.txt; sha256/);assert.equal(attempt.failureKind,"permission");assert.equal(attempt.completionAccepted,false);assert.deepEqual(testVisit.verifiedCommands,[]);
+ await delay(150);assert.equal((await s.store.readSession(id)).visits.length,blocked.visits.length);
+ await fs.writeFile(path.join(s.target,"verification/environment-ready"),"external fixture recovered");await delay(150);
+ const resumed=await s.request("POST",`/api/sessions/${id}/actions`,{requestId:randomUUID(),type:"resume"});assert.equal(resumed.statusCode,200);
+ const done=await wait(()=>s.store.readSession(id),"SUCCESS"),tests=done.visits.filter(v=>v.nodeId==="test");assert.equal(tests.length,1);assert.equal(tests[0]!.id,testVisit.id);assert.equal(tests[0]!.attempts.length,2);assert.equal(tests[0]!.attempts[1]!.commands![0]!.exitCode,0);assert.equal(done.executionBudget!.deadlineAt,blocked.executionBudget!.deadlineAt);assert.equal(await fs.readFile(path.join(s.target,"tests/verify-acceptance.mjs"),"utf8"),check);
+ const archive=attempt.logPath.replace(/\.log$/,"-captures"),entry=JSON.parse((await fs.readFile(path.join(archive,"index.jsonl"),"utf8")).trim());assert.equal(entry.exitCode,1);assert.match(await fs.readFile(path.join(archive,entry.file),"utf8"),/listen EPERM/);
+});
+test("an implementation JSON external BLOCKED with PHASE_DONE never advances into repeated testing",async t=>{
+ const s=await setup();t.after(s.cleanup);const id=await launch(s,await contracted(s),"fixture:contract-implementation-external"),done=await wait(()=>s.store.readSession(id),"WAITING_USER");
+ assert.equal(done.visits.filter(v=>v.nodeId==="implementation").length,1);assert.equal(done.visits.some(v=>v.nodeId==="test"),false);assert.equal(done.visits.at(-1)!.attempts[0]!.completionAccepted,false);assert.equal(done.automaticRecovery,null);assert.match(done.statusReason!,/listen EPERM/);
+});
 for (const startAtTest of [false,true]) test(`missing README is repaired only in implementation before a fresh test/review/approval cycle (test entry ${startAtTest})`,async t=>{
  const s=await setup();t.after(s.cleanup);let graph=await contracted(s);
  const file=path.join(s.target,".agent-graph/verification.json"),manifest=JSON.parse(await fs.readFile(file,"utf8"));
