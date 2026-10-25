@@ -571,3 +571,15 @@ Actions 실행은 네 작업 모두 성공했고, OS별 플랫폼 artifact 3개�
 두 실제 실행 모두 시작 후 사용자 제어·수동 승인·대상 수정·소스/빌드·예산 변경은0회다. 최종 서명 VM 명령 **58/58**의 시작/종료·삭제가 맞고 비정상 종료코드4건도 보존했다. native 외부 조회·미확정·감사 누락은0이며 독립 집계가 일치했다. 종료 후 관리 서버87067/포트53727 폐쇄, 기록 호스트 식별25개·소유 VM 잔류0·이번 런타임 데몬 종료와 PAUSED 상태 바이트 유지를 확인했다. 공개 실행 dist211개와 고정 파일6개도 유지했다. 게스트 PID를 호스트 PID로 종료하지 않았고 인증·과거 홈 CLI 로그를 자동 수집하지 않았다. 캐시된 VM 이미지는 남겼다.
 
 결과는 `/Users/supercent/Desktop/agent graph test/kilo-required-deliverables-20261025-200255/TEST_RESULTS.md`, `RESULTS.json`, `FINDINGS.md`, `results/deliverable-evidence.json`, `results/program-io-audit.json`, `results/native-scope-audit.json`, `results/cleanup-verification.json`에 보존한다. 제한 해소 후 재확인 heartbeat 등록은 Codex 앱 도구의 `Transport closed` 오류로 확인하지 못했으며 백그라운드 실행을 약속하지 않는다. 제한의 재설정 시각·토큰 유효성·실제 청구액·장기 가용성은 확인하지 않았다.
+
+## GPT-6-Luna의 저장 검증 자동 수정 재검증 — 2026-10-25
+
+실행 소스는 `6d16ed9c59be7a84c00f653d60d4c938da477cb7`이며 이전 검증 코드 b999ab0과 소스 차이0·dist211개 동일을 확인했다. 이번에는 전체 코어/GUI/패키지 회귀를 새로 실행하지 않았다. Codex CLI0.162.1의 native model/list에서 `gpt-6-luna`를 확인하고 medium으로 13회 모두 같은 모델을 요청했다. resolved model ID는 CLI 이벤트에 보고되지 않았다. Kilo 전용 VM/범위 hook은 Codex에 적용되지 않으며, 기존 Codex의 네이티브 read-only/workspace-write 자동 검토와 테스트 소스 해시 감시·필수 검사·독립 승인 게이트를 사용했다. 프로그램 내부 I/O의 VM 격리 성공을 주장하지 않는다.
+
+이전 게임의 제품8개·자체 테스트4개·보호 파일6개만 새 대상에 복사했고 과거 verification 결과는 복사하지 않았다. 시작 전 고정 컨트롤러로10통과/2실패(exit1)를 재현했다. 실제 세션 `22d6ba1a-fe2a-449c-9f61-393d179174cd`는 **20:35:41~20:41:19 KST / 338.386초 / 13 CLI 호출**로 자연 **PAUSED / NOT_SUCCESS**다. GPT 구현 역할이 선택 boolean 필드 검사와 safe-integer 전체 범위의 정확한 2의 거듭제곱 검사를 작성했다. 자연 종료 후 운영자가 읽기 전용으로 수행한 고정 컨트롤러는 **12/12(exit0)**로 두 결함 수정이 확인됐다. 이 사후 독립 검사를 워크플로 Test PASS receipt로 사용하지 않았다.
+
+워크플로 테스트6회는 매번 `npm test > verification/model-tests.txt 2>&1`에서 실패했다. 최종 자체 Node25개 중20통과/HTTP5실패이며 실제 서버의 `listen EPERM 127.0.0.1`로 HTTP assertion 전에 막혔다. 리디렉션으로 native 명령의 stdout이 비어 실패 receipt의 environmentError가 null이 됐고, 조기 실패가 이를 제품 실패로 구현에 반환했다. 실제 구현 출력의 외부 BLOCKED JSON이 완료 marker와 함께 수락된 사례도3개다. 환경 문제를5회 수정 반복해 예산을 소모했다. 전체60분/24회 소진은 아니며11회 호출 여유가 남았다. 자체 Node no-op/결함 탐지 품질·고정 검사 전체 Test PASS·Chromium·독립 검토·최종 승인은 미완료/미실행이다.
+
+시작 후 사용자 제어·수동 승인·제품/플랫폼 소스·빌드·예산 변경은0회다. 테스트 역할의 실제 소스 변경0·보호 파일6개 유지·고정 단계 및 전체 예산 불변을 확인했다. native 완료 명령47건과 비정상 종료12건의 receipt/읽기 집계가 원시 로그와 일치했다. 관리자93354/포트54973, 관찰된 테스트 loopback 포트10개, 기록 호스트 식별50개를 확인해 잔류0·포트 폐쇄를 검증했고 PAUSED 상태 바이트도 유지했다. VM은 시작하지 않았으며 공용 Codex 데몬이나 전역 인증을 종료/수집/변경하지 않았다.
+
+상세 결과는 `/Users/supercent/Desktop/agent graph test/gpt-luna-storage-repair-20261025-203145/TEST_RESULTS.md`, `RESULTS.json`, `FINDINGS.md`, `results/baseline-controller.json`, `results/independent-postrun-controller.json`, `results/codex-native-audit.json`, `results/cleanup-verification.json`에 보존한다. 다음 검증 전에 정확한 로컬 테스트 명령의 네이티브 권한 준비와 캡처 로그의 환경 진단 전달·구현 BLOCKED 처리 개선이 필요하다. 이번 작업에서 해당 플랫폼 코드를 수정하거나 권한을 확대해 결과를 바꾸지 않았다. 새 원격 CI·push·merge·Actions 링크는 없다.
