@@ -195,7 +195,7 @@ literal 조회는 인용된 `|`/`;`와 실제 명령 연결을 구별하며, `ca
 
 `browserVerification`을 사용하는 Codex 구현·테스트 방문은 실행별 `sandbox_workspace_write.network_access=true`와 `features.network_proxy.enabled=true`를 함께 적용한다. 목적지는 localhost/127.0.0.1/::1만 선언하고 로컬 바인딩을 허용한다. 읽기 전용 역할·일반 프로필·명시적인 full_access는 변경하지 않는다. 글로벌 config/auth는 수정하지 않는다. 프록시를 무시한 CLI가 무제한 네트워크를 열지 않도록 **codex-cli 0.162.1**을 확인하며 미검증 버전은 모델 호출 전에 BLOCKED다. 현재 확인 환경은 macOS arm64다. 다른 버전은 어댑터를 재검증해야 한다.
 
-모델 없는 native sandbox 점검에서 로컬 서버·raw encoded/malformed 요청 보존을 확인했고 외부 직접 TCP·미허용 HTTP 목적지·작업 영역 밖 쓰기는 차단됐다. Codex 네이티브 정책은 Kilo 명령별 VM 격리와 다르며 모든 내부 I/O의 VM 격리를 주장하지 않는다. macOS Chromium의 Mach/bootstrap 제한은 정확한 foreground 필수 verifier 명령만 기존 자동 승인 검토로 요청하도록 안내한다. 검토 거절을 우회하지 않으며 danger-full-access 시작 플래그나 전역 권한 변경을 사용하지 않는다. 자동 권한 검토는 그래프의 최종 제품 승인과 별개다.
+모델 없는 native sandbox 점검에서 로컬 서버·raw encoded/malformed 요청 보존을 확인했고 외부 직접 TCP·미허용 HTTP 목적지·작업 영역 밖 쓰기는 차단됐다. Codex 네이티브 정책은 Kilo 명령별 VM 격리와 다르며 모든 내부 I/O의 VM 격리를 주장하지 않는다. macOS Chromium의 Mach/bootstrap 제한은 알려진 제약이므로 정확한 foreground 필수 verifier를 실행하기 전에 기존 자동 승인 검토를 요청하도록 테스트 역할에 명시한다. 명령별 요청은1회이며 먼저 sandbox에서 launch만 실패한 경우에도 그1회 검토와 같은 명령의 재실행만 허용한다. 제품 assertion 실패는 즉시 구현으로 반환한다. 검토 거절을 우회하지 않으며 danger-full-access 시작 플래그나 전역 권한 변경을 사용하지 않는다. 자동 권한 검토는 그래프의 최종 제품 승인과 별개다.
 
 실패한 등록 검사의 리디렉션 경로는 target의 verification 아래 literal 소유 파일만 읽는다. 부모/파일 symlink·hardlink·영역 밖·2MiB 초과·변경 전과 같은 stale 파일·미실행/성공/마스킹/미등록 명령은 진단으로 수락하지 않는다. 실행 전 snapshot과 실제 실패 receipt를 연결하고, 열린 파일의 inode·mtime/ctime·크기를 재확인한다. 실제 실패 로그는 모델 쓰기 영역 밖의 attempt별 `-captures` 폴더에 원문과 해시·명령·종료코드 index로 보존해 이후 재실행이 원래 증거를 덮어쓰지 못하게 한다.
 

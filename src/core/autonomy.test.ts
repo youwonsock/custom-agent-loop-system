@@ -290,6 +290,12 @@ test("an unverified Codex cannot enable local HTTP without known proxy support",
  await assert.rejects(buildInvocation({id:"fixture",label:"fixture",type:"codex",binary:path.resolve(__dirname,"../../../test/fixture_cli.cjs")},{connectionId:"fixture",modelId:"fixture-model"},g.nodes.find(n=>n.type==="test")!,{prompt:"goal",cwd,fullAccess:false,allowedPaths:[],localHttpAccess:true}),/IO_UNAVAILABLE.*0\.162\.1/);
  await assert.rejects(fs.access(path.join(cwd,"artifact.txt")));
 });
+test("frozen Codex tests request scoped automatic Chromium review before launch without contradicting first product failure policy",()=>{
+ const graph=createAutonomousGraph(),node=graph.nodes.find(n=>n.type==="test")!,visit={id:"native-review",nodeId:node.id,attempts:[],verifiedCommands:[]}as unknown as NodeVisit;
+ const state={id:"session",graph,goal:"Verify the game",requirements:deriveRequirementLedger("Verify the game"),visits:[visit],accessMode:"ask",additionalAllowedPaths:[],targetProjectPath:"/work",connections:[{id:"native",type:"codex"}],bindings:{[node.id]:{connectionId:"native",modelId:"gpt-6-luna"}}}as unknown as SessionState;
+ const prompt=buildNodePrompt(state,node,visit);assert.match(prompt,/NATIVE CHROMIUM APPROVAL PROCEDURE/);assert.match(prompt,/BEFORE launching that verifier/);assert.match(prompt,/One approval request per exact verifier/);assert.match(prompt,/first failed product check/);assert.doesNotMatch(prompt,/first failed check stops/);
+ state.connections[0]!.type="kilo";assert.doesNotMatch(buildNodePrompt(state,node,visit),/NATIVE CHROMIUM APPROVAL PROCEDURE/);
+});
 test("browser specs reject skipped/empty assertions and invalid bounds before any server starts", () => {
   const spec = {
     version: 1,
