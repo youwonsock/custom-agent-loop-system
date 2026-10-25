@@ -61,6 +61,16 @@ test("isolated hooks disable alternate tool hosts and retain strict test/readonl
   const readonly=kiloCheckHooks({cwd:target,commands:[],scopeRoots:[target],programIo:policy,readOnlyRole:true});await assert.rejects(readonly['tool.execute.before']({tool:'bash'},{args:{command:'mkdir -p verification'}}),/IO_DENIED/);
   const denied=new ProgramIoTracker(policy);denied.normalize({type:'tool_use',part:{tool:'bash',state:{status:'error',input:{command:'mkdir -p verification'},error:'Error: [AGENT_GRAPH_IO_DENIED] Read-only role'}}});assert.equal(denied.finish().unwrappedCommands,0);assert.equal(preExecutionDenied('[AGENT_GRAPH_IO_UNAVAILABLE] lost VM',{}),false);
 });
+test("registered-check and process-name rejections remain pre-execution denials while genuine unwrapped executions fail closed",{skip:!mac},async t=>{
+ const{policy,target}=await workspace(t);const check='npm test > verification/model-tests.txt 2>&1',hooks=kiloCheckHooks({cwd:target,commands:[check],scopeRoots:[target],programIo:policy,guardOwnedProcesses:true});const tracker=new ProgramIoTracker(policy),commands=new CommandTracker(target,true);
+ for(const [id,command]of [`${check}; echo separator; tail -60 verification/model-tests.txt`,'pkill -f never-run-this-name'].entries()){
+  let error='';try{await hooks['tool.execute.before']({tool:'bash'},{args:{command}});}catch(e){error=String(e);}
+  assert.ok(preExecutionDenied(error,{}),error);const event={type:'tool_use',part:{id:String(id),tool:'bash',state:{status:'error',input:{command},error}}};commands.observe(tracker.normalize(event));
+ }
+ assert.equal(tracker.finish().unwrappedCommands,0);assert.equal(tracker.finish().completedCommands,0);assert.equal(commands.receipts.length,0,'denials cannot become successful check receipts');
+ const text='Registered verification checks require a standalone foreground command; remove shell chaining and read logs separately.';assert.equal(preExecutionDenied(text,{}),false,'unmarked output is not trusted denial provenance');
+ tracker.normalize({type:'tool_use',part:{id:'unwrapped',tool:'bash',state:{status:'completed',input:{command:'node unknown-program.mjs'},metadata:{exit:0}}}});assert.equal(tracker.finish().unwrappedCommands,1);
+});
 test("signed after-hook evidence authenticates CLI versions retaining original tool inputs",{skip:!mac},async t=>{
  const{policy,target}=await workspace(t);const hooks=kiloCheckHooks({cwd:target,commands:[],scopeRoots:[target],programIo:policy});
  const original="cat inside.txt",output={args:{command:original}};await hooks['tool.execute.before']({tool:'bash'},output);

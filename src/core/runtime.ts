@@ -770,7 +770,7 @@ export class GraphRuntime {
         return null;
       }
       if(attempt.programIoAudit&&(attempt.programIoAudit.invalidReceipts||attempt.programIoAudit.unresolvedCommands||attempt.programIoAudit.unwrappedCommands)){
-        this.state.status="BLOCKED";this.state.statusReason=`${IO_VIOLATION} Kernel-isolated command evidence is incomplete or invalid.`;visit.status="paused";await this.save();return null;
+        this.state.status="BLOCKED";this.state.statusReason=`${IO_VIOLATION} Kernel-isolated command evidence is incomplete or invalid.`;attempt.status="process_exit";attempt.failureKind="role_violation";attempt.message=this.state.statusReason;attempt.completionAccepted=false;this.state.automaticRecovery=null;visit.status="paused";await this.save();return null;
       }
       if(attempt.scopeAudit&&(attempt.scopeAudit.outsideCalls||attempt.scopeAudit.unresolvedCalls)){
         attempt.completionAccepted=false;attempt.failureKind="role_violation";attempt.message=`${SCOPE_VIOLATION} 대상 밖 native 조회 또는 미확정 실행이 관측돼 실행을 차단했습니다.`;

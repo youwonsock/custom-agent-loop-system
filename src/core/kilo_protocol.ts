@@ -16,6 +16,7 @@ export interface KiloCheckProtocol {
   programIo?: ProgramIoPolicy;
   readOnlyRole?: boolean;
 }
+export const CHECK_DENIED="[AGENT_GRAPH_CHECK_DENIED]";
 
 // Only display-only wrappers around an exact registered check are repaired.
 // Unknown commands, compound checks and other working directories keep their
@@ -32,7 +33,7 @@ export function registeredCheckCommand(command: string, protocol: KiloCheckProto
   const setup=verificationSetupParts(aliasBase,protocol.cwd);
   const prepared=(check:string)=>setup?.preparation.length?[...setup.preparation,check].join(" && "):check;
   if(setup&&checkCommandKey(setup.body)!==setup.body&&!ownedVerificationCapture(setup.body,protocol.cwd))return command;
-  if(alias){if(boundary>=0&&!displayPipeline.test(command.slice(boundary).trim())&&!statusEcho.test(command.slice(boundary).trim()))throw Error("Registered verification aliases require a standalone foreground command.");return prepared(alias[1]);}
+  if(alias){if(boundary>=0&&!displayPipeline.test(command.slice(boundary).trim())&&!statusEcho.test(command.slice(boundary).trim()))throw Error(`${CHECK_DENIED} Registered verification aliases require a standalone foreground command.`);return prepared(alias[1]);}
   if (boundary < 0) {
     const registered=protocol.commands.find(c=>equivalent(c,command));
     // Preserve only the check's configured output capture, including when the
@@ -45,7 +46,7 @@ export function registeredCheckCommand(command: string, protocol: KiloCheckProto
   if (!registered) return command;
   const suffix = command.slice(boundary).trim();
   if (!displayPipeline.test(suffix) && !statusEcho.test(suffix))
-    throw new Error("Registered verification checks require a standalone foreground command; remove shell chaining and read logs separately.");
+    throw new Error(`${CHECK_DENIED} Registered verification checks require a standalone foreground command; remove shell chaining and read logs separately.`);
   return prepared(registered);
 }
 
