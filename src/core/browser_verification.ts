@@ -100,7 +100,10 @@ export async function runBrowserVerification(options: {
     }
     const playwright = require(modulePath) as typeof import("playwright");
     // Headless-only Playwright installations intentionally omit the full
-    // Chromium executable. The actual headless launch below is authoritative.
+    // Chromium executable. Launch the actual browser before starting a server,
+    // preserving the prerequisite failure contract without checking that path.
+    try { browser = await playwright.chromium.launch({headless:true}); }
+    catch(error) { throw new Error(`Chromium unavailable: ${error instanceof Error?error.message:String(error)}`); }
     controller.signal.throwIfAborted();
     const reservation = reservePort();
     await new Promise<void>((resolve, reject) => {
@@ -153,7 +156,6 @@ export async function runBrowserVerification(options: {
         );
       else await delay(25);
     }
-    browser = await playwright.chromium.launch({ headless: true });
     closeBrowser = () => {
       void browser?.close().catch(() => {});
     };
