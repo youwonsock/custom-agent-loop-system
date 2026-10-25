@@ -40,12 +40,15 @@ test("source guard includes authored tests/package and ignores verification outp
 test("observed harmless diagnostics and owned absolute preparation are allowed without accepting repair or masking",async()=>{
  const cwd=path.resolve("owned target"),command="npm test > verification/model-tests.txt 2>&1",hooks=kiloCheckHooks({cwd,commands:[command],testSourcesReadOnly:true});
  const absolute=path.join(cwd,"verification"),quoted=JSON.stringify(absolute),escaped=absolute.replaceAll("\\","/").replace(/ /g,"\\ ");
- for(const input of [`mkdir -p ${quoted}`,`mkdir -p ${escaped}`,`ls '${cwd}/package.json' && node --version`,`ls verification/node-tests/ 2>/dev/null; echo '---'; ls verification/browser/ 2>/dev/null`]){
+ for(const input of [`mkdir -p ${quoted}`,`mkdir -p ${escaped}`,`ls '${cwd}/package.json' && node --version`,`ls verification/node-tests/ 2>/dev/null; echo '---'; ls verification/browser/ 2>/dev/null`,`ls verification 2>/dev/null || echo "no verification dir"`,`echo "---SEPARATOR---"; echo "EXIT:$?"; tail -50 verification/model-tests.txt`,`grep -E 'pass|fail' verification/model-tests.txt | head -10`]){
   const output={args:{command:input}};await hooks["tool.execute.before"]({tool:"bash"},output);assert.equal(testCommandAllowed(output.args.command,cwd,[command]),true,input);
  }
+ const receipts=new CommandTracker(cwd,true);
+ for(const command of [`ls verification 2>/dev/null || echo 'no dir'`,`cat verification/model-tests.txt; echo "EXIT:$?"`])receipts.observe({type:'tool_use',part:{id:command,tool:'bash',state:{status:'completed',input:{command},metadata:{exit:0},output:'PASS'}}});
+ assert.deepEqual(receipts.receipts,[],'accepted read-only status displays never become test execution proof');
  for(const input of [`mkdir -p ${quoted} && npm test > '${absolute}/model-tests.txt' 2>&1`,`cd '${cwd}' && mkdir -p verification && npm test > ${escaped}/model-tests.txt 2>&1`]){
   const output={args:{command:input}};await hooks["tool.execute.before"]({tool:"bash"},output);assert.match(output.args.command,/&& npm test > verification\/model-tests.txt 2>&1$/);
  }
- for(const input of [`mkdir -p '${cwd}/outside'`,`mkdir -p verification/../test`,`mkdir -p verification && npm test > app.mjs`,`ls; node -e 'repair()'`,`cat app.mjs > verification/copy`,`rg --pre=touch text .`,`npm test || true`,`ls 2>/dev/null; touch app.mjs`])
+ for(const input of [`mkdir -p '${cwd}/outside'`,`mkdir -p verification/../test`,`mkdir -p verification && npm test > app.mjs`,`ls; node -e 'repair()'`,`cat app.mjs > verification/copy`,`rg --pre=touch text .`,`npm test || true`,`ls 2>/dev/null; touch app.mjs`,`echo "$(touch app.mjs)"`,`echo "$PRIVATE_TOKEN"`,`ls || node -e 'repair()'`])
   await assert.rejects(hooks["tool.execute.before"]({tool:"bash"},{args:{command:input}}),/AGENT_GRAPH_TEST_POLICY|standalone foreground/,input);
 });

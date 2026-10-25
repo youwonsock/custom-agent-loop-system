@@ -36,11 +36,19 @@ test("registered native checks drop only known display wrappers before permissio
     'npm test > verification/model-tests.txt 2>&1; echo "exit: $?"',
   ]) assert.equal(registeredCheckCommand(command, protocol), nodeCommand, command);
   assert.equal(registeredCheckCommand(engineCommand + " 2>&1 | tail -20", protocol), engineCommand);
-  for (const command of ["npm test", nodeCommand, "node unknown.mjs | tail -20", "cd /another && npm test | tail -20", "npm test -- --extra | tail -20", "npm test && node tests/verify-other.mjs | tail -20"])
+  assert.equal(registeredCheckCommand('npm test',protocol),nodeCommand,'exact argv always uses the registered output capture');
+  for (const command of [nodeCommand, "node unknown.mjs | tail -20", "cd /another && npm test | tail -20", "npm test -- --extra | tail -20", "npm test && node tests/verify-other.mjs | tail -20"])
     assert.equal(registeredCheckCommand(command, protocol), command);
   for (const suffix of [" | tail -20; exit 0", " ; exit 0", " || true", " | tee result.txt", " | head $(touch bypass)"])
     assert.throws(() => registeredCheckCommand("npm test" + suffix, protocol), /standalone foreground/);
   assert.equal(isVerificationCommand("npm test | tail -20"), false, "receipt gate remains strict");
+});
+test('quote-equivalent exact verifier argv is canonicalized while extra arguments and masking remain rejected',()=>{
+ const helper="node '/owned/platform/cli.js' verify-node-tests",p={cwd,commands:[helper]};
+ assert.equal(registeredCheckCommand('node /owned/platform/cli.js verify-node-tests',p),helper);
+ assert.equal(registeredCheckCommand('node /owned/platform/cli.js verify-node-tests | tail -20',p),helper);
+ assert.equal(registeredCheckCommand('node /owned/platform/cli.js verify-node-tests --skip',p),'node /owned/platform/cli.js verify-node-tests --skip');
+ assert.throws(()=>registeredCheckCommand('node /owned/platform/cli.js verify-node-tests || true',p),/standalone/);
 });
 
 test("native hook execution preserves the actual nonzero test exit code as evidence", async t => {
@@ -67,9 +75,10 @@ test("native hook execution preserves the actual nonzero test exit code as evide
 
 test("owned output preparation preserves a real failing check exit and never becomes a second check",async t=>{
  const root=await fs.mkdtemp(path.join(os.tmpdir(),"prepared check-"));t.after(()=>fs.rm(root,{recursive:true,force:true}));await fs.mkdir(path.join(root,"tests"));await fs.writeFile(path.join(root,"tests/verify-failure.cjs"),"console.error('real failed assertion');process.exit(23);");
- const command="node tests/verify-failure.cjs > verification/check.txt 2>&1",hooks=kiloCheckHooks({cwd:root,commands:[command],testSourcesReadOnly:true});
+ const command="node tests/verify-failure.cjs > verification/check.txt 2>&1",hooks=kiloCheckHooks({cwd:root,commands:[command],testSourcesReadOnly:true,scopeRoots:[root]});
  const output={args:{command:`mkdir -p '${root}/verification' && node tests/verify-failure.cjs > '${root}/verification/check.txt' 2>&1 | tail -20`}};
  await hooks["tool.execute.before"]({tool:"bash"},output);
+ if(process.platform!=='win32')assert.ok(output.args.command.startsWith('mkdir -p verification && '),'native permission review sees the owned relative directory');
  const shell=process.platform==="win32"?process.env.ComSpec??"cmd.exe":"/bin/sh";
  // Windows cmd uses double quotes for the literal output path.
  const executable=process.platform==="win32"?output.args.command.replaceAll("'",'"'):output.args.command;

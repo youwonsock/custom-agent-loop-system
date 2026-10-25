@@ -25,7 +25,7 @@ const obj = (value: unknown): Event =>
   value && typeof value === "object" && !Array.isArray(value)
     ? (value as Event)
     : {};
-function preExecutionDenied(error: unknown, metadata: unknown): boolean {
+export function preExecutionDenied(error: unknown, metadata: unknown): boolean {
   const approval = obj(obj(metadata).approval),
     rule = obj(approval.rule);
   if (rule.action === "deny" || approval.action === "deny") return true;

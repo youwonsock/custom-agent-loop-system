@@ -113,6 +113,9 @@ async function main() {
       try{await scoped["tool.execute.before"]({tool:"glob"},{args:{path:path.dirname(project),pattern:"**/*"}});}catch(error){scopePrevented=String(error).includes("[AGENT_GRAPH_SCOPE_DENIED]");}
       if(!scopePrevented)throw Error("Installed native directory scope guard failed.");
       await scoped["tool.execute.before"]({tool:"read"},{args:{filePath:path.join(project,"package.json")}});
+      let flaggedPrevented=false;
+      try{await scoped['tool.execute.before']({tool:'bash'},{args:{command:`cat -n ${JSON.stringify(path.join(path.dirname(project),'outside.txt'))} 2>/dev/null`}});}catch(error){flaggedPrevented=String(error).includes('[AGENT_GRAPH_SCOPE_DENIED]');}
+      if(!flaggedPrevented)throw Error('Installed flagged shell inspection escaped the scope guard.');
     } finally {
       if (previousProtocol === undefined) delete process.env.AGENT_GRAPH_KILO_CHECKS;
       else process.env.AGENT_GRAPH_KILO_CHECKS = previousProtocol;

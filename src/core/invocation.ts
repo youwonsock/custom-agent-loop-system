@@ -107,7 +107,7 @@ export async function buildInvocation(
           "allow",
         ]),
       );
-    if(c.type==="kilo"&&opts.scopeRoots)permission.external_directory={"*":"deny",...Object.fromEntries(opts.scopeRoots.map(p=>[`${p.replace(/\\/g,"/").replace(/\/$/,"")}/**`,"allow"]))};
+    if(c.type==="kilo"&&opts.scopeRoots)permission.external_directory={"*":"deny",...Object.fromEntries(opts.scopeRoots.flatMap(p=>{const root=p.replace(/\\/g,"/").replace(/\/$/,"");return[[root,"allow"],[`${root}/**`,"allow"]];}))};
     const key =
       c.type === "kilo" ? "KILO_CONFIG_CONTENT" : "OPENCODE_CONFIG_CONTENT";
     const native = env[key]

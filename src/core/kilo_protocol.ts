@@ -2,6 +2,8 @@ import { projectCommandKey, verificationSetupParts, checkCommandKey, ownedVerifi
 import { TEST_POLICY, testCommandAllowed } from "./test_source_guard";
 import { broadProcessTermination, UNSCOPED_TERMINATION } from "./process_command_policy";
 import { nativeScopeProblem, SCOPE_DENIED } from "./native_scope";
+import { normalizeInspectionCommand } from "./inspection_syntax";
+import { literalShellWords } from "./verification_evidence";
 
 export interface KiloCheckProtocol {
   cwd: string;
@@ -20,22 +22,23 @@ const displayPipeline = new RegExp(String.raw`^\|\s*${filter}(?:\s*\|\s*${filter
 const statusEcho = /^;\s*echo\s+(["'])exit:\s*\$\?\1\s*$/;
 
 export function registeredCheckCommand(command: string, protocol: KiloCheckProtocol): string {
+  const equivalent=(left:string,right:string)=>{const a=projectCommandKey(left,protocol.cwd),b=projectCommandKey(right,protocol.cwd);if(a===b)return true;const aw=literalShellWords(a),bw=literalShellWords(b);return !!aw&&!!bw&&JSON.stringify(aw)===JSON.stringify(bw);};
   const boundary = command.search(/[|;]/);
   const aliasBase=(boundary<0?command:command.slice(0,boundary)).trim().replace(/\s+2>&1\s*$/,"");
-  const alias=Object.entries(protocol.aliases??{}).find(([from,to])=>protocol.commands.includes(to)&&projectCommandKey(from,protocol.cwd)===projectCommandKey(aliasBase,protocol.cwd));
+  const alias=Object.entries(protocol.aliases??{}).find(([from,to])=>protocol.commands.includes(to)&&equivalent(from,aliasBase));
   const setup=verificationSetupParts(aliasBase,protocol.cwd);
   const prepared=(check:string)=>setup?.preparation.length?[...setup.preparation,check].join(" && "):check;
   if(setup&&checkCommandKey(setup.body)!==setup.body&&!ownedVerificationCapture(setup.body,protocol.cwd))return command;
   if(alias){if(boundary>=0&&!displayPipeline.test(command.slice(boundary).trim())&&!statusEcho.test(command.slice(boundary).trim()))throw Error("Registered verification aliases require a standalone foreground command.");return prepared(alias[1]);}
   if (boundary < 0) {
-    const registered=protocol.commands.find(c=>projectCommandKey(c,protocol.cwd)===projectCommandKey(command,protocol.cwd));
+    const registered=protocol.commands.find(c=>equivalent(c,command));
     // Preserve only the check's configured output capture, including when the
     // CLI spells that same destination with a quoted/escaped absolute path.
-    if(registered&&setup&&(setup.preparation.length||checkCommandKey(setup.body)!==setup.body))return prepared(registered);
+    if(registered&&setup)return prepared(registered);
     return command;
   }
   const base = command.slice(0, boundary).trim().replace(/\s+2>&1\s*$/, "");
-  const registered = protocol.commands.find(c => projectCommandKey(c, protocol.cwd) === projectCommandKey(base, protocol.cwd));
+  const registered = protocol.commands.find(c => equivalent(c,base));
   if (!registered) return command;
   const suffix = command.slice(boundary).trim();
   if (!displayPipeline.test(suffix) && !statusEcho.test(suffix))
@@ -56,6 +59,7 @@ export function kiloCheckHooks(protocol: KiloCheckProtocol) {
       }
       if (input.tool === "bash" && typeof output.args.command === "string")
         output.args.command = registeredCheckCommand(output.args.command, protocol);
+      if(protocol.scopeRoots&&input.tool==='bash'&&typeof output.args.command==='string')output.args.command=normalizeInspectionCommand(output.args.command,protocol.cwd);
       if(protocol.testSourcesReadOnly&&input.tool==="bash"&&(!testCommandAllowed(String(output.args.command??""),protocol.cwd,protocol.commands)))
         throw Error(`${TEST_POLICY} Test role permits registered foreground checks, read-only inspection and mkdir verification only. No repair scripts, custom execution or source writes. Use native read for diagnosis and return FAIL for implementation. Command: ${String(output.args.command??"").slice(0,600)}`);
     },

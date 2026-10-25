@@ -3,6 +3,8 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { NativeScopeAudit, SessionState } from "../shared/domain";
 import { canonicalCommand, literalShellWords } from "./verification_evidence";
+import { inspectionSegments, stripInspectionStderr } from "./inspection_syntax";
+import { preExecutionDenied } from "./event_evidence";
 
 export const SCOPE_DENIED = "[AGENT_GRAPH_SCOPE_DENIED]";
 export const SCOPE_VIOLATION = "[AGENT_GRAPH_SCOPE_VIOLATION]";
@@ -66,20 +68,26 @@ export function nativeScopePaths(tool: string, args: Obj, cwd: string): { paths:
   }
   if (name === "bash" && typeof args.command === "string") {
     const paths: Array<{path:string;glob?:boolean}> = [];
-    for (const segment of canonicalCommand(args.command).split(/\s*(?:&&|;|\|)\s*/)) {
-      const words = literalShellWords(segment);
+    let directories=[cwd];
+    for (const segment of inspectionSegments(canonicalCommand(args.command))??[]) {
+      const words = literalShellWords(stripInspectionStderr(segment.text));
       if (!words?.length) continue;
       const executable = words[0]!.split(/[\\/]/).at(-1)!.toLowerCase();
-      if (!["ls", "dir", "cat", "head", "tail", "stat", "find", "get-content", "get-childitem"].includes(executable)) continue;
+      if (!["ls", "dir", "cat", "head", "tail", "stat", "find", "get-content", "get-childitem", "mkdir", "cd"].includes(executable)) continue;
       const files: string[] = [];
       for (let i = 1; i < words.length; i++) {
         const word = words[i]!;
-        if (/^-(?:n|c|f|format)$/.test(word)) { i++; continue; }
-        if (word.startsWith("-")) { if (executable === "find") break; continue; }
+        if (word.startsWith("-")) continue;
         files.push(word);
       }
       if (!files.length && ["ls", "dir", "find", "get-childitem"].includes(executable)) files.push(cwd);
-      paths.push(...files.map(path => ({path,glob:true})));
+      if(executable==='cd'&&!files.length)files.push(words.includes('-')?'$OLDPWD':os.homedir());
+      for(const directory of directories)for(const file of files)paths.push({path:apiFor(directory).isAbsolute(file)||file.startsWith('~')?file:`${directory}${path.sep}${file}`,glob:true});
+      if(executable==='cd'){
+        directories=[...new Set([...directories,...directories.flatMap(dir=>files.filter(f=>!/[~$`]/.test(f)).map(f=>path.resolve(dir,f)))])];
+        if(directories.length>16)paths.push({path:'$AMBIGUOUS_CWD'});
+        directories=directories.slice(0,16);
+      }
     }
     return {paths,filesystem:paths.length>0};
   }
@@ -137,7 +145,7 @@ export class NativeScopeTracker {
     }
     if (id) { this.pending.delete(id); if(this.seen.has(id))return;this.seen.add(id);if(this.seen.size>4096)this.seen.delete(this.seen.values().next().value!); }
     this.audit.inspectedCalls++;
-    const blocked=(status!=="completed"&&status!=="success")&&(String(state.error??"").includes(SCOPE_DENIED)||["denied","rejected"].includes(status));
+    const blocked=(status!=="completed"&&status!=="success")&&(String(state.error??'').includes(SCOPE_DENIED)||preExecutionDenied(state.error,state.metadata)||["denied","rejected"].includes(status));
     if(blocked){this.audit.blockedCalls++;if(this.audit.blocked.length<64)this.audit.blocked.push({tool,path:problem??paths.paths.map(p=>p.path).join(", ").slice(0,1200)});return;}
     if(problem || (!paths.paths.length && ["completed","success"].includes(status))){this.audit.outsideCalls++;if(this.audit.violations.length<64)this.audit.violations.push({tool,path:problem??"missing filesystem path"});}
   }

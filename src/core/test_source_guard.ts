@@ -2,6 +2,7 @@ import * as path from "node:path";
 import { CommandReceipt, SessionState, NodeVisit } from "../shared/domain";
 import { canonicalCommand, checkCommandKey, literalShellWords, projectCommandKey, currentTestProof, verificationMkdir, verificationSetupParts } from "./verification_evidence";
 import { sourceHashes } from "./verification_sources";
+import { inspectionSegments, stripInspectionStderr } from "./inspection_syntax";
 
 export const TEST_POLICY = "[AGENT_GRAPH_TEST_POLICY]";
 export const TEST_FAILED = "[AGENT_GRAPH_TEST_FAILED]";
@@ -15,14 +16,15 @@ export function testCommandAllowed(command:string,cwd:string,registered:string[]
   if(setup){text=setup.body;if(registered.some(c=>text===c||text===checkCommandKey(c)))return true;if(verificationMkdir(text,cwd))return true;}
   // These chains contain inspection only, never checks or writes. Their exit
   // statuses cannot become verification receipts (the receipt gate stays strict).
-  if(/[\r\n`$]/.test(text))return false;
-  text=text.replace(/\s+2>\s*\/dev\/null(?=\s|$|;|&|\|)/g,"").replace(/\s+2>&1(?=\s|$|;|&|\|)/g,"");
-  if(/[<>]/.test(text))return false;
-  return text.split(/\s*(?:&&|;|\|)\s*/).every(segment=>{
+  const parts=inspectionSegments(text);if(!parts)return false;
+  return parts.every(part=>{
+    let segment=stripInspectionStderr(part.text);
+    if(/^echo\s/.test(segment))segment=segment.replace(/\$\?/g,'STATUS').replace(/\$LASTEXITCODE\b/g,'STATUS');
+    if(/[\r\n`$<>]/.test(segment))return false;
     const words=literalShellWords(segment);if(!words?.length)return false;
     const name=words[0]!.split(/[\\/]/).at(-1)!.toLowerCase();
     if(name==="node"||name==="npm")return words.length===2&&words[1]==="--version";
-    if(name==="echo")return !words.slice(1).some(w=>w.startsWith("-"))||words.length===2&&/^[-=]+$/.test(words[1]!);
+    if(name==="echo")return true;
     if(name==="sed")return words.length===4&&words[1]==="-n"&&/^\d+(?:,\d+)?p$/.test(words[2]!);
     if(!["cat","type","head","tail","pwd","ls","rg","grep","wc","stat","get-content","get-childitem"].includes(name))return false;
     return !words.slice(1).some(w=>/^--pre(?:=|$)|^--files-without-match=/.test(w));

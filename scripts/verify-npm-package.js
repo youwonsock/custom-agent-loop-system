@@ -36,6 +36,7 @@ for (const required of [
   "dist/src/core/stage_budget.js",
   "dist/src/core/process_command_policy.js",
   "dist/src/core/native_scope.js",
+  "dist/src/core/inspection_syntax.js",
   "dist/web/index.html",
   "dist/runtime_defaults.json",
   "scripts/fix-pty-permissions.js",

@@ -23,10 +23,18 @@ test("native read/glob/grep and literal shell inspection reject parent, home and
   ["grep",{path:outside,pattern:"secret"}],["glob",{pattern:outside+"/**/*"}],
   ["glob",{path:target,pattern:"**/../outside/*"}],["bash",{command:`ls '${outside}'`}],
   ["bash",{command:"ls \"$HOME\""}],["bash",{command:"cat ../outside/sentinel.txt"}],
+  ["bash",{command:`ls -n '${outside}'`}],["bash",{command:`cat -n '${outside}/sentinel.txt'`}],
+  ["bash",{command:`tail -f '${outside}/sentinel.txt'`}],["bash",{command:`find -L '${outside}'`}],
+  ["bash",{command:`ls '${outside}' 2>/dev/null`}],["bash",{command:`cat '${outside}/sentinel.txt' 2>&1 | head -n 5`}],
+  ["bash",{command:`cd '${outside}' && ls`}],
  ]as Array<[string,Record<string,unknown>]>)await assert.rejects(invoke(tool,args),/AGENT_GRAPH_SCOPE_DENIED/);
  assert.equal(executed,0);
  for(const[tool,args]of [["glob",{pattern:"**/*"}],["grep",{pattern:"/not/a/filesystem/path|403"}],["read",{filePath:"inside.txt"}],["bash",{command:"ls -la && cat inside.txt"}]]as Array<[string,Record<string,unknown>]>)await invoke(tool,args);
  assert.equal(executed,4);assert.equal(await fs.readFile(path.join(outside,"sentinel.txt"),"utf8"),"untouched");
+ if(process.platform!=='win32'){
+  const output={args:{command:`mkdir -p '${target}/verification'`}};await hooks['tool.execute.before']({tool:'bash'},output);assert.equal(output.args.command,'mkdir -p verification');
+  const read={args:{command:`cat '${target}/inside.txt' 2>&1 | head -5`}};await hooks['tool.execute.before']({tool:'bash'},read);assert.equal(read.args.command,'cat inside.txt 2>&1 | head -5');
+ }
  assert.equal(nativeScopeProblem("glob",{path:outside,pattern:"*"},target,[target,outside]),null,"explicitly approved roots remain usable");
  assert.ok(scopePathProblem(path.join(target+"-other","x"),target,[target]));
  assert.equal(scopePathProblem("C:\\work space\\game\\inside.txt","C:\\work space\\game",["C:\\work space\\game"]),null);
@@ -54,6 +62,8 @@ test("scope evidence retains denied versus actual accesses after bounded record 
  const state={graph:createAutonomousGraph(),targetProjectPath:target,bindings:{planning:{connectionId:"kilo"}},connections:[{id:"kilo",type:"kilo"}],visits:[{nodeId:"planning",attempts:[{scopeAudit:tracker.audit}]}]}as unknown as SessionState;
  assert.match(scopeEvidenceProblem(state)!,/대상 밖/);delete state.visits[0]!.attempts[0]!.scopeAudit;assert.match(scopeEvidenceProblem(state)!,/증거/);
  delete state.graph.automation!.targetScopeGuard;assert.equal(scopeEvidenceProblem(state),null,"absent historical policy preserves compatibility");
+ const nativeDenied=new NativeScopeTracker(target,[target]);nativeDenied.observe(event('native-denied','error','The user has specified a rule which prevents you from using this specific tool call.'));
+ assert.equal(nativeDenied.audit.blockedCalls,1);assert.equal(nativeDenied.audit.outsideCalls,0,'pre-execution native denial is not a completed outside access');
 });
 test("all Kilo roles load invocation-local scope hooks, default-deny outside roots and preserve readonly/native settings",async t=>{
  const{target,outside}=await workspace(t),graph=createAutonomousGraph(),old=process.env.KILO_CONFIG_CONTENT;
