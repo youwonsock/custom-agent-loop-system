@@ -130,10 +130,11 @@ export function seatbeltProfile(cwd:string,writable:string[],runtime:string[],pr
 
 export function prepareProgramIo(options:{cwd:string;directory:string;testRole:boolean;readOnly:boolean;protectedFiles?:string[];expiresAt?:number;backend?:"macos-seatbelt"|"apple-container-vm"}):ProgramIoPolicy {
   if(process.platform!=="darwin"||!fs.existsSync("/usr/bin/sandbox-exec"))throw Error(`${IO_UNAVAILABLE} Kernel program I/O isolation is not supported on this host; refusing unsandboxed execution.`);
-  const cwd=fs.realpathSync(options.cwd),directory=path.resolve(options.directory);
+  const cwd=fs.realpathSync(options.cwd),requested=path.resolve(options.directory);
+  if(fs.existsSync(requested)&&fs.readdirSync(requested).length)throw Error(`${IO_UNAVAILABLE} Refusing to overwrite an existing broker audit directory.`);
+  fs.mkdirSync(requested,{recursive:true,mode:0o700});
+  const directory=fs.realpathSync(requested);
   if(directory===cwd||directory.startsWith(cwd+path.sep))throw Error(`${IO_UNAVAILABLE} The broker/audit directory must be outside untrusted project writes.`);
-  if(fs.existsSync(directory)&&fs.readdirSync(directory).length)throw Error(`${IO_UNAVAILABLE} Refusing to overwrite an existing broker audit directory.`);
-  fs.mkdirSync(directory,{recursive:true,mode:0o700});
   const id=randomUUID(),scratch=path.join(cwd,"verification",".agent-io",id),runtimeReadRoots=discoverIoRuntimeRoots();
   if(cwd===path.parse(cwd).root||runtimeReadRoots.some(root=>root===cwd||root.startsWith(cwd+path.sep)))throw Error(`${IO_UNAVAILABLE} The project must be disjoint from the trusted runtime installation.`);
   if(runtimeReadRoots.some(root=>root===path.parse(root).root||root===os.homedir()))throw Error(`${IO_UNAVAILABLE} A runtime read root is too broad.`);

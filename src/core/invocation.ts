@@ -26,7 +26,7 @@ export async function buildInvocation(
     guardOwnedProcesses?: boolean;
     verificationAliases?: Record<string,string>;
     scopeRoots?: string[];
-    programIoGuard?: {directory:string;protectedFiles:string[];expiresAt:number};
+    programIoGuard?: {directory:string;protectedFiles:string[];expiresAt:number;providerHome?:string};
   },
 ): Promise<{
   binary: string;
@@ -56,7 +56,11 @@ export async function buildInvocation(
     // Provider credentials stay in the trusted control plane; project configs,
     // external plugins/MCP/LSP/formatters cannot create an unconfined tool host.
     env.XDG_DATA_HOME=env.XDG_DATA_HOME??path.join(os.homedir(),".local/share");
-    env.HOME=path.join(programIo.directory,"provider-home");
+    // SDK/config dependencies are trusted host control-plane code. Reuse one
+    // private home per session; commands in the VM never mount or inherit it.
+    env.HOME=opts.programIoGuard.providerHome??path.join(programIo.directory,"provider-home");
+    fs.mkdirSync(env.HOME,{recursive:true,mode:0o700});env.HOME=fs.realpathSync(env.HOME);
+    if(env.HOME===programIo.cwd||env.HOME.startsWith(programIo.cwd+path.sep))throw Error(`${IO_UNAVAILABLE} Provider control home must be outside the untrusted project.`);
     env.XDG_CONFIG_HOME=path.join(env.HOME,".config");
     env.XDG_CACHE_HOME=path.join(env.HOME,".cache");
     env.XDG_STATE_HOME=path.join(env.HOME,".local/state");
