@@ -523,3 +523,23 @@ Actions 실행은 네 작업 모두 성공했고, OS별 플랫폼 artifact 3개�
 첫 실제 시도 `571cea1c-074e-49f5-9eb3-199ba79dc2e7` / `d69903d`는 광범위 pkill 반복 때문에 운영자 안전 중단 1회로 STOPPED(약 30분/4호출)됐다. 두 번째 `e16de1b5-7224-45c0-a943-92e602691839` / `efe1225`는 준비·조회 오차단 및 지연 뒤 고정 구현 마감에 PAUSED(약 42분/13호출), 운영자 제어 0회다. 이 실패들을 성공으로 세거나 재시작 이력을 숨기지 않았다. 초기 요구사항 개수 불일치 API 요청은 세션/모델 생성 전 거절된 사전 점검으로 별도 보존했다.
 
 상세 결과: `/Users/supercent/Desktop/agent graph test/kilo-normalized-verification-20261025-061825/TEST_RESULTS.md`, `RESULTS.json`, `FINDINGS.md`, `results/native-scope-audit.json`, `results/hardening-evidence.json`, `results/cleanup-verification.json`. `results/workflow-evaluation.json`의 21개 기능 PASS와 범위 감사의 미해결 사항을 분리해 보존한다. 1·2차의 상세 로그와 중단/정리 증거도 각각의 Desktop 실행 폴더에 남아 있다.
+
+## Kilo 대상 밖 조회 차단 및 무인 재검증 — 2026-10-25
+
+실제 검증 코드: `2fc62087cc48667f7fa8b5752ae0bc6c1a0b0c6b`(경계 가드 `3983c0850d43f7a0926f4ac4c446ffe513a48758` 및 조회 구문 보완 포함). macOS arm64 / Node 24.21.0의 깨끗한 커밋에서 코어·서버·CLI **284 통과, Windows ConPTY 전용 1 제외, 실패 0(총 285)**, 도구 10/10, Chromium GUI 25/25, macOS 실행기 4/4, 패키지 77개 파일·실제 설치 smoke, 운영 의존성 audit 0건을 확인했다. 플랫폼 검사와 브라우저 검사를 순차 실행했다. 이 회귀 검사의 결정적 fake CLI와 아래 실제 모델 실행은 구분한다. 새 Windows/Linux 원격 CI·push·main 병합은 수행하지 않았으며 이번 구현의 새 Actions 링크는 없다.
+
+새 자율 프리셋의 `targetScopeGuard=true`는 Kilo의 계획·구현·테스트·검토·최종 승인 전체에 invocation-local hook과 native external_directory 기본 deny를 적용한다. 관찰 가능한 native 파일 도구 및 제한된 literal 조회에서 부모/홈/다른 프로젝트·외부 심볼릭 링크·모호한 경로를 실행 전에 거절한다. 재귀 조회는 실제 경계를 확인하며 10,000개 항목을 넘으면 더 좁은 경로를 요구한다. 따옴표 속 명령 구분자, 옵션 뒤 경로, 안전한 stderr 폐기와 조건부 작업 폴더를 검사하고, 대상 내부의 단순 절대 경로는 공백을 포함해 정규화한다. 조회 fallback/상태 echo는 검사 receipt를 만들지 않으며, 등록 검사의 실제 실패·종료코드·쓰기 금지는 유지한다.
+
+`SCOPE_DENIED`는 실행 전 거절로 기록해 같은 모델 호출에서 대상 안 경로로 수정할 수 있다. 실제 외부 접근 또는 미확정 외부 호출은 BLOCKED로 보존한다. 모든 Kilo 시도의 `scopeAudit`을 bounded event ring 밖에 저장하고, 감사 누락·경계 불일치·외부 조회·미확정 기록이 있으면 SUCCESS를 차단한다. 기존 그래프의 선택 필드가 없으면 종전 정책을 유지한다. 의존성 버전, 공개 CLI 옵션, REST/SSE endpoint 및 그래프/연결/세션의 저장 버전은 바꾸지 않았다.
+
+실제 `kilo/kilo-auto/free` 세션 `8da09a74-27db-49b3-a616-86387616c46e`는 **계획 → 제작 → Test PASS → 독립 검토 APPROVED → 최종 승인 APPROVED → SUCCESS**로 자연 종료했다. 2026-10-25 14:48:37~15:32:17 KST, 약 43.66분·native CLI 15회이며 시작 후 운영자의 소스/빌드/대상 수정·피드백·수동 승인·재개·재시작·중지·예산 변경은 0회다. 요구사항 12개와 기본 60분/24회, 고정 역할 마감을 유지했다. 고정 검사/명세 6개만 제공했고 이전 게임·자체 테스트를 복사하지 않았다. 게임과 자체 테스트는 모델이 작성·수정했다.
+
+첫 Test는 잘못된 `won: "false"` 저장값을 허용하는 제품 결함으로 컨트롤러 검사가 종료코드 1을 반환해 구현으로 자동 반환됐다. 두 번째 Test의 등록되지 않은 inline Node 진단 실행도 정책에 의해 거절됐다. 구현은 자체 테스트가 놓치던 이동 무시·저장 예외 전파 결함, 저장소 getter 거부와 드래그 입력의 실제 브라우저 실패를 수정했다. 5분 무응답 2회와 Test 보고 표식 누락 1회, 최종 보고 schema/JSON 오류 3회도 자동 복구했다. 최종 승인은 네 번째 호출에서 유효한 보고가 수락됐으며, 실패·잘못된 보고를 성공으로 바꾸지 않았다.
+
+최종 자체 Node 테스트는 엔진 8·컨트롤러 6·저장 6·HTTP 5로 **25/25**이고, 네 영역의 no-op 제어 및 실제 제품 결함 12개 탐지가 통과했다. 고정 엔진 13그룹/4,000비교·컨트롤러 12그룹·실제 Chromium 인수 4그룹·플랫폼 브라우저 39단계도 통과했다. 검토와 최종 승인 각각 자체 테스트 네 파일 및 canonical 품질 보고서를 native read로 읽었다. 보호 파일 6개, Test 입력 snapshot 18개, 브라우저 소스 및 실행 dist 191개의 무결성을 확인했고 Test 역할의 실제 소스 변경은 0회다. 기능 기준 21개와 범위 감사 추가 기준 2개가 모두 충족돼 최종 평가 **PASS(23/23)**다.
+
+원시 native 로그와 엔진 감사를 교차 확인한 결과 시도 15개의 관찰 가능한 파일/조회 이벤트 **151개**, 실행 전 차단 **4건**, 실제 대상 밖 native 조회 **0건**, 미확정 조회 **0건**, 감사 누락/파싱 오류 **0건**이며 집계가 일치한다. 다만 임의 프로그램·MCP·plugin 내부 I/O를 격리하는 OS 샌드박스는 아니다. 구현 진단의 Node 검사에 `/tmp/ctrl.json`, `/tmp/eng.json` 출력 경로를 넘긴 완료 명령 2건도 별도로 보존했다. 이 프로그램 I/O를 native 조회 0건의 증거에 포함하지 않으며 모든 파일 접근이 대상 내부에 있었다고 확대 해석하지 않는다. 무료 메타데이터와 라우팅은 관찰했으나 실제 청구액·공급자 내부 요청/토큰 및 모든 목표의 무인 완주를 보장하지 않는다.
+
+자연 SUCCESS 뒤 workflow stop 요청 없이 소유 관리 서버를 종료했다. 기록 PID **163개**·포트 **9개**가 모두 종료됐고 해당 실행 폴더 cwd 잔류 프로세스는 0개다. 정리 전후 SUCCESS 상태도 유지했다. 상세 자료: `/Users/supercent/Desktop/agent graph test/kilo-native-scope-final-20261025-144406/TEST_RESULTS.md`, `RESULTS.json`, `FINDINGS.md`, `results/native-scope-audit.json`, `results/program-io-observations.json`, `results/cleanup-verification.json`. 사용자 홈 인증 설정과 과거 세션 로그는 수집하지 않았다.
+
+첫 개발 시험 `b2bb4a7c-879c-44ed-82e4-91f0a4a761bd` / `3983c0850d43f7a0926f4ac4c446ffe513a48758`는 정상 조회/공백 절대 경로 오차단 때문에 고정 마감에 **PAUSED / NOT_SUCCESS**로 끝났다(약 42분·17호출·수동 제어 0회). 범위 감사 17개/원시 이벤트 132개는 일치했고 실행 전 차단 1건·실제 외부 조회 0건이었지만 Test·검토·최종 승인은 미완료였다. 기록 PID 161개·포트 10개도 정리했다. 이 실패를 성공으로 세지 않고 구문 처리를 보완해 전체 회귀 검사를 다시 통과한 뒤 위 별도 빈 프로젝트로 재검증했다. 첫 시험 보고서는 `/Users/supercent/Desktop/agent graph test/kilo-native-scope-20261025-134908/TEST_RESULTS.md`에 보존한다.
