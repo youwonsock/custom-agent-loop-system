@@ -4,6 +4,7 @@ import * as path from "node:path";
 export function outsidePaths(text: string, roots: string[]): string[] {
   const found: string[] = [];
   for (const line of text.split(/\r?\n/)) {
+    if (/\bFILE_ACCESS:\s*\/(?=\s|$)/.test(line) && !roots.some(root => root === "/")) found.push("/");
     // Keep quoted paths intact, including spaces. Consume URLs as a whole so
     // their pathname cannot be mistaken for a filesystem request.
     const tokens = /https?:\/\/[^\s]+|(["'`])([^\n]*?)\1|(?:^|[\s(])((?:[A-Za-z]:[\\/]|\/)[^\s"'`),;]+)/g;
@@ -26,7 +27,14 @@ export function outsidePaths(text: string, roots: string[]): string[] {
       if (!explicit && !knownFileRoot && regexContext && /^\/(?:\\.|[^/\\\r\n])+\/[dgimsuvy]+(?=\s|[),;.]|$)/.test(tail)) continue;
       const httpContext = /\b(?:HTTP|GET|HEAD|POST|URL|endpoint|request|route|traversal)\b/i.test(line);
       const urlOnly = /^\/(?:\?|%[\da-f]{2})/i.test(value);
-      if (!explicit && !knownFileRoot && !/^[A-Za-z]:/.test(value) && (httpContext || urlOnly)) continue;
+      const start = match.index! + match[0].indexOf(match[2] ?? match[3] ?? "");
+      // A web root-to-index mapping is a route description even when the line
+      // omits "HTTP". Match this token only; a second '/' or real file path on
+      // the same line must still be reviewed. Explicit FILE_ACCESS always wins.
+      const rootDocumentRoute = value === "/" &&
+        /\b(?:handle|serve|map)\s*$/i.test(line.slice(0,start).replace(/["'`]$/, "")) &&
+        /^\s*(?:->|=>|→)\s*index\.html\b/i.test(line.slice(start+1).replace(/^["'`]/, ""));
+      if (!explicit && !knownFileRoot && !/^[A-Za-z]:/.test(value) && (httpContext || urlOnly || rootDocumentRoute)) continue;
       const api = /^[A-Za-z]:[\\/]/.test(value) ? path.win32 : path.posix;
       if (!roots.some(root => {
         if (/^[A-Za-z]:[\\/]/.test(root) !== (api === path.win32)) return false;

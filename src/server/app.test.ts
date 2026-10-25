@@ -1531,6 +1531,11 @@ test("review and final approval cannot claim to inspect README without native re
  for(const type of ["review","approval"]){const visit=done.visits.find(v=>v.nodeId===type)!;assert.equal(visit.attempts.length,2);assert.match(visit.attempts[0]!.message!,/README.md/);assert.equal(visit.attempts[0]!.completionAccepted,false);assert.ok(visit.attempts[1]!.readFiles!.includes("README.md"));}
  assert.equal(done.visits.filter(v=>v.nodeId==="test").length,1);assert.deepEqual(done.processedRequests,[]);
 });
+test("autonomous HTTP root mapping plans proceed without a false outside-root recovery or operator access",async t=>{
+ const s=await setup();t.after(s.cleanup);const graph=await contracted(s),id=await launch(s,graph,"fixture:contract-workflow fixture:plan-http-root");
+ const done=await wait(()=>s.store.readSession(id),"SUCCESS"),planning=done.visits.find(v=>v.nodeId==="planning")!;
+ assert.equal(planning.attempts.length,1);assert.equal(planning.status,"succeeded");assert.equal(done.pendingAccess,null);assert.deepEqual(done.processedRequests,[]);
+});
 test("own Node quality rejects empty assertions despite claimed PASS and repairs before independent final approval",async t=>{
  const s=await setup();t.after(s.cleanup);
  let graph=await s.store.createGraph({template:"autonomous"});graph.automation!.browserVerification=false;graph.automation!.maxRepairCycles=1;graph.defaultBinding=s.graph.defaultBinding;graph=await s.store.saveGraph(graph.id,graph,graph.revision);

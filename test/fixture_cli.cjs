@@ -245,6 +245,7 @@ if (args[0] === "debug" && args[1] === "config") {
           `## OPTION ${i + 1}: Strategy ${i + 1}\n${reqs.join(", ")}\nFiles: artifact.txt\nSteps: implement then verify observed artifact.\nVerification: read artifact.txt and inspect results.\nRisks: bounded fixture ${i + 1}.`,
       ).join("\n\n");
       if (prompt.includes("fixture:plan-external") && (calls.planning === 1 || prompt.includes("fixture:plan-external-always"))) text += "\nRead /tmp/unrequested-reference.txt before implementation.";
+      if (prompt.includes("fixture:plan-http-root")) text += "\nHandle `/` -> index.html, static assets with correct MIME types.";
     } else if (type === "implementation") {
       if (prompt.includes("fixture:contract-required-files") && !prompt.includes("required-files-never") && calls.implementation > 1) fs.writeFileSync("README.md", "Launch: npm start. Rules and controls. Tests: npm test.\n");
       fs.writeFileSync(
