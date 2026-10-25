@@ -41,7 +41,7 @@ export interface AgentGraphDocument {
   nodes: AgentNode[];
   edges: GraphEdge[];
   defaultBinding?: ExecutionBinding;
-  automation?: { maxRepairCycles: number; nativeApprovalReview: boolean; browserVerification?: boolean; verificationContract?: boolean; authoredNodeTests?:boolean; testSourceGuard?:boolean; reserveFinalizationBudget?:boolean; guardOwnedProcesses?:boolean };
+  automation?: { maxRepairCycles: number; nativeApprovalReview: boolean; browserVerification?: boolean; verificationContract?: boolean; authoredNodeTests?:boolean; testSourceGuard?:boolean; reserveFinalizationBudget?:boolean; guardOwnedProcesses?:boolean; targetScopeGuard?:boolean };
   entrypoints: {
     start: string | null;
     reentry: string | null;
@@ -165,7 +165,19 @@ export interface CommandReceipt {
   exitCode: number | null;
   environmentError: string | null;
 }
+export interface NativeScopeAudit {
+  version:1;
+  cwd:string;
+  roots:string[];
+  inspectedCalls:number;
+  blockedCalls:number;
+  outsideCalls:number;
+  unresolvedCalls:number;
+  blocked:Array<{tool:string;path:string}>;
+  violations:Array<{tool:string;path:string}>;
+}
 export interface AttemptRecord {
+  scopeAudit?: NativeScopeAudit;
   verificationInvalidation?: {at:string;reason:string;files:string[]};
   readFiles?: string[];
   /** Written only after runtime completion validation; absent legacy evidence fails closed. */

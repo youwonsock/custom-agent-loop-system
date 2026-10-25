@@ -22,6 +22,7 @@ export async function buildInvocation(
     testSourcesReadOnly?: boolean;
     guardOwnedProcesses?: boolean;
     verificationAliases?: Record<string,string>;
+    scopeRoots?: string[];
   },
 ): Promise<{
   binary: string;
@@ -106,14 +107,15 @@ export async function buildInvocation(
           "allow",
         ]),
       );
+    if(c.type==="kilo"&&opts.scopeRoots)permission.external_directory={"*":"deny",...Object.fromEntries(opts.scopeRoots.map(p=>[`${p.replace(/\\/g,"/").replace(/\/$/,"")}/**`,"allow"]))};
     const key =
       c.type === "kilo" ? "KILO_CONFIG_CONTENT" : "OPENCODE_CONFIG_CONTENT";
     const native = env[key]
       ? (JSON.parse(env[key]) as Record<string, unknown>)
       : {};
     delete env.AGENT_GRAPH_KILO_CHECKS;
-    const guardedChecks = c.type === "kilo" && !readonly && (opts.verificationCommands?.length||opts.guardOwnedProcesses);
-    if (guardedChecks) env.AGENT_GRAPH_KILO_CHECKS = JSON.stringify({cwd: opts.cwd, commands: opts.verificationCommands??[],...(opts.testSourcesReadOnly?{testSourcesReadOnly:true}:{}),...(opts.guardOwnedProcesses?{guardOwnedProcesses:true}:{}),...(opts.verificationAliases?{aliases:opts.verificationAliases}:{})});
+    const guardedChecks = c.type === "kilo" && ((!readonly&&(opts.verificationCommands?.length||opts.guardOwnedProcesses))||opts.scopeRoots?.length);
+    if (guardedChecks) env.AGENT_GRAPH_KILO_CHECKS = JSON.stringify({cwd: opts.cwd, commands: readonly?[]:opts.verificationCommands??[],...(opts.testSourcesReadOnly?{testSourcesReadOnly:true}:{}),...(opts.guardOwnedProcesses?{guardOwnedProcesses:true}:{}),...(opts.verificationAliases?{aliases:opts.verificationAliases}:{}),...(opts.scopeRoots?{scopeRoots:opts.scopeRoots}:{})});
     const recoveryAgents: Record<string, {tools?: Record<string, unknown>}> = Object.create(null);
     if (c.type === "kilo" && !readonly && opts.disableWrite) {
       // Kilo resolves effective agents before plugin config hooks; write=false
@@ -156,6 +158,7 @@ export async function buildInvocation(
                 ? "The tool shell is Windows PowerShell: use npm.cmd and npx.cmd to avoid npm.ps1 execution policy errors, or invoke node.exe directly. Use PowerShell syntax, not Bash for/do/done loops or &&. Do not change the host execution policy."
                 : ""));
     args.push(opts.prompt + protocol);
+    if(c.type==="kilo"&&opts.scopeRoots)args[args.length-1]+=`\nTarget scope: native filesystem tools may inspect only these approved roots: ${JSON.stringify(opts.scopeRoots)}. Default glob/grep path is the target project. Never inspect parent directories, global configuration, credentials or orchestrator sessions. A scope denial happened before execution; correct the path and continue using target-relative files. Registered platform verifiers may be executed as supplied; do not read/search their installation. Emit AGENT_REPORT directly in the final assistant response, never write AGENT_REPORT.json in read-only/test roles.`;
   }
   return {
     binary: executable.file,

@@ -53,6 +53,7 @@ import { lockContract, contractViolation, verificationRunnerProblem } from "./ve
 import { sessionBudgetReason, pauseForBudget } from "./session_budget";
 import { stageDeadline, stageBudgetReason } from "./stage_budget";
 import { unscopedTerminationEvent } from "./process_command_policy";
+import { SCOPE_VIOLATION } from "./native_scope";
 import { nodeTestScript } from "./node_test_policy";
 import { TEST_POLICY, TEST_FAILED, testSources, sourceDifference, testPolicyEvent, failedRegisteredCheck, currentVerificationSources } from "./test_source_guard";
 
@@ -594,6 +595,7 @@ export class GraphRuntime {
         nativeApprovalReview: this.state.graph.automation?.nativeApprovalReview,
         testSourcesReadOnly:sourceGuard&&node.type==="test",
         guardOwnedProcesses:this.state.graph.automation?.guardOwnedProcesses,
+        ...(connection.type==="kilo"&&this.state.graph.automation?.targetScopeGuard?{scopeRoots:[this.state.targetProjectPath,...this.state.additionalAllowedPaths]}:{}),
         ...(this.state.verificationContract?.manifest?.nodeTests?{verificationAliases:{[nodeTestScript(this.state.verificationContract.manifest.nodeTests)]:this.state.verificationContract.manifest.checks.find(c=>c.id===this.state.verificationContract!.manifest!.nodeTests!.suiteCheckId)!.command}}:{}),
         ...(this.state.graph.automation?.verificationContract && this.state.verificationContract?.status === "locked"
           ? {verificationCommands: this.state.verificationContract.manifest!.checks.map(c => c.command)} : {}),
@@ -674,6 +676,7 @@ export class GraphRuntime {
           )
           .map(([, value]) => value!),
         pollControl: () => claimNextControlRequest(this.controls()),
+        ...(connection.type==="kilo"&&this.state.graph.automation?.targetScopeGuard?{scopeRoots:[this.state.targetProjectPath,...this.state.additionalAllowedPaths]}:{}),
         ...(this.state.graph.automation?.guardOwnedProcesses?{eventPolicy:(event:Record<string,unknown>)=>{policyReason=unscopedTerminationEvent(event);return policyReason;}}:{}),
         ...(sourceGuard&&node.type==="test"&&testInputs?{
           sourcesGuarded:true,
@@ -730,6 +733,7 @@ export class GraphRuntime {
       attempt.actualModelId = result.evidence.actualModelId;
       attempt.commands = result.evidence.commands;
       attempt.readFiles=result.evidence.readFiles;
+      attempt.scopeAudit=result.evidence.scopeAudit;
       attempt.fileMutation = result.evidence.fileMutation;
       if (result.evidence.fileMutation && !(sourceGuard&&node.type==="test")) {visit.verifiedCommands = [];delete visit.nodeTestProof;}
       if (["test", "review", "approval"].includes(node.type))
@@ -761,6 +765,10 @@ export class GraphRuntime {
       if (result.controlRequest) {
         await this.finishControl(result.controlRequest);
         return null;
+      }
+      if(attempt.scopeAudit&&(attempt.scopeAudit.outsideCalls||attempt.scopeAudit.unresolvedCalls)){
+        attempt.completionAccepted=false;attempt.failureKind="role_violation";attempt.message=`${SCOPE_VIOLATION} 대상 밖 native 조회 또는 미확정 실행이 관측돼 실행을 차단했습니다.`;
+        this.state.status="BLOCKED";this.state.statusReason=attempt.message;this.state.automaticRecovery=null;visit.status="paused";await this.save();return null;
       }
       let guardedInputs:Record<string,string>|undefined;
       if(sourceGuard&&node.type==="test"&&testInputs){

@@ -108,6 +108,11 @@ async function main() {
       try { await processGuard["tool.execute.before"]({tool:"bash"},{args:{command:'pkill -9 -f "node.*server"'}}); }
       catch(error) { processPrevented=String(error).includes("[AGENT_GRAPH_UNSCOPED_TERMINATION]"); }
       if(!processPrevented)throw Error("Installed implementation process guard failed.");
+      process.env.AGENT_GRAPH_KILO_CHECKS=JSON.stringify({cwd:project,commands:[],scopeRoots:[project]});
+      const scoped=await plugin.server();let scopePrevented=false;
+      try{await scoped["tool.execute.before"]({tool:"glob"},{args:{path:path.dirname(project),pattern:"**/*"}});}catch(error){scopePrevented=String(error).includes("[AGENT_GRAPH_SCOPE_DENIED]");}
+      if(!scopePrevented)throw Error("Installed native directory scope guard failed.");
+      await scoped["tool.execute.before"]({tool:"read"},{args:{filePath:path.join(project,"package.json")}});
     } finally {
       if (previousProtocol === undefined) delete process.env.AGENT_GRAPH_KILO_CHECKS;
       else process.env.AGENT_GRAPH_KILO_CHECKS = previousProtocol;

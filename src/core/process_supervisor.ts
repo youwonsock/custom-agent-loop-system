@@ -42,6 +42,7 @@ import {
 import { normalizeProviderEvent } from "./provider_events";
 import { ToolFailureTracker } from "./tool_failures";
 import { InspectionTracker } from "./inspection_evidence";
+import { NativeScopeTracker, SCOPE_VIOLATION } from "./native_scope";
 import { terminateProcessTreeBounded } from "./process_lifecycle";
 import type { Activity } from "../shared/execution_types";
 // Preserve imports used by existing integrations.
@@ -93,6 +94,7 @@ export interface ProcessSupervisorOptions {
   onOutput?: (text: string) => void;
   /** Trusted runtime policy; never inferred from ordinary model prose. */
   sourcesGuarded?: boolean;
+  scopeRoots?: string[];
   pollPolicy?: () => Promise<string|null>;
   eventPolicy?: (event:AnyObj,evidence:EventEvidence) => string|null;
 }
@@ -134,6 +136,7 @@ export class ProcessSupervisor {
       stderr: new StreamingRedactor(sensitiveValues),
     };
     const recordRedactor = new StreamingRedactor(sensitiveValues);
+    const scopeTracker=options.scopeRoots?new NativeScopeTracker(options.cwd,options.scopeRoots):null;
     const maximumRawLogBytes = Math.max(
       MIN_RAW_LOG_BYTES,
       Math.min(MAX_RAW_LOG_BYTES, options.maxInMemoryOutputBytes * 16),
@@ -176,7 +179,7 @@ export class ProcessSupervisor {
       rawLog.end();
       const message = err instanceof Error ? err.message : String(err);
       return {
-        evidence: emptyEvidence(),
+        evidence: {...emptyEvidence(),...(scopeTracker?{scopeAudit:scopeTracker.audit}:{})},
         diagnostics: emptyCliDiagnostics(),
         pid: -1,
         outcome: "spawn_error",
@@ -204,6 +207,7 @@ export class ProcessSupervisor {
     let eventBytes = 0;
     const assistantParts: string[] = [];
     const evidence = emptyEvidence();
+    if(scopeTracker)evidence.scopeAudit=scopeTracker.audit;
     const mutations = new MutationTracker();
     const diagnosticCollector = new CliDiagnosticCollector();
     const toolFailures = new ToolFailureTracker();
@@ -293,6 +297,7 @@ export class ProcessSupervisor {
         const remainder = lineBuffers[stream].flush();
         if (remainder) processLine(remainder, stream);
       }
+      scopeTracker?.finish();
       evidence.fileMutation ||= mutations.finish();
       if (mutations.changedFiles.length)
         evidence.changedFiles = mutations.changedFiles.map((file) =>
@@ -495,6 +500,8 @@ export class ProcessSupervisor {
     const commands = new CommandTracker(options.cwd,options.sourcesGuarded);
     const inspections = new InspectionTracker(options.cwd);
     const processEvent = (event: AnyObj): void => {
+      scopeTracker?.observe(event);
+      if(scopeTracker?.audit.outsideCalls)void terminate("process_exit","role_violation",`${SCOPE_VIOLATION} native filesystem access escaped the approved target boundary.`,false);
       commands.observe(event);
       inspections.observe(event);
       evidence.readFiles=inspections.files;

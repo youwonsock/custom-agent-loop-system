@@ -37,6 +37,7 @@ void (async () => {
       killTimeoutMs: 1_000,
       maxInMemoryOutputBytes,
       rawLogPath: path.join(dir, "attempt.log"),
+      ...(mode.startsWith("scope-") ? {scopeRoots:[dir]} : {}),
       interactionWhitelist: [],
       destructivePrompts: [],
       sensitiveValues:

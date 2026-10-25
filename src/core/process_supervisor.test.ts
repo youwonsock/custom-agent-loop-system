@@ -10,6 +10,7 @@ import {
 interface CaseResult {
   diagnostics: CliDiagnostics;
   evidence: {
+    scopeAudit?: import("../shared/domain").NativeScopeAudit;
     fileMutation: boolean;
     completedSearches: number;
     maxTokens: number;
@@ -27,6 +28,12 @@ interface CaseResult {
   rawLogIncludesSecret: boolean;
   parsedEventIncludesSecret: boolean;
 }
+test("scope-denied native calls do not become actual mutations or approval waits, while escaped access survives ring eviction",async()=>{
+ const denied=await runFake("scope-denied-then-inside",{transportMode:"pipe"});
+ assert.equal(denied.outcome,"succeeded");assert.equal(denied.evidence.fileMutation,false);assert.equal(denied.evidence.scopeAudit!.blockedCalls,1);assert.equal(denied.evidence.scopeAudit!.outsideCalls,0);
+ const escaped=await runFake("scope-outside-flood",{transportMode:"pipe",maxBytes:1024});
+ assert.equal(escaped.outcome,"process_exit");assert.equal(escaped.failureKind,"role_violation");assert.equal(escaped.evidence.scopeAudit!.outsideCalls,1);assert.ok(escaped.eventBytes<=1024);
+});
 test("file mutation, search and spend survive eviction from the recent event ring", async () => {
   const result = await runFake("evidence-flood", { maxBytes: 1024 });
   assert.equal(result.evidence.fileMutation, true);

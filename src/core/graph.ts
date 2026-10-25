@@ -63,7 +63,8 @@ export function validateGraphDocument(input: unknown): AgentGraphDocument {
       (g.automation.authoredNodeTests !== undefined && typeof g.automation.authoredNodeTests !== "boolean") ||
       (g.automation.testSourceGuard !== undefined && typeof g.automation.testSourceGuard !== "boolean") ||
       (g.automation.reserveFinalizationBudget !== undefined && typeof g.automation.reserveFinalizationBudget !== "boolean") ||
-      (g.automation.guardOwnedProcesses !== undefined && typeof g.automation.guardOwnedProcesses !== "boolean"))
+      (g.automation.guardOwnedProcesses !== undefined && typeof g.automation.guardOwnedProcesses !== "boolean") ||
+      (g.automation.targetScopeGuard !== undefined && typeof g.automation.targetScopeGuard !== "boolean"))
   )
     throw new AppError(
       400,
@@ -180,6 +181,7 @@ export function validateGraphDocument(input: unknown): AgentGraphDocument {
             ...(g.automation.testSourceGuard !== undefined ? {testSourceGuard:g.automation.testSourceGuard} : {}),
             ...(g.automation.reserveFinalizationBudget !== undefined ? {reserveFinalizationBudget:g.automation.reserveFinalizationBudget} : {}),
             ...(g.automation.guardOwnedProcesses !== undefined ? {guardOwnedProcesses:g.automation.guardOwnedProcesses} : {}),
+            ...(g.automation.targetScopeGuard !== undefined ? {targetScopeGuard:g.automation.targetScopeGuard} : {}),
           },
         }
       : {}),
@@ -283,6 +285,7 @@ export function createAutonomousGraph(
     testSourceGuard: true,
     reserveFinalizationBudget: true,
     guardOwnedProcesses:true,
+    targetScopeGuard:true,
   };
   graph.nodes.find((n) => n.type === "planning")!.planning = {
     requiresApproval: false,

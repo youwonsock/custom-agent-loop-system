@@ -152,3 +152,11 @@ PASS 테스트의 전체 소스 snapshot을 저장하고 검토·최종 승인 �
 새 프리셋의 `guardOwnedProcesses=true`는 Kilo의 구현·테스트 역할에서 native bash 실행 전 pkill/killall, 프로세스 이름 기반 taskkill/Stop-Process, pgrep 결과에 대한 kill 같은 일괄 종료를 차단한다. 구현에서는 기존 native 권한을 늘리지 않고 유한 tool-argument 복구로 소유 핸들/기록된 PID 정리를 안내하며, 테스트에서는 FAIL로 구현에 반환한다. 일반 프로그램의 내부 동작까지 격리하는 OS 보안 샌드박스는 아니다. 고정 Node 자체 suite와 정확히 같은 직접 `node --test` 호출은 등록된 npm 검사로 정규화해 파이프의 0 종료가 실제 실패를 가리지 않도록 한다.
 
 테스트의 준비·조회 구문은 제품 수리와 구분한다. 같은 프로젝트의 verification 출력 폴더는 상대·인용/공백 이스케이프 절대 경로와 `mkdir -p … && 등록 검사`를 허용한다. 준비 명령이 성공해야 검사가 실행되고 native 전체 종료코드를 그대로 보존한다. 출력 캡처는 등록 검사 경로로 정규화하며 제품 파일 캡처는 차단한다. 제한된 읽기 명령의 `;`/`&&` 연결, literal echo 구분자, Node/npm 버전 조회, stderr 폐기/합치기도 조회로 허용하되 검증 receipt로 인정하지 않는다. 임의 코드 실행·제품 쓰기·다른 프로젝트 이동·파이프의 실패 마스킹·검사 합치기는 계속 거절한다. 비밀값 마스킹은 다음 청크에서 비밀값으로 완성될 수 있는 실제 접미사만 보류해 짧은 정책 오류 이벤트를 watchdog까지 지연시키지 않는다.
+
+## Kilo의 대상 조회 경계
+
+새 자율 프리셋은 `targetScopeGuard=true`다. Kilo의 계획·구현·테스트·검토·최종 승인에 모두 invocation-local hook을 로드한다. native `read/glob/grep` 등의 명시적 파일 경로와 literal shell 조회는 대상 프로젝트 및 사용자가 명시적으로 승인한 추가 경로로 제한한다. 부모 경로·홈 경로·경로 접두사가 비슷한 형제 폴더·외부 심볼릭 링크를 거절하며, 재귀 조회는 외부 링크를 포함하면 실행 전에 차단한다. 경계를 확인할 수 없거나 10,000개 항목 제한을 넘는 재귀 요청은 더 좁은 대상 경로를 사용해야 한다. 기본 native external_directory 정책도 deny로 두며, 기존 read 금지·사용자 plugin과 읽기 전용 역할의 bash/edit 금지는 유지한다. 공급자 CLI 자체의 인증·설정 로딩을 수집하거나 변경하지 않는다.
+
+`SCOPE_DENIED`는 실행 전에 차단한 조회로 기록하고 모델이 대상 내 경로로 고쳐 계속할 수 있다. 이를 실제 파일 수정·외부 접근·사람의 승인 대기로 바꾸지 않는다. 반대로 완료된 외부 native 접근이나 실행 여부가 미확정인 외부 호출은 BLOCKED로 남기며, 이후 구현 재시도나 공급자 변경으로 지울 수 없다. 모든 Kilo attempt의 `scopeAudit`은 bounded event ring 밖에 보존되고 SUCCESS에서 양성 증거와 위반 부재를 확인한다. 필드 없는 기존 그래프는 기존 정책을 유지하므로 저장된 그래프에는 이 옵션을 켜야 한다. Codex/Claude/OpenCode의 native sandbox 정책은 변경하지 않는다.
+
+이 경계는 관찰 가능한 native 파일 도구 및 literal 조회에 대한 보호다. 임의 프로그램·MCP·plugin 내부의 모든 파일 IO를 격리하는 OS 샌드박스로 해석하지 않는다. 실제 검증에서는 native 이벤트 전체를 별도 감사해 차단된 시도와 완료된 범위 위반을 구분한다.

@@ -141,6 +141,14 @@ switch (mode) {
     assistant("Completed fake work.\n[PHASE_DONE]");
     process.exit(0);
     break;
+  case "scope-denied-then-inside":
+    emit({type:"tool_use",part:{id:"scope-blocked",tool:"write",state:{status:"error",input:{filePath:require("node:path").join(process.cwd(),"..","outside.txt")},error:"[AGENT_GRAPH_SCOPE_DENIED] Blocked BEFORE execution"}}});
+    emit({type:"tool_use",part:{id:"scope-inside",tool:"read",state:{status:"completed",input:{filePath:require("node:path").join(process.cwd(),"inside.txt")},output:"inside"}}});
+    assistant("[PHASE_DONE]");process.exit(0);break;
+  case "scope-outside-flood":
+    emit({type:"tool_use",part:{id:"scope-escaped",tool:"glob",state:{status:"completed",input:{path:require("node:path").dirname(process.cwd()),pattern:"*"},output:"outside directory listing"}}});
+    for(let i=0;i<2000;i++)emit({type:"text",part:{id:"scope-flood-"+i,text:"x".repeat(100)}});
+    setInterval(()=>{},1000);break;
   case "planner":
     assistant(
       "=== PLAN OPTIONS ===\n" +

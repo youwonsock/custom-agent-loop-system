@@ -1,6 +1,7 @@
 import { projectCommandKey, verificationSetupParts, checkCommandKey, ownedVerificationCapture } from "./verification_evidence";
 import { TEST_POLICY, testCommandAllowed } from "./test_source_guard";
 import { broadProcessTermination, UNSCOPED_TERMINATION } from "./process_command_policy";
+import { nativeScopeProblem, SCOPE_DENIED } from "./native_scope";
 
 export interface KiloCheckProtocol {
   cwd: string;
@@ -8,6 +9,7 @@ export interface KiloCheckProtocol {
   testSourcesReadOnly?: boolean;
   guardOwnedProcesses?: boolean;
   aliases?: Record<string,string>;
+  scopeRoots?: string[];
 }
 
 // Only display-only wrappers around an exact registered check are repaired.
@@ -48,6 +50,10 @@ export function kiloCheckHooks(protocol: KiloCheckProtocol) {
         throw Error(`${UNSCOPED_TERMINATION} Broad process-name termination is blocked BEFORE execution. Never use pkill, killall, taskkill /IM, Stop-Process -Name or kill with pgrep. Close server objects or the child processes this task actually started; use recorded owned PIDs only.`);
       if(protocol.testSourcesReadOnly&&/^(?:write|edit|multiedit|apply_patch|delete|move|rename)$/i.test(input.tool))
         throw Error(`${TEST_POLICY} Test role cannot edit product, test, package or frozen files. Return FAIL; implementation owns repairs.`);
+      if(protocol.scopeRoots){
+        const problem=nativeScopeProblem(input.tool,output.args,protocol.cwd,protocol.scopeRoots);
+        if(problem)throw Error(`${SCOPE_DENIED} Blocked BEFORE execution: ${problem}. Use target-relative paths inside ${protocol.cwd}. Do not inspect parent folders, user configuration or session data. Continue with in-target files; no operator approval is needed for this denied query.`);
+      }
       if (input.tool === "bash" && typeof output.args.command === "string")
         output.args.command = registeredCheckCommand(output.args.command, protocol);
       if(protocol.testSourcesReadOnly&&input.tool==="bash"&&(!testCommandAllowed(String(output.args.command??""),protocol.cwd,protocol.commands)))

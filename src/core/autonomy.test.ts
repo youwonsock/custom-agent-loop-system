@@ -64,6 +64,7 @@ test("autonomous preset is opt-in, persisted, bounded and still requires tests/f
   assert.equal(createAutonomousGraph().automation!.authoredNodeTests,true);
   assert.equal(createAutonomousGraph().automation!.testSourceGuard,true);
   assert.equal(createAutonomousGraph().automation!.reserveFinalizationBudget,true);
+  assert.equal(createAutonomousGraph().automation!.targetScopeGuard,true);
   assert.equal(createGraph().nodes[0]!.planning!.requiresApproval, true);
   const copy = validateGraphDocument(g);
   assert.deepEqual(copy.automation, g.automation);

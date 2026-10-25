@@ -5,6 +5,8 @@ import { createGraph } from "./graph";
 import { deriveRequirementLedger } from "./requirement_ledger";
 import { successBlockers } from "./success_gate";
 import { currentTestProof } from "./verification_evidence";
+import { NativeScopeTracker } from "./native_scope";
+import * as path from "node:path";
 
 const receipt = { id: "native", command: "npm test", exitCode: 0, environmentError: null };
 function report(verdict: string): string {
@@ -26,6 +28,16 @@ function completed(): SessionState {
 
 test("terminal success requires all requirements, observed tests and a final successful approval", () => {
   assert.deepEqual(successBlockers(completed()), []);
+});
+test("Kilo success requires positive scope proof for every attempt and retains prior violations across repairs",()=>{
+ const s=completed();s.targetProjectPath=path.resolve("scope-target");s.additionalAllowedPaths=[];s.graph.automation={maxRepairCycles:1,nativeApprovalReview:true,targetScopeGuard:true};
+ s.connections=[{id:"kilo",label:"Kilo",type:"kilo",binary:"kilo"}];s.bindings=Object.fromEntries(s.visits.map(v=>[v.nodeId,{connectionId:"kilo",modelId:"kilo/kilo-auto/free"}]));
+ assert.ok(successBlockers(s).some(x=>x.includes("대상 경계")));
+ for(const v of s.visits)for(const a of v.attempts)a.scopeAudit=new NativeScopeTracker(s.targetProjectPath,[s.targetProjectPath]).audit;
+ assert.deepEqual(successBlockers(s),[]);
+ const first=s.visits[0]!.attempts[0]!.scopeAudit!;first.inspectedCalls=1;first.outsideCalls=1;assert.ok(successBlockers(s).some(x=>x.includes("대상 밖")));
+ s.connections[0]!.type="codex";assert.ok(successBlockers(s).some(x=>x.includes("대상 밖")),"changing the provider cannot erase recorded outside access");
+ (first as unknown as {roots:null}).roots=null;assert.doesNotThrow(()=>successBlockers(s));assert.ok(successBlockers(s).some(x=>x.includes("대상 경계")));
 });
 const invalid: Record<string, (s: SessionState) => void> = {
   "implementation bypass": s => { s.visits = [visit("implementation")]; },
