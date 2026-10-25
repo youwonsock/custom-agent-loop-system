@@ -50,6 +50,7 @@ import { modelPricing } from "./model_pricing";
 import { productionHashes } from "./verification_sources";
 import { successBlockers } from "./success_gate";
 import { lockContract, contractViolation, verificationRunnerProblem } from "./verification_contract";
+import { deliverableProblem } from "./deliverables";
 import { sessionBudgetReason, pauseForBudget } from "./session_budget";
 import { stageDeadline, stageBudgetReason } from "./stage_budget";
 import { unscopedTerminationEvent } from "./process_command_policy";
@@ -331,6 +332,7 @@ export class GraphRuntime {
         const id = this.state.currentNodeId;
         if (id === "SUCCESS" || id === "PAUSED") {
           const blockers = id === "SUCCESS" ? successBlockers(this.state) : [];
+          if (id === "SUCCESS") { const problem = await deliverableProblem(this.state); if (problem) blockers.push(problem); }
           this.state.status = blockers.length ? "PAUSED" : id;
           this.state.statusReason = blockers.length
             ? `성공 조건 미충족: ${blockers.join(" ")} 수정·테스트·최종 승인을 다시 수행하도록 수동 재개하세요.`
@@ -525,6 +527,10 @@ export class GraphRuntime {
     if (node.type === "test") {
       const problem = await verificationRunnerProblem(this.state);
       if (problem) return { valid:true,reason:problem,failureKind:null,output:`검증 runner 준비 실패: ${problem}\n구현 역할에서 필수 runner를 수정한 뒤 다시 검증하세요.\nVERDICT: FAIL\n[PHASE_DONE]`,verdict:"FAIL",plans:[],researchBlocked:false,environmentBlocked:null };
+    }
+    if (["test", "review", "approval"].includes(node.type)) {
+      const problem = await deliverableProblem(this.state);
+      if (problem) return this.verificationFailure(node, problem);
     }
     let testInputs: Record<string, string> | null = null;
     if (this.state.graph.automation && node.type === "test") {
@@ -853,6 +859,16 @@ export class GraphRuntime {
         nodeProof,
         [...new Set(visit.attempts.flatMap(a=>a.readFiles??[]))],
       );
+      if (completion.valid && ["implementation", "test", "review", "approval"].includes(node.type) && !["FAIL", "REJECTED", "BLOCKED"].includes(completion.verdict ?? "")) {
+        const problem = await deliverableProblem(this.state);
+        if (problem) attempt.completionAccepted = false;
+        if (problem && node.type === "implementation") {
+          completion.valid = false; completion.failureKind = "incomplete_response"; completion.reason = problem;
+        } else if (problem) {
+          visit.verifiedCommands = []; delete visit.nodeTestProof; delete visit.verificationSourceHashes;
+          return this.verificationFailure(node, problem);
+        }
+      }
       if(nodeProofError&&completion.valid&&["FAIL","REJECTED"].includes(completion.verdict??""))completion.reason=`자체 Node 검증: ${nodeProofError}`;
       if(completion.valid&&completion.verdict==="PASS"&&node.type==="test"&&nodeProof)visit.nodeTestProof=nodeProof;
       if(completion.valid&&completion.verdict==="PASS"&&node.type==="test"&&sourceGuard&&guardedInputs)visit.verificationSourceHashes=guardedInputs;
@@ -879,6 +895,7 @@ export class GraphRuntime {
         await this.save();
         return completion;
       }
+      attempt.completionAccepted = false;
       const failure = classifyFailure(result, completion);
       failure.message = contextMessage(failure.message);
       failure.attemptId = id;
@@ -920,6 +937,8 @@ export class GraphRuntime {
         failure.message,
         result.assistantText,
         result.events,
+        node.type,
+        sourceGuard,
       );
       const decision = runner.decideRetry({
         failure,

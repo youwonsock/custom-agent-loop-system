@@ -246,6 +246,7 @@ if (args[0] === "debug" && args[1] === "config") {
       ).join("\n\n");
       if (prompt.includes("fixture:plan-external") && (calls.planning === 1 || prompt.includes("fixture:plan-external-always"))) text += "\nRead /tmp/unrequested-reference.txt before implementation.";
     } else if (type === "implementation") {
+      if (prompt.includes("fixture:contract-required-files") && !prompt.includes("required-files-never") && calls.implementation > 1) fs.writeFileSync("README.md", "Launch: npm start. Rules and controls. Tests: npm test.\n");
       fs.writeFileSync(
         path.join(process.cwd(), "artifact.txt"),
         prompt.includes("fixture:contract-early-fail")&&calls.implementation===1?"broken\n":"implemented goal\n",
@@ -320,6 +321,10 @@ if (args[0] === "debug" && args[1] === "config") {
         }
       }
       const own=JSON.parse(fs.readFileSync(".agent-graph/verification.json","utf8")).nodeTests;
+      const required=JSON.parse(fs.readFileSync(".agent-graph/verification.json","utf8")).requiredFiles;
+      if(required&&["review","approval"].includes(type)&&!(prompt.includes("fixture:contract-required-files-unread")&&calls[type]===1))for(const {path:file}of required){
+        emit({type:"tool_use",part:{id:`deliverable-${type}-${file}`,tool:"read",state:{status:"completed",input:{filePath:path.resolve(file)},output:fs.readFileSync(file,"utf8")}}});
+      }
       if(own&&["review","approval"].includes(type))for(const file of [...own.scopes.map(s=>s.file),"verification/node-tests/report.json"]){
         const output=fs.readFileSync(file,"utf8");
         emit({type:"tool_use",part:{id:`inspect-${type}-${file}`,tool:"read",state:{status:"completed",input:{filePath:path.resolve(file)},output}}});

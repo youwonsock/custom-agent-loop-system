@@ -1497,6 +1497,40 @@ test("supplied frozen contract executes a real protected assertion and JSON repo
   assert.equal(done.visits[2]!.attempts[0]!.commands![0]!.exitCode, 0);
   assert.equal(done.visits.at(-1)!.verdict, "APPROVED");
 });
+for (const startAtTest of [false,true]) test(`missing README is repaired only in implementation before a fresh test/review/approval cycle (test entry ${startAtTest})`,async t=>{
+ const s=await setup();t.after(s.cleanup);let graph=await contracted(s);
+ const file=path.join(s.target,".agent-graph/verification.json"),manifest=JSON.parse(await fs.readFile(file,"utf8"));
+ manifest.requiredFiles=[{path:"README.md",requirements:["REQ-001"]}];
+ const frozen=JSON.stringify(manifest);await fs.writeFile(file,frozen);
+ if(startAtTest){graph.entrypoints.start="test";graph.edges.find(e=>e.source==="test"&&e.outcome==="failure")!.target="planning";graph=await s.store.saveGraph(graph.id,graph,graph.revision);}
+ const id=await launch(s,graph,"fixture:contract-required-files");
+ const done=await wait(()=>s.store.readSession(id),"SUCCESS");
+ const implementation=done.visits.find(v=>v.nodeId==="implementation")!;
+ assert.equal(implementation.attempts.length,2);assert.equal(implementation.attempts[0]!.completionAccepted,false);
+ assert.match(implementation.attempts[0]!.message!,/README.md.*REQ-001/);
+ assert.equal(implementation.attempts[1]!.completionAccepted,true);
+ const tests=done.visits.filter(v=>v.nodeId==="test");assert.equal(tests.length,startAtTest?2:1);
+ if(startAtTest){assert.equal(tests[0]!.attempts.length,0);assert.equal(tests[0]!.verdict,"FAIL");assert.match(tests[0]!.output,/Implementation must create/);}
+ assert.equal(tests.at(-1)!.verdict,"PASS");assert.equal(done.visits.at(-1)!.verdict,"APPROVED");
+ assert.ok(done.visits.some(v=>v.nodeId==="review"&&v.verdict==="APPROVED"));
+ assert.deepEqual(done.processedRequests,[]);assert.equal(await fs.readFile(file,"utf8"),frozen);
+ assert.match(await fs.readFile(path.join(s.target,"README.md"),"utf8"),/Launch.*Rules.*Tests/);
+});
+test("an unrepaired README exhausts bounded completion recovery without invoking test or approval",async t=>{
+ const s=await setup();t.after(s.cleanup);const graph=await contracted(s);
+ const file=path.join(s.target,".agent-graph/verification.json"),manifest=JSON.parse(await fs.readFile(file,"utf8"));manifest.requiredFiles=[{path:"README.md",requirements:["REQ-001"]}];await fs.writeFile(file,JSON.stringify(manifest));
+ const id=await launch(s,graph,"fixture:contract-required-files-never"),done=await wait(()=>s.store.readSession(id),"PAUSED");
+ assert.equal(done.visits.some(v=>["test","review","approval"].includes(v.nodeId)),false);
+ assert.ok(done.visits.find(v=>v.nodeId==="implementation")!.attempts.every(a=>a.completionAccepted===false));
+ await assert.rejects(fs.access(path.join(s.target,"README.md")));assert.deepEqual(done.processedRequests,[]);
+});
+test("review and final approval cannot claim to inspect README without native read evidence",async t=>{
+ const s=await setup();t.after(s.cleanup);const graph=await contracted(s);
+ const file=path.join(s.target,".agent-graph/verification.json"),manifest=JSON.parse(await fs.readFile(file,"utf8"));manifest.requiredFiles=[{path:"README.md",requirements:["REQ-001"]}];await fs.writeFile(file,JSON.stringify(manifest));
+ const id=await launch(s,graph,"fixture:contract-required-files-unread"),done=await wait(()=>s.store.readSession(id),"SUCCESS");
+ for(const type of ["review","approval"]){const visit=done.visits.find(v=>v.nodeId===type)!;assert.equal(visit.attempts.length,2);assert.match(visit.attempts[0]!.message!,/README.md/);assert.equal(visit.attempts[0]!.completionAccepted,false);assert.ok(visit.attempts[1]!.readFiles!.includes("README.md"));}
+ assert.equal(done.visits.filter(v=>v.nodeId==="test").length,1);assert.deepEqual(done.processedRequests,[]);
+});
 test("own Node quality rejects empty assertions despite claimed PASS and repairs before independent final approval",async t=>{
  const s=await setup();t.after(s.cleanup);
  let graph=await s.store.createGraph({template:"autonomous"});graph.automation!.browserVerification=false;graph.automation!.maxRepairCycles=1;graph.defaultBinding=s.graph.defaultBinding;graph=await s.store.saveGraph(graph.id,graph,graph.revision);

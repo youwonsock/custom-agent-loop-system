@@ -24,6 +24,15 @@ export function validateManifest(value: unknown, requirements: string[], browser
   if (browser && !checks.some(c => isBrowserVerificationCommand(c.command))) throw Error("자율 웹 계약에는 설치된 플랫폼 browser verifier 검사가 필요합니다.");
   if (!checks.some(c => isBrowserVerificationCommand(c.command) || c.command === nodeTestVerificationCommand() || (value.protectedFiles as string[]).some(file => /\.(?:[cm]?js|py|ts)$/.test(file) && c.command.includes(file)))) throw Error("보호된 인수 검사 파일을 직접 실행하는 검사가 필요합니다. npm script 이름만으로 검사 충분성을 보장하지 않습니다.");
   const manifest:VerificationManifest = { version: 1, protectedFiles: [...value.protectedFiles] as string[], checks };
+  if (value.requiredFiles !== undefined) {
+    if (!Array.isArray(value.requiredFiles) || !value.requiredFiles.length || value.requiredFiles.length > 200) throw Error("필수 산출물 requiredFiles 목록이 잘못되었습니다.");
+    const files = new Set<string>();
+    manifest.requiredFiles = value.requiredFiles.map(raw => {
+      if (!plain(raw) || !relative(raw.path) || /[\0\r\n]|^[a-z]:/i.test(raw.path) || files.has(raw.path) || !Array.isArray(raw.requirements) || !raw.requirements.length || !raw.requirements.every(id => typeof id === "string" && requirements.includes(id)) || new Set(raw.requirements).size !== raw.requirements.length) throw Error("필수 산출물의 안전한 경로·고유성·요구사항 연결을 확인하세요.");
+      files.add(raw.path);
+      return {path:raw.path, requirements:[...raw.requirements] as string[]};
+    });
+  }
   if (value.nodeTests !== undefined) manifest.nodeTests = validateNodeTestPolicy(value.nodeTests,manifest);
   return manifest;
 }

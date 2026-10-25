@@ -23,6 +23,7 @@ import {
 } from "./verification_evidence";
 import { renderStructuredReport } from "./report_protocol";
 import { missingContractReceipts } from "./verification_contract";
+import { deliverableInspectionProblem } from "./deliverables";
 import { nodeTestProofProblem, nodeScopeAuditProblem, nodeInspectionProblem } from "./node_test_policy";
 export const requiresResearch = (goal: string): boolean =>
   /(?:인터넷|웹)\s*(?:을|를|에서|으로)?\s*(?:검색|조사|찾)|\b(?:search|browse|research|look\s*up)(?:\s+the)?\s+(?:internet|web)\b|\b(?:internet|web)\s+(?:search|research)\b/i.test(
@@ -245,6 +246,10 @@ export function validateCompletion(
       );
   }
   if (answer.verdict === "PASS" || answer.verdict === "APPROVED") {
+    if (answer.verdict === "APPROVED") {
+      const inspection = deliverableInspectionProblem(contract?.manifest, inspectedFiles);
+      if (inspection) return fail(inspection);
+    }
     if(answer.verdict==="APPROVED"&&contract?.manifest?.nodeTests){
       const inspection=nodeInspectionProblem(contract.manifest.nodeTests,inspectedFiles);
       if(inspection)return fail(inspection);

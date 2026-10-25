@@ -18,6 +18,8 @@ export function buildRecoveryMessage(
   message: string,
   assistantText: string,
   events: Record<string, unknown>[],
+  role?: AgentNode["type"],
+  frozenTest = false,
 ): string {
   const lines = [
     `[${kind}] ${message}`,
@@ -36,6 +38,8 @@ export function buildRecoveryMessage(
           : [];
       })
       .slice(-3);
+    if (role === "test" && frozenTest) return [...lines,
+      "This is the frozen TEST role. Never repair product, documentation, tests, package or config, including README. Use only this invocation's available inspection tools and exact registered foreground checks. Missing files/coverage or failing checks require a FAIL report with file, requirement and observed cause for implementation. Do not call write/edit, use heredocs, create a replacement report file, request broader permissions or switch models. All repairs belong to implementation and require a fresh full test cycle.", ...errors].join("\n");
     lines.push(
       "The preceding CLI aborted repeated unavailable tools or malformed tool input. This is a fresh bounded attempt. Follow this invocation's actual tool protocol, supply all required fields, never submit {} and never repeat the same invalid call. Kernel-isolated Kilo roles use bash only: read-only roles inspect with standalone cat/ls and never execute tests or writes; implementation uses small quoted heredocs. Other Kilo invocations use native read/glob/grep in read-only roles and bash(command, description) plus write(filePath, content) where available. Never request disabled tools or broader permissions. Do not weaken checks or switch models.",
       ...errors,
@@ -94,9 +98,11 @@ export function buildNodePrompt(
       ? "The operator granted full filesystem access for this session."
       : `Write only inside these approved roots: ${[state.targetProjectPath, ...state.additionalAllowedPaths].join(", ")}. Report exact additional paths if needed.`,
     "=== ROLE CONTRACT ===",
-    structured && node.type === "test" ? responsibilities.test.replace("report VERDICT: BLOCKED and the exact command", "report JSON verdict BLOCKED and the exact command") : responsibilities[node.type],
+    node.type === "test" && state.graph.automation?.testSourceGuard
+      ? "Execute the exact registered foreground checks against frozen sources and inspect results. Never write or repair product, documentation (including README), tests, package or configuration. Missing deliverables/coverage and failed assertions are FAIL with concrete file, requirement and diagnostics for implementation. Unavailable external permissions/authentication/tooling are BLOCKED with observed evidence. Report in final assistant text; never create a report file or request routine operator action for a product repair."
+      : structured && node.type === "test" ? responsibilities.test.replace("report VERDICT: BLOCKED and the exact command", "report JSON verdict BLOCKED and the exact command") : responsibilities[node.type],
     `=== NODE INSTRUCTIONS ===\n${node.instructions || "(no additional instructions)"}`,
-    "Use your CLI configuration for MCP, search, skills and hooks. Do not assume a configured tool succeeded; cite observed evidence.",
+    "Use only the tools available in this invocation. Do not assume a configured tool succeeded; cite observed evidence.",
     "=== PRIOR OBSERVED EVIDENCE ===",
     ...evidence.map(
       (v) =>
@@ -110,6 +116,11 @@ export function buildNodePrompt(
     ),
     structured ? "The engine binds JSON judgments to frozen check IDs and observed native receipts. Never invent a passed check." : "For each requirement report: [REQUIREMENT_EVIDENCE]\nREQ_ID: REQ-001\nSTATUS: SATISFIED|PARTIAL|FAILED|BLOCKED\nEVIDENCE: concrete observed check or artifact\n[/REQUIREMENT_EVIDENCE]. Never invent a passed check.",
   ];
+  if (node.type === "implementation" && state.graph.automation) {
+    const failed = state.visits.filter(v => v.id !== visit.id && v.status === "failed" && state.graph.nodes.some(n => n.id === v.nodeId && ["test", "review", "approval"].includes(n.type))).at(-1);
+    if (failed) lines.push("=== CURRENT REPAIR HANDOFF ===", `${failed.nodeId} / ${failed.id}\n${failed.output.slice(-12000)}`, "Repair the named missing deliverable or failed assertion first, including README when required. Preserve protected files and completed work. Handoff to a fresh complete test visit, then independent review and final approval; prior passing receipts cannot approve repaired sources. Never perform final approval from implementation.");
+  }
+  if (state.verificationContract?.manifest?.requiredFiles?.length) lines.push("=== REQUIRED DELIVERABLE FILES ===", JSON.stringify(state.verificationContract.manifest.requiredFiles), "Implementation must prepare every listed nonempty regular target file, including documentation, before handoff. File presence alone proves no behavior or documentation quality; tests and independent review remain mandatory. Review and approval must independently read EACH required file with native read or standalone cat/Get-Content and judge its content against the linked requirements. When required, README must describe actual launch, rules, controls and test commands matching the real scripts. Test/review/approval report omissions; they never repair them.");
   if(state.graph.automation?.guardOwnedProcesses)lines.push("PROCESS OWNERSHIP: Broad process-name termination is blocked before execution in implementation and test. Never use pkill/killall/taskkill /IM/Stop-Process -Name or kill via pgrep. Close only owned server objects/child handles or recorded owned PIDs. Keep HTTP tests isolated with PORT=0 and cleanup registered before assertions; never kill another listener to make a test pass.");
   if(state.graph.automation?.targetScopeGuard)lines.push("TARGET SCOPE: Kilo filesystem tools are restricted to the target and explicitly approved additional roots in EVERY role, including planning/review/approval. Use relative target paths. Never enumerate parent folders, global configuration, credentials or session metadata. Scope-denied queries were blocked before execution: correct the path and continue inside the target. Do not request broader access to satisfy routine work. Execute supplied platform verifier commands as given; never search their installation. Output AGENT_REPORT in the final assistant response; test/review/approval must not write report files.");
   if(visit.stageDeadlineAt)lines.push("=== FIXED ROLE BUDGET ===",JSON.stringify({roleDeadlineAt:visit.stageDeadlineAt,remainingSeconds:Math.max(0,Math.floor((Date.parse(visit.stageDeadlineAt)-Date.now())/1000))}),"This deadline survives retries and automatic recovery and preserves time/calls for verification and approval. Do not restart or expand it.");
@@ -124,7 +135,7 @@ export function buildNodePrompt(
     state.verificationContract?.status === "locked" ? JSON.stringify(state.verificationContract.manifest) : JSON.stringify({version:1,protectedFiles:["tests/verify-acceptance.mjs"],checks:[{id:"acceptance",command:"node tests/verify-acceptance.mjs",requirements:state.requirements.items.map(r=>r.id)}]}),
     state.verificationContract?.status === "locked"
       ? "This supplied/frozen manifest and every protected file must stay byte-for-byte unchanged, even in implementation repairs. All registered checks require actual exit-zero receipts in the test role. Never weaken or bypass a protected check, change npm scripts to replace it, or author its result. Refer to check IDs in plans rather than copying installed absolute paths."
-      : "Implementation must prepare .agent-graph/verification.json before entering test. This is its schema/example; author meaningful acceptance tests, map EVERY fixed REQ ID to one or more check IDs, and list their files as protectedFiles. Commands must be single foreground verification runners, not reports or masked scripts. At least one protected acceptance runner must run directly; web contracts must also register the exact installed browser verifier. The engine freezes this contract at the test boundary; later repairs change production, never the protected checks. If the user supplied acceptance files, protect and preserve them. Planning is read-only: describe the contract without writing it.",
+      : "Implementation must prepare .agent-graph/verification.json before entering test. This is its schema/example; author meaningful acceptance tests, map EVERY fixed REQ ID to one or more check IDs, and list their files as protectedFiles. Declare every required product/documentation file in requiredFiles:[{path:'README.md',requirements:['REQ-001']}], using the actual fixed requirement IDs. Required files are mutable deliverables, separate from frozen protected checks. Commands must be single foreground verification runners, not reports or masked scripts. At least one protected acceptance runner must run directly; web contracts must also register the exact installed browser verifier. The engine freezes this contract at the test boundary; later repairs change production, never the protected checks. If the user supplied acceptance files, protect and preserve them. Planning is read-only: describe the contract without writing it.",
   );
   if (state.graph.automation) {
     lines.push(

@@ -124,6 +124,7 @@ export interface VerificationManifest {
   version: 1;
   protectedFiles: string[];
   checks: Array<{ id: string; command: string; requirements: string[] }>;
+  requiredFiles?: Array<{ path: string; requirements: string[] }>;
   nodeTests?: NodeTestPolicy;
 }
 export interface NodeTestPolicy {

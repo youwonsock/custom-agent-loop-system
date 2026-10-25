@@ -7,6 +7,7 @@ import { currentVerificationSources } from "./test_source_guard";
 import { sessionBudgetReason } from "./session_budget";
 import { scopeEvidenceProblem } from "./native_scope";
 import { programIoEvidenceProblem } from "./program_io";
+import { deliverableInspectionProblem } from "./deliverables";
 
 /** Every path to SUCCESS, including recovered snapshots, passes this gate. */
 export function successBlockers(state: SessionState): string[] {
@@ -42,6 +43,8 @@ export function successBlockers(state: SessionState): string[] {
       if(type==="review"||type==="approval"){
         const inspection=nodeInspectionProblem(state.verificationContract?.manifest?.nodeTests,[...new Set(visit.attempts.flatMap(a=>a.readFiles??[]))]);
         if(inspection)blockers.push(`${visit.nodeId}: ${inspection}`);
+        const deliverables=deliverableInspectionProblem(state.verificationContract?.manifest,[...new Set(visit.attempts.flatMap(a=>a.readFiles??[]))]);
+        if(deliverables)blockers.push(`${visit.nodeId}: ${deliverables}`);
       }
     }
     const missing = contractProofMissing(state, currentTestProof(state, final));
