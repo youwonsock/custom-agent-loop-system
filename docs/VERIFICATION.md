@@ -543,3 +543,17 @@ Actions 실행은 네 작업 모두 성공했고, OS별 플랫폼 artifact 3개�
 자연 SUCCESS 뒤 workflow stop 요청 없이 소유 관리 서버를 종료했다. 기록 PID **163개**·포트 **9개**가 모두 종료됐고 해당 실행 폴더 cwd 잔류 프로세스는 0개다. 정리 전후 SUCCESS 상태도 유지했다. 상세 자료: `/Users/supercent/Desktop/agent graph test/kilo-native-scope-final-20261025-144406/TEST_RESULTS.md`, `RESULTS.json`, `FINDINGS.md`, `results/native-scope-audit.json`, `results/program-io-observations.json`, `results/cleanup-verification.json`. 사용자 홈 인증 설정과 과거 세션 로그는 수집하지 않았다.
 
 첫 개발 시험 `b2bb4a7c-879c-44ed-82e4-91f0a4a761bd` / `3983c0850d43f7a0926f4ac4c446ffe513a48758`는 정상 조회/공백 절대 경로 오차단 때문에 고정 마감에 **PAUSED / NOT_SUCCESS**로 끝났다(약 42분·17호출·수동 제어 0회). 범위 감사 17개/원시 이벤트 132개는 일치했고 실행 전 차단 1건·실제 외부 조회 0건이었지만 Test·검토·최종 승인은 미완료였다. 기록 PID 161개·포트 10개도 정리했다. 이 실패를 성공으로 세지 않고 구문 처리를 보완해 전체 회귀 검사를 다시 통과한 뒤 위 별도 빈 프로젝트로 재검증했다. 첫 시험 보고서는 `/Users/supercent/Desktop/agent graph test/kilo-native-scope-20261025-134908/TEST_RESULTS.md`에 보존한다.
+
+## Kilo 프로그램 내부 I/O VM 격리 및 실제 검증 — 2026-10-25
+
+검증 코드: `ba13d63c3240c919a0b7a572c09189c36ac811b0`. macOS 26.6.2 arm64 / Node 24.21.0 / Kilo 7.4.23 / Apple container 1.6.0에서 코어 **299 통과·Windows ConPTY 1 제외·실패 0(총 300)**, 경계 검사 15개, 도구 10/10, GUI 25/25, 실행기 4/4, 패키지 84개·실제 설치 smoke·운영 npm audit 0건을 확인했다. 새 Windows/Linux 원격 CI·push·main 병합은 수행하지 않았으며 이번 코드의 Actions 링크는 없다. 의존성 버전·lockfile·REST/SSE·공개 CLI·저장 버전은 유지했다.
+
+새 자율 Kilo 프리셋의 `programIoGuard`는 명령과 자식을 네트워크 없는 VM에 넣고 대상과 읽기 전용 공개 실행기만 공유한다. 테스트/검토의 쓰기 범위도 VM mount로 제한한다. 준비·이미지·경계/서명 증거가 없으면 BLOCKED이며 Seatbelt 단독 경계로 대체하지 않는다. 모델 이력에는 서명 확인 후 실제 제품 명령을 보여 주고 원시 기록은 보존한다. SDK는 대상 밖 세션 전용 HOME에 재사용하며 호출별 키·정책은 분리한다. 경로 별칭과 실행 전 거절 오집계도 보완했다. 실제 CLI+로컬 가짜 모델에서 거절 2개는 성공 receipt가 되지 않았고 정상 명령 3개는 VM에서 끝났다.
+
+실제 `kilo/kilo-auto/free` 세션 `77771784-8a19-4b8c-8424-15d1f02dae34`는 18:48:26~19:17:17 KST, **28.85분·12 CLI 호출·수동 제어 0회**로 자연 PAUSED다. 보호 파일 6개만 제공했고 이전 게임/자체 테스트를 복사하지 않았다. Node **27/27**(엔진9·컨트롤러6·저장7·raw HTTP5), no-op12·제품 결함12 탐지, 엔진13/4,000비교·컨트롤러12·실제 Chromium4·플랫폼 브라우저39단계가 통과했다. 그러나 README가 누락됐고 테스트 역할의 작성 시도를 실행 전에 차단해 FAIL→구현으로 반환했다. 실제 테스트 소스 변경은 0이며 기존 근거는 무효화됐다. 후속 구현은 무료 공급자의 가입/나중 재시도 제한 응답을 6회 관측한 뒤 유한 복구 한도에서 멈췄다. 원래/격리 환경 OAuth 목록은 같지만 토큰·할당량 유효성을 단정하지 않는다. **승인된 최신 Test PASS·독립 검토·최종 승인 미완료이므로 전체 판정은 NOT_SUCCESS다.** 검사 산출물만으로 SUCCESS를 만들지 않았다.
+
+서명 VM 명령 **80/80**의 종료·삭제를 확인했고 비정상 종료코드10건도 보존했다. 미격리/미완료/서명 오류는 0, native 파일 이벤트40·실행 전 차단5·관측 외부 조회0·미확정0이며 집계가 일치했다. 이는 VM·음성 검사·서명 근거이며 호스트 syscall 전수 추적이나 신뢰하는 공급자 CLI/호스트 관리자/커널의 무결성 보장은 아니다. 강한 어댑터는 위 macOS 환경에서 검증했고 미지원 환경은 실행을 차단한다. 실제 청구액·공급자 내부 요청/토큰은 측정하지 않았다.
+
+종료 뒤 workflow stop 없이 관리 포트50083·기록 호스트 식별20개·소유 VM 잔류0과 이번 런타임 데몬 종료를 확인했다. 게스트 PID를 호스트 PID로 종료하지 않았으며 PAUSED 상태 바이트·dist205개·이미지/바이너리 해시도 유지했다. 상세 결과: `/Users/supercent/Desktop/agent graph test/kilo-program-io-verified-20261025-184245/TEST_RESULTS.md`, `RESULTS.json`, `FINDINGS.md`, `results/program-io-audit.json`, `results/cleanup-verification.json`.
+
+앞선 `15d8e61` / `875adf84-9c70-4d3b-843a-4b84ee1663c4`는 이력의 브로커 명령 모방으로 개발 중지1회·STOPPED, `8979b09` / `6ffbecba-b4dd-4214-9f10-9c55db73b830`는 표식 없는 검사 거절2건을 미격리로 오집계해 제어0회·BLOCKED였다. 원시 기록·해시·정리 결과를 각각 Desktop 실행 폴더에 보존했으며 이 실패를 성공으로 세지 않았다.
