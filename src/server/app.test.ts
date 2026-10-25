@@ -1440,7 +1440,8 @@ test("autonomous runtime detects hidden production writes even without native fi
   const tests = done.visits.filter((v) => v.nodeId === "test");
   assert.equal(tests.length, 2);
   assert.equal(tests[0]!.verdict, "FAIL");
-  assert.match(tests[0]!.output, /제품.*변경/);
+  assert.match(tests[0]!.output, /(?:제품|소스).*변경/);
+  assert.ok(tests[0]!.attempts.some(a => a.fileMutation), "the actual source mutation must be retained as evidence");
   assert.equal(tests[1]!.verdict, "PASS");
 });
 

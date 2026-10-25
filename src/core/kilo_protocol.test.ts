@@ -76,14 +76,14 @@ test("native hook execution preserves the actual nonzero test exit code as evide
 test("owned output preparation preserves a real failing check exit and never becomes a second check",async t=>{
  const root=await fs.mkdtemp(path.join(os.tmpdir(),"prepared check-"));t.after(()=>fs.rm(root,{recursive:true,force:true}));await fs.mkdir(path.join(root,"tests"));await fs.writeFile(path.join(root,"tests/verify-failure.cjs"),"console.error('real failed assertion');process.exit(23);");
  const command="node tests/verify-failure.cjs > verification/check.txt 2>&1",hooks=kiloCheckHooks({cwd:root,commands:[command],testSourcesReadOnly:true,scopeRoots:[root]});
- const output={args:{command:`mkdir -p '${root}/verification' && node tests/verify-failure.cjs > '${root}/verification/check.txt' 2>&1 | tail -20`}};
+ const nativeRoot=root.split(path.sep).join("/");
+ const output={args:{command:`mkdir -p '${nativeRoot}/verification' && node tests/verify-failure.cjs > '${nativeRoot}/verification/check.txt' 2>&1 | tail -20`}};
  await hooks["tool.execute.before"]({tool:"bash"},output);
  if(process.platform!=='win32')assert.ok(output.args.command.startsWith('mkdir -p verification && '),'native permission review sees the owned relative directory');
- const shell=process.platform==="win32"?process.env.ComSpec??"cmd.exe":"/bin/sh";
- // Windows cmd uses double quotes for the literal output path.
- const executable=process.platform==="win32"?output.args.command.replaceAll("'",'"'):output.args.command;
- const result=spawnSync(shell,process.platform==="win32"?["/d","/s","/c",executable]:["-c",executable],{cwd:root,encoding:"utf8",env:{...process.env,PATH:path.dirname(process.execPath)+path.delimiter+process.env.PATH}});
- assert.equal(result.status,23);assert.match(await fs.readFile(path.join(root,"verification/check.txt"),"utf8"),/real failed assertion/);
+ // The native tool is bash: cmd.exe does not implement its mkdir/quote grammar.
+ const shell=process.platform==="win32"?path.join(process.env.ProgramFiles??"C:\\Program Files","Git","bin","bash.exe"):"/bin/sh";
+ const result=spawnSync(shell,["-c",output.args.command],{cwd:root,encoding:"utf8",env:{...process.env,PATH:path.dirname(process.execPath)+path.delimiter+process.env.PATH}});
+ assert.equal(result.status,23,JSON.stringify({error:result.error?.message,stdout:result.stdout,stderr:result.stderr}));assert.match(await fs.readFile(path.join(root,"verification/check.txt"),"utf8"),/real failed assertion/);
  const tracker=new CommandTracker(root,true);tracker.observe({type:"tool_use",part:{id:"prepared-failure",tool:"bash",state:{status:"completed",input:output.args,metadata:{exit:result.status}}}});
  assert.equal(tracker.receipts.length,1);assert.equal(tracker.receipts[0]!.exitCode,23);
  assert.equal(isVerificationCommand("mkdir -p verification && npm test && node tests/verify-other.mjs",root),false);
