@@ -14,6 +14,7 @@ import { SessionState } from "../shared/domain";
 import { createAutonomousGraph, validateGraphDocument } from "./graph";
 import { ProcessSupervisor } from "./process_supervisor";
 import { buildInvocation } from "./invocation";
+import { preExecutionDenied } from './event_evidence';
 import { vmRuntimeAvailable } from "./program_io_vm";
 
 const mac=process.platform==="darwin",sq=(s:string)=>"'"+s.replace(/'/g,"'\\''")+"'";
@@ -53,10 +54,11 @@ test("signed broker receipts reject modified/replayed/unwrapped evidence and pre
 });
 test("isolated hooks disable alternate tool hosts and retain strict test/readonly command policies",{skip:!mac},async t=>{
   const{policy,target}=await workspace(t);const hooks=kiloCheckHooks({cwd:target,commands:["npm test"],scopeRoots:[target],programIo:policy,testSourcesReadOnly:true});
-  for(const tool of ["read","write","glob","task","mcp_read","lsp"])await assert.rejects(hooks['tool.execute.before']({tool},{args:{filePath:path.join(target,"inside.txt")}}),/IO_UNAVAILABLE/);
+  for(const tool of ["read","write","glob","task","mcp_read","lsp"])await assert.rejects(hooks['tool.execute.before']({tool},{args:{filePath:path.join(target,"inside.txt")}}),/IO_DENIED/);
   await assert.rejects(hooks['tool.execute.before']({tool:'bash'},{args:{command:'node -e "0"'}}),/TEST_POLICY/);
   const output={args:{command:"npm test"}};await hooks['tool.execute.before']({tool:'bash'},output);assert.equal(unwrapProgramCommand(output.args.command,policy)!.command,"npm test");
-  const readonly=kiloCheckHooks({cwd:target,commands:[],scopeRoots:[target],programIo:policy,readOnlyRole:true});await assert.rejects(readonly['tool.execute.before']({tool:'bash'},{args:{command:'mkdir -p verification'}}),/IO_UNAVAILABLE/);
+  const readonly=kiloCheckHooks({cwd:target,commands:[],scopeRoots:[target],programIo:policy,readOnlyRole:true});await assert.rejects(readonly['tool.execute.before']({tool:'bash'},{args:{command:'mkdir -p verification'}}),/IO_DENIED/);
+  const denied=new ProgramIoTracker(policy);denied.normalize({type:'tool_use',part:{tool:'bash',state:{status:'error',input:{command:'mkdir -p verification'},error:'Error: [AGENT_GRAPH_IO_DENIED] Read-only role'}}});assert.equal(denied.finish().unwrappedCommands,0);assert.equal(preExecutionDenied('[AGENT_GRAPH_IO_UNAVAILABLE] lost VM',{}),false);
 });
 test("signed after-hook evidence authenticates CLI versions retaining original tool inputs",{skip:!mac},async t=>{
  const{policy,target}=await workspace(t);const hooks=kiloCheckHooks({cwd:target,commands:[],scopeRoots:[target],programIo:policy});

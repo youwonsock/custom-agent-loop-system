@@ -11,6 +11,7 @@ import { VmPolicy, prepareVmPolicy, vmCommandArguments, removeVm, cleanupPolicyV
 
 export const IO_UNAVAILABLE = "[AGENT_GRAPH_IO_UNAVAILABLE]";
 export const IO_VIOLATION = "[AGENT_GRAPH_IO_VIOLATION]";
+export const IO_DENIED = "[AGENT_GRAPH_IO_DENIED]";
 export interface ProgramIoPolicy {
   version: 1; id: string; cwd: string; directory: string; node: string;
   runner: string; bootstrap: string; profile: string; profileDigest: string;
