@@ -17,7 +17,9 @@ export function prepareProgramIoRuntime():void {
   const metadata=JSON.parse(fs.readFileSync(path.join(dist,"program_io_dependencies.json"),"utf8"));
   const lock=fs.readFileSync(path.join(dist,"program_io_package_lock.json"));
   if(createHash("sha256").update(lock).digest("hex")!==metadata.lockDigest)throw Error("Packaged runtime dependency lock is invalid.");
-  const image=process.env.AGENT_GRAPH_IO_SETUP_IMAGE??`agent-graph-io-runtime:node24-${metadata.lockDigest.slice(0,12)}`;
+  let prepared:{image?:string;lockDigest?:string}|null=null;
+  try{prepared=JSON.parse(fs.readFileSync(descriptor,"utf8"));}catch{}
+  const image=process.env.AGENT_GRAPH_IO_SETUP_IMAGE??(prepared?.lockDigest===metadata.lockDigest&&prepared.image?prepared.image:`agent-graph-io-runtime:node24-${metadata.lockDigest.slice(0,12)}`);
   let digest:string|null=null;try{digest=imageDigest(binary,image);}catch{}
   if(!digest){
     const disk=fs.statfsSync(root);if(disk.bavail*disk.bsize<8*1024**3)throw Error("Building the runtime requires 8 GiB free space. No existing files are automatically deleted.");
