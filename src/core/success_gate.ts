@@ -6,11 +6,13 @@ import { contractProofMissing } from "./verification_contract";
 import { currentVerificationSources } from "./test_source_guard";
 import { sessionBudgetReason } from "./session_budget";
 import { scopeEvidenceProblem } from "./native_scope";
+import { programIoEvidenceProblem } from "./program_io";
 
 /** Every path to SUCCESS, including recovered snapshots, passes this gate. */
 export function successBlockers(state: SessionState): string[] {
   const blockers: string[] = [];
   const scopeProblem=scopeEvidenceProblem(state);if(scopeProblem)blockers.push(scopeProblem);
+  const ioProblem=programIoEvidenceProblem(state);if(ioProblem)blockers.push(ioProblem);
   if(state.graph.automation?.verificationContract&&state.graph.automation.authoredNodeTests&&state.verificationContract?.manifest?.checks.some(c=>/^npm test(?:\s|$)/.test(c.command))&&!state.verificationContract.manifest.nodeTests)blockers.push("자체 Node 테스트 계약이 누락되었습니다.");
   const budget = sessionBudgetReason(state, false, state.status === "SUCCESS" ? Date.parse(state.updatedAt) : Date.now());
   if (budget) blockers.push(budget);

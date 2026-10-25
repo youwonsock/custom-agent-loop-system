@@ -54,6 +54,7 @@ import { sessionBudgetReason, pauseForBudget } from "./session_budget";
 import { stageDeadline, stageBudgetReason } from "./stage_budget";
 import { unscopedTerminationEvent } from "./process_command_policy";
 import { SCOPE_VIOLATION } from "./native_scope";
+import { IO_UNAVAILABLE, IO_VIOLATION } from "./program_io";
 import { nodeTestScript } from "./node_test_policy";
 import { TEST_POLICY, TEST_FAILED, testSources, sourceDifference, testPolicyEvent, failedRegisteredCheck, currentVerificationSources } from "./test_source_guard";
 
@@ -587,7 +588,9 @@ export class GraphRuntime {
         );
         return null;
       }
-      const invocation = await buildInvocation(connection, binding, node, {
+      const id = randomUUID(),logPath=path.join(this.store.visitDir(this.state.id,visit.id),`${id}.log`);
+      let invocation:Awaited<ReturnType<typeof buildInvocation>>;
+      try { invocation = await buildInvocation(connection, binding, node, {
         prompt: buildNodePrompt(this.state, node, visit, recoveryMessage),
         cwd: this.state.targetProjectPath,
         fullAccess: this.state.accessMode === "full_access",
@@ -596,6 +599,7 @@ export class GraphRuntime {
         testSourcesReadOnly:sourceGuard&&node.type==="test",
         guardOwnedProcesses:this.state.graph.automation?.guardOwnedProcesses,
         ...(connection.type==="kilo"&&this.state.graph.automation?.targetScopeGuard?{scopeRoots:[this.state.targetProjectPath,...this.state.additionalAllowedPaths]}:{}),
+        ...(connection.type==="kilo"&&this.state.graph.automation?.programIoGuard?{programIoGuard:{directory:path.join(this.store.visitDir(this.state.id,visit.id),`${id}-io`),protectedFiles:[".agent-graph/verification.json",...(this.state.verificationContract?.manifest?.protectedFiles??[])],expiresAt:Math.min(deadline,this.state.executionBudget?Date.parse(this.state.executionBudget.deadlineAt):Infinity)}}:{}),
         ...(this.state.verificationContract?.manifest?.nodeTests?{verificationAliases:{[nodeTestScript(this.state.verificationContract.manifest.nodeTests)]:this.state.verificationContract.manifest.checks.find(c=>c.id===this.state.verificationContract!.manifest!.nodeTests!.suiteCheckId)!.command}}:{}),
         ...(this.state.graph.automation?.verificationContract && this.state.verificationContract?.status === "locked"
           ? {verificationCommands: this.state.verificationContract.manifest!.checks.map(c => c.command)} : {}),
@@ -603,13 +607,11 @@ export class GraphRuntime {
           this.state.bindings[v.nodeId]?.connectionId === connection.id && v.attempts.some(a =>
             a.failureKind === "tool_arguments" && /for the "write" tool/.test(a.message ?? ""))),
         ...(nextResume ? { resumeId: nextResume } : {}),
-      });
+      }); } catch(error) {
+        if(!messageOf(error).includes(IO_UNAVAILABLE))throw error;
+        this.state.status="BLOCKED";this.state.statusReason=messageOf(error);visit.status="paused";await this.save();return null;
+      }
       if (await this.poll()) return null; // Includes bounded native config preflight time.
-      const id = randomUUID(),
-        logPath = path.join(
-          this.store.visitDir(this.state.id, visit.id),
-          `${id}.log`,
-        );
       const attempt: AttemptRecord = {
         id,
         number: visit.attempts.length + 1,
@@ -674,7 +676,7 @@ export class GraphRuntime {
               value &&
               value.length >= 4,
           )
-          .map(([, value]) => value!),
+          .map(([, value]) => value!).concat(invocation.programIoPolicy?[invocation.programIoPolicy.privateKey]:[]),
         pollControl: () => claimNextControlRequest(this.controls()),
         ...(connection.type==="kilo"&&this.state.graph.automation?.targetScopeGuard?{scopeRoots:[this.state.targetProjectPath,...this.state.additionalAllowedPaths]}:{}),
         ...(this.state.graph.automation?.guardOwnedProcesses?{eventPolicy:(event:Record<string,unknown>)=>{policyReason=unscopedTerminationEvent(event);return policyReason;}}:{}),
@@ -734,6 +736,7 @@ export class GraphRuntime {
       attempt.commands = result.evidence.commands;
       attempt.readFiles=result.evidence.readFiles;
       attempt.scopeAudit=result.evidence.scopeAudit;
+      attempt.programIoAudit=result.evidence.programIoAudit;
       attempt.fileMutation = result.evidence.fileMutation;
       if (result.evidence.fileMutation && !(sourceGuard&&node.type==="test")) {visit.verifiedCommands = [];delete visit.nodeTestProof;}
       if (["test", "review", "approval"].includes(node.type))
@@ -765,6 +768,9 @@ export class GraphRuntime {
       if (result.controlRequest) {
         await this.finishControl(result.controlRequest);
         return null;
+      }
+      if(attempt.programIoAudit&&(attempt.programIoAudit.invalidReceipts||attempt.programIoAudit.unresolvedCommands||attempt.programIoAudit.unwrappedCommands)){
+        this.state.status="BLOCKED";this.state.statusReason=`${IO_VIOLATION} Kernel-isolated command evidence is incomplete or invalid.`;visit.status="paused";await this.save();return null;
       }
       if(attempt.scopeAudit&&(attempt.scopeAudit.outsideCalls||attempt.scopeAudit.unresolvedCalls)){
         attempt.completionAccepted=false;attempt.failureKind="role_violation";attempt.message=`${SCOPE_VIOLATION} 대상 밖 native 조회 또는 미확정 실행이 관측돼 실행을 차단했습니다.`;

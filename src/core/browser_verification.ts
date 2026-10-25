@@ -99,11 +99,8 @@ export async function runBrowserVerification(options: {
       modulePath = require.resolve("playwright");
     }
     const playwright = require(modulePath) as typeof import("playwright");
-    await fs.access(playwright.chromium.executablePath()).catch(() => {
-      throw new Error(
-        "Chromium unavailable. Install Playwright and Chromium in the target through normal approved CLI tools; never bypass denied permissions.",
-      );
-    });
+    // Headless-only Playwright installations intentionally omit the full
+    // Chromium executable. The actual headless launch below is authoritative.
     controller.signal.throwIfAborted();
     const reservation = reservePort();
     await new Promise<void>((resolve, reject) => {

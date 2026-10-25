@@ -64,7 +64,9 @@ export function validateGraphDocument(input: unknown): AgentGraphDocument {
       (g.automation.testSourceGuard !== undefined && typeof g.automation.testSourceGuard !== "boolean") ||
       (g.automation.reserveFinalizationBudget !== undefined && typeof g.automation.reserveFinalizationBudget !== "boolean") ||
       (g.automation.guardOwnedProcesses !== undefined && typeof g.automation.guardOwnedProcesses !== "boolean") ||
-      (g.automation.targetScopeGuard !== undefined && typeof g.automation.targetScopeGuard !== "boolean"))
+      (g.automation.targetScopeGuard !== undefined && typeof g.automation.targetScopeGuard !== "boolean") ||
+      (g.automation.programIoGuard !== undefined && typeof g.automation.programIoGuard !== "boolean") ||
+      (g.automation.programIoGuard === true && g.automation.targetScopeGuard !== true))
   )
     throw new AppError(
       400,
@@ -182,6 +184,7 @@ export function validateGraphDocument(input: unknown): AgentGraphDocument {
             ...(g.automation.reserveFinalizationBudget !== undefined ? {reserveFinalizationBudget:g.automation.reserveFinalizationBudget} : {}),
             ...(g.automation.guardOwnedProcesses !== undefined ? {guardOwnedProcesses:g.automation.guardOwnedProcesses} : {}),
             ...(g.automation.targetScopeGuard !== undefined ? {targetScopeGuard:g.automation.targetScopeGuard} : {}),
+            ...(g.automation.programIoGuard !== undefined ? {programIoGuard:g.automation.programIoGuard} : {}),
           },
         }
       : {}),
@@ -286,6 +289,7 @@ export function createAutonomousGraph(
     reserveFinalizationBudget: true,
     guardOwnedProcesses:true,
     targetScopeGuard:true,
+    programIoGuard:true,
   };
   graph.nodes.find((n) => n.type === "planning")!.planning = {
     requiresApproval: false,

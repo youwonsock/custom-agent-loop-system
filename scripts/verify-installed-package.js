@@ -1,7 +1,7 @@
 const fs = require("node:fs/promises");
 const os = require("node:os");
 const path = require("node:path");
-const { execFileSync, spawn } = require("node:child_process");
+const { execFileSync, spawn, spawnSync } = require("node:child_process");
 const { once } = require("node:events");
 const { checkUris, checkBodyParser } = require("../test/helpers/dependency-security.cjs");
 
@@ -131,6 +131,19 @@ async function main() {
     if (JSON.parse(invocation.env.KILO_CONFIG_CONTENT).agent.fixture.tools.write !== false)
       throw new Error("Installed native write fallback failed.");
     process.stdout.write("Installed Kilo protocol verified: native hook, invocation-local write fallback, no model calls.\n");
+    if(process.platform==="darwin"){
+      const io=require(path.join(core,"program_io.js"));
+      const outside=path.join(temporary,"io-outside.txt");await fs.writeFile(outside,"unchanged");
+      const vmAvailable=require(path.join(core,"program_io_vm.js")).vmRuntimeAvailable();
+      const policy=io.prepareProgramIo({cwd:project,directory:path.join(temporary,"io-broker"),testRole:false,readOnly:false,...(vmAvailable?{}:{backend:"macos-seatbelt"})});
+      const script=`try{require('node:fs').readFileSync(${JSON.stringify(outside)});process.exit(9)}catch(e){if(!['EPERM','EACCES','ENOENT'].includes(e.code))throw e;console.log('kernel-denied')}`;
+      const quote=s=>"'"+s.replace(/'/g,"'\\''")+"'",command=io.wrapProgramCommand("node -e "+quote(script),policy);
+      const result=spawnSync("/bin/sh",["-c",command],{cwd:project,env:{...process.env,AGENT_GRAPH_PROGRAM_IO:JSON.stringify(policy)},encoding:"utf8",timeout:15000});
+      if(result.status!==0||result.stdout.trim()!=="kernel-denied"||(await fs.readFile(outside,"utf8"))!=="unchanged")throw Error("Installed kernel I/O isolation failed: "+result.stderr);
+      const tracker=new io.ProgramIoTracker(policy);tracker.normalize({type:"tool_use",part:{id:"installed-io",tool:"bash",state:{status:"completed",input:{command},metadata:{exit:0}}}});
+      const audit=tracker.finish();if(audit.completedCommands!==1||audit.invalidReceipts||audit.unresolvedCommands)throw Error("Installed broker proof failed.");
+      process.stdout.write("Installed kernel I/O isolation and signed command evidence verified.\n");
+    }
     for (const type of ["codex", "claude", "opencode", "kilo"]) {
       const result = await queryModels(
         {

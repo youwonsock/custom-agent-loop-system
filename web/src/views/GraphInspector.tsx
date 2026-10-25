@@ -295,7 +295,7 @@ export default function GraphInspector({
                           nativeApprovalReview: false,
                           browserVerification: true,
                           verificationContract: true,
-                          authoredNodeTests: true, testSourceGuard: true, reserveFinalizationBudget: true, guardOwnedProcesses: true, targetScopeGuard:true,
+                          authoredNodeTests: true, testSourceGuard: true, reserveFinalizationBudget: true, guardOwnedProcesses: true, targetScopeGuard:true, programIoGuard:true,
                         };
                       else delete g.automation;
                     })
@@ -321,7 +321,8 @@ export default function GraphInspector({
                     단계별 마감으로 후속 검토·승인 시간 보존
                   </label>
                   <label className="checkbox"><input type="checkbox" aria-label="일괄 프로세스 종료 차단" checked={Boolean(draft.automation.guardOwnedProcesses)} onChange={e=>change(g=>{g.automation!.guardOwnedProcesses=e.target.checked;})}/>프로세스 이름에 의한 일괄 종료 차단</label>
-                  <label className="checkbox"><input type="checkbox" aria-label="Kilo 대상 밖 조회 차단" checked={Boolean(draft.automation.targetScopeGuard)} onChange={e=>change(g=>{g.automation!.targetScopeGuard=e.target.checked;})}/>Kilo 모든 역할의 대상 밖 파일 조회 차단</label>
+                  <label className="checkbox"><input type="checkbox" aria-label="Kilo 대상 밖 조회 차단" checked={Boolean(draft.automation.targetScopeGuard)} onChange={e=>change(g=>{g.automation!.targetScopeGuard=e.target.checked;if(!e.target.checked)g.automation!.programIoGuard=false;})}/>Kilo 모든 역할의 대상 밖 파일 조회 차단</label>
+                  <label className="checkbox"><input type="checkbox" aria-label="Kilo 프로그램 I/O 커널 격리" checked={Boolean(draft.automation.programIoGuard)} onChange={e=>change(g=>{g.automation!.programIoGuard=e.target.checked;if(e.target.checked)g.automation!.targetScopeGuard=true;})}/>Kilo 프로그램·자식 프로세스의 파일 I/O 격리 (미지원 환경은 실행 중단)</label>
                   <label>
                     자동 수정 횟수
                     <input

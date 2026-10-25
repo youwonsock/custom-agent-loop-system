@@ -37,7 +37,7 @@ export function buildRecoveryMessage(
       })
       .slice(-3);
     lines.push(
-      "The preceding CLI aborted repeated unavailable tools or malformed tool input. This is a fresh bounded attempt. Follow the current role and native tool schema, supply all required fields, never submit {} and never repeat the same invalid call. Kilo read-only roles use read/glob/grep, never exec/exec_command/bash/write/edit. Writable roles use bash(command, description) for checks and write(filePath, content) for files. Never run checks in a read-only role. Do not weaken checks or switch models.",
+      "The preceding CLI aborted repeated unavailable tools or malformed tool input. This is a fresh bounded attempt. Follow this invocation's actual tool protocol, supply all required fields, never submit {} and never repeat the same invalid call. Kernel-isolated Kilo roles use bash only: read-only roles inspect with standalone cat/ls and never execute tests or writes; implementation uses small quoted heredocs. Other Kilo invocations use native read/glob/grep in read-only roles and bash(command, description) plus write(filePath, content) where available. Never request disabled tools or broader permissions. Do not weaken checks or switch models.",
       ...errors,
     );
     if (/for the "write" tool/.test(message)) lines.push(

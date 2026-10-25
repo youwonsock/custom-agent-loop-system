@@ -162,3 +162,15 @@ PASS 테스트의 전체 소스 snapshot을 저장하고 검토·최종 승인 �
 이 경계는 관찰 가능한 native 파일 도구 및 literal 조회에 대한 보호다. 임의 프로그램·MCP·plugin 내부의 모든 파일 IO를 격리하는 OS 샌드박스로 해석하지 않는다. 실제 검증에서는 native 이벤트 전체를 별도 감사해 차단된 시도와 완료된 범위 위반을 구분한다.
 
 literal 조회는 인용된 `|`/`;`와 실제 명령 연결을 구별하며, `cat -n`, `tail -f`, `find -L` 같은 옵션 뒤 경로와 표준오류 폐기/합치기를 검사한다. 디렉터리 변경도 승인된 경계를 벗어날 수 없고 조건부 변경 뒤에는 가능한 작업 폴더 모두를 확인한다. 검증된 단순 조회·출력 준비의 대상 내부 절대 경로는 상대 경로로 바꿔 native 권한 검사에서 공백 경로를 오해하지 않도록 한다. 읽기 전용 fallback/상태 echo는 메타데이터 조회로 허용하지만 receipt를 만들지 않는다. 등록 검사의 OR/파이프/추가 인수는 기존 실제 종료코드 보존 규칙을 계속 따르며, 정확히 같은 literal argv의 인용 차이만 등록 명령으로 정규화한다.
+
+## Kilo 프로그램 내부 I/O 격리
+
+새 자율 프리셋은 `programIoGuard=true`와 `targetScopeGuard=true`를 함께 사용한다. Kilo의 모델 도구 명령과 자식 프로세스는 호스트에서 실행하지 않고, 명령마다 별도 Apple container VM에서 실행한다. 모델 도구는 bash와 메모용 todowrite로 제한하며 native 파일 도구·task·MCP·외부 plugin·프로젝트 설정·LSP·formatter·snapshot·외부 skill 로딩을 차단한다. 기존 그래프에서 선택 필드가 없으면 종전 정책을 유지한다. REST/SSE·공개 agent-loop 옵션·저장 버전은 바꾸지 않는다.
+
+현재 검증된 환경은 Apple Silicon macOS 26, Apple container 1.6.0이다. `container`를 설치한 뒤 `npm run sandbox:prepare`로 Node 24.21.0·현재 lockfile·Playwright/Chromium의 Linux 런타임 이미지를 준비한다. 첫 이미지 빌드는 네트워크와 8GiB 이상의 여유 공간이 필요하다. 사용자 인증·과거 CLI 세션·프로젝트 소스는 이미지에 넣지 않는다. 준비 명령은 내부 개발/설정용이며 npm 설치 단계에서 VM이나 브라우저를 자동 설치하지 않는다. 설치 패키지에서는 `node dist/src/core/program_io_setup.js`를 사용할 수 있다. 환경·lockfile·이미지 해시·버전이 맞지 않으면 실제 모델 호출 전에 BLOCKED가 되며 약한 경계로 대체하지 않는다. Windows/Linux의 강한 VM 어댑터는 아직 지원하지 않는다.
+
+VM에는 대상 프로젝트와 읽기 전용 공개 실행기만 공유한다. 이미지 루트는 읽기 전용이고 호스트 홈·인증·소켓·다른 프로젝트·호스트 네트워크를 공유하지 않는다. `--network none`의 게스트 loopback에서 게임 서버와 Chromium 검사를 실행하므로 호스트 로컬 API에 파일 접근을 대신 요청할 수도 없다. HOME·캐시·임시 출력은 대상의 `verification/.agent-io` 아래에 둔다. 구현은 제품을 수정하고 보호된 계약 파일은 읽기 전용이다. 테스트는 verification 출력만, 검토는 호출별 임시 폴더만 수정할 수 있다. 게스트의 공개 OS/런타임 읽기는 필요하며, 이를 호스트 사용자 파일 접근과 구분한다. 공급자 CLI의 인증·네트워크 및 서명 브로커는 신뢰하는 제어 영역이다. 악성 호스트 관리자나 VM/커널 자체 취약점까지 방어한다고 주장하지 않는다.
+
+실행 전 외부 canary의 읽기·쓰기·목록·stat 및 자식 프로세스 접근을 검사한다. 실제 명령은 호출별 서명을 검증한 브로커만 실행하며, 시작/종료·실제 종료코드·이미지·네트워크·VM 삭제 기록을 대상 밖에 서명해 저장한다. native 입력을 먼저 저장하는 CLI에서도 서명된 after-hook 메타데이터로 실제 명령을 연결한다. 명령이 끝나면 VM을 삭제하므로 분리된 자식 서버도 남지 않는다. 증거 누락·변조·중복·우회·미완료가 있으면 SUCCESS를 차단한다. 원시 기록과 공개 검증 키만 보존하고 비밀 서명 키는 로그/세션에 저장하지 않는다. 게스트 PID/포트는 호스트와 별도이므로 정리 시 호스트 PID로 해석하지 않는다.
+
+구현 근거: [Apple container 1.6.0 명령](https://github.com/apple/container/blob/1.6.0/docs/command-reference.md), [Kilo 도구 훅 구현](https://github.com/Kilo-Org/kilocode/blob/v7.4.23/packages/opencode/src/session/tools.ts). Seatbelt 단독 검사는 내부 경계 회귀 검사로만 남기며, 호스트 localhost 우회가 가능해 강한 모드의 성공 근거로 사용하지 않는다.

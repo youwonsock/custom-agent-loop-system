@@ -1,7 +1,8 @@
 import { shellMutation } from "./shell_mutation";
-import { CommandReceipt, NativeScopeAudit } from "../shared/domain";
+import { CommandReceipt, NativeScopeAudit, ProgramIoAudit } from "../shared/domain";
 type Event = Record<string, unknown>;
 export interface EventEvidence {
+  programIoAudit?: ProgramIoAudit;
   scopeAudit?: NativeScopeAudit;
   readFiles?: string[];
   commands: CommandReceipt[];

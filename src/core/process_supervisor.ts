@@ -43,6 +43,7 @@ import { normalizeProviderEvent } from "./provider_events";
 import { ToolFailureTracker } from "./tool_failures";
 import { InspectionTracker } from "./inspection_evidence";
 import { NativeScopeTracker, SCOPE_VIOLATION } from "./native_scope";
+import { ProgramIoPolicy, ProgramIoTracker } from "./program_io";
 import { terminateProcessTreeBounded } from "./process_lifecycle";
 import type { Activity } from "../shared/execution_types";
 // Preserve imports used by existing integrations.
@@ -95,6 +96,7 @@ export interface ProcessSupervisorOptions {
   /** Trusted runtime policy; never inferred from ordinary model prose. */
   sourcesGuarded?: boolean;
   scopeRoots?: string[];
+  programIoPolicy?: ProgramIoPolicy;
   pollPolicy?: () => Promise<string|null>;
   eventPolicy?: (event:AnyObj,evidence:EventEvidence) => string|null;
 }
@@ -137,6 +139,7 @@ export class ProcessSupervisor {
     };
     const recordRedactor = new StreamingRedactor(sensitiveValues);
     const scopeTracker=options.scopeRoots?new NativeScopeTracker(options.cwd,options.scopeRoots):null;
+    const ioTracker=options.programIoPolicy?new ProgramIoTracker(options.programIoPolicy):null;
     const maximumRawLogBytes = Math.max(
       MIN_RAW_LOG_BYTES,
       Math.min(MAX_RAW_LOG_BYTES, options.maxInMemoryOutputBytes * 16),
@@ -179,7 +182,7 @@ export class ProcessSupervisor {
       rawLog.end();
       const message = err instanceof Error ? err.message : String(err);
       return {
-        evidence: {...emptyEvidence(),...(scopeTracker?{scopeAudit:scopeTracker.audit}:{})},
+        evidence: {...emptyEvidence(),...(scopeTracker?{scopeAudit:scopeTracker.audit}:{}),...(ioTracker?{programIoAudit:ioTracker.finish()}:{})},
         diagnostics: emptyCliDiagnostics(),
         pid: -1,
         outcome: "spawn_error",
@@ -298,6 +301,7 @@ export class ProcessSupervisor {
         if (remainder) processLine(remainder, stream);
       }
       scopeTracker?.finish();
+      if(ioTracker)evidence.programIoAudit=ioTracker.finish();
       evidence.fileMutation ||= mutations.finish();
       if (mutations.changedFiles.length)
         evidence.changedFiles = mutations.changedFiles.map((file) =>
@@ -500,6 +504,7 @@ export class ProcessSupervisor {
     const commands = new CommandTracker(options.cwd,options.sourcesGuarded);
     const inspections = new InspectionTracker(options.cwd);
     const processEvent = (event: AnyObj): void => {
+      if(ioTracker)event=ioTracker.normalize(event);
       scopeTracker?.observe(event);
       if(scopeTracker?.audit.outsideCalls)void terminate("process_exit","role_violation",`${SCOPE_VIOLATION} native filesystem access escaped the approved target boundary.`,false);
       commands.observe(event);
