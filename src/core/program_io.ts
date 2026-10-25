@@ -23,6 +23,7 @@ export interface ProgramIoPolicy {
   vm?:VmPolicy;
 }
 type Obj = Record<string, unknown>;
+export type ProgramIoCommandPolicy=Pick<ProgramIoPolicy,"id"|"node"|"runner"|"publicKey">;
 const obj = (v: unknown): Obj => v && typeof v === "object" && !Array.isArray(v) ? v as Obj : {};
 export const ioDigest = (v: string | Buffer): string => createHash("sha256").update(v).digest("hex");
 const quote = (s: string): string => "'" + s.replace(/'/g, "'\\''") + "'";
@@ -38,14 +39,40 @@ export function wrapProgramCommand(command: string, policy: ProgramIoPolicy, nat
   const payload = {version:1,policyId:policy.id,id:randomUUID(),command,nativeCommand};
   return [policy.node,policy.runner,Buffer.from(JSON.stringify(payload)).toString("base64url"),ioSign(payload,policy)].map(quote).join(" ");
 }
-export function unwrapProgramCommand(command: string, policy: ProgramIoPolicy): {id:string;command:string;nativeCommand:string} | null {
+export function readProgramAuthorization(payload:string,signature:unknown,policy:ProgramIoCommandPolicy):{id:string;command:string;nativeCommand:string}|null {
+  try {
+    const data=JSON.parse(Buffer.from(payload,"base64url").toString());
+    if(data.version!==1||data.policyId!==policy.id||typeof data.id!=="string"||typeof data.command!=="string"||!ioVerify(data,signature,policy))return null;
+    return{id:data.id,command:data.command,nativeCommand:typeof data.nativeCommand==="string"?data.nativeCommand:data.command};
+  }catch{return null;}
+}
+export function unwrapProgramCommand(command: string, policy: ProgramIoCommandPolicy): {id:string;command:string;nativeCommand:string} | null {
   try {
     const words=literalShellWords(command);
     if(words?.length!==4||words[0]!==policy.node||words[1]!==policy.runner)return null;
-    const data=JSON.parse(Buffer.from(words[2]!,"base64url").toString());
-    if(data.version!==1||data.policyId!==policy.id||typeof data.id!=="string"||typeof data.command!=="string"||!ioVerify(data,words[3],policy))return null;
-    return {id:data.id,command:data.command,nativeCommand:typeof data.nativeCommand==="string"?data.nativeCommand:data.command};
+    return readProgramAuthorization(words[2]!,words[3],policy);
   } catch { return null; }
+}
+export function programCommandProof(command:string,policy:ProgramIoCommandPolicy):{payload:string;signature:string}|null {
+  const words=literalShellWords(command);
+  return unwrapProgramCommand(command,policy)&&words?{payload:words[2]!,signature:words[3]!}:null;
+}
+export function programProofAuthorization(proof:unknown,policy:ProgramIoCommandPolicy):ReturnType<typeof readProgramAuthorization>{
+  const value=obj(proof);
+  return typeof value.payload==="string"?readProgramAuthorization(value.payload,value.signature,policy):typeof value.wrappedCommand==="string"?unwrapProgramCommand(value.wrappedCommand,policy):null;
+}
+/** Only public keys from this controller-owned visit, never project/home scans. */
+export function programPromptPolicies(policy:ProgramIoPolicy):ProgramIoCommandPolicy[]{
+  const policies:ProgramIoCommandPolicy[]=[policy],parent=path.dirname(policy.directory);
+  for(const entry of fs.readdirSync(parent,{withFileTypes:true}).slice(0,100)){
+    if(!entry.isDirectory()||!/^[-a-f0-9]{36}-io$/.test(entry.name))continue;
+    try{
+      const file=path.join(parent,entry.name,"policy.json");if(fs.statSync(file).size>65536)continue;
+      const p=JSON.parse(fs.readFileSync(file,"utf8"));
+      if(p.preflightPassed&&p.node===policy.node&&p.runner===policy.runner&&typeof p.id==="string"&&typeof p.publicKey==="string"&&!policies.some(x=>x.id===p.id))policies.push({id:p.id,node:p.node,runner:p.runner,publicKey:p.publicKey});
+    }catch{/* An incomplete setup never authorizes history normalization. */}
+  }
+  return policies;
 }
 
 /** Read-only operating-system/runtime resources, never home/config/session trees. */
@@ -147,7 +174,7 @@ export class ProgramIoTracker {
     if(event.type!=="tool_use"||part.tool!=="bash"||typeof args.command!=="string")return event;
     const metadata=obj(state.metadata),proof=obj(metadata.agentGraphProgramIo);
     const direct=unwrapProgramCommand(args.command,this.policy);
-    const recorded=typeof proof.wrappedCommand==="string"?unwrapProgramCommand(proof.wrappedCommand,this.policy):null;
+    const recorded=programProofAuthorization(proof,this.policy);
     // Some CLI versions persist the original input before tool.execute.before.
     // The after hook supplies the same signed authorization, bound to that input.
     const command=direct??(recorded?.nativeCommand===args.command?recorded:null),terminal=["completed","success","error","failed","denied","rejected"].includes(String(state.status));

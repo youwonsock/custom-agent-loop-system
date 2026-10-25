@@ -4,7 +4,7 @@ import { broadProcessTermination, UNSCOPED_TERMINATION } from "./process_command
 import { nativeScopeProblem, SCOPE_DENIED } from "./native_scope";
 import { normalizeInspectionCommand } from "./inspection_syntax";
 import { literalShellWords } from "./verification_evidence";
-import { ProgramIoPolicy, wrapProgramCommand, IO_DENIED } from "./program_io";
+import { ProgramIoPolicy, wrapProgramCommand, unwrapProgramCommand, programCommandProof, programProofAuthorization, programPromptPolicies, IO_DENIED, IO_VIOLATION } from "./program_io";
 
 export interface KiloCheckProtocol {
   cwd: string;
@@ -50,9 +50,11 @@ export function registeredCheckCommand(command: string, protocol: KiloCheckProto
 }
 
 export function kiloCheckHooks(protocol: KiloCheckProtocol) {
+  const promptPolicies=protocol.programIo?programPromptPolicies(protocol.programIo):[];
   return {
     "tool.execute.before": async (input: { tool: string }, output: { args: Record<string, unknown> }) => {
       const nativeCommand=output.args.command;
+      if(protocol.programIo&&typeof nativeCommand==="string"&&literalShellWords(nativeCommand)?.[1]===protocol.programIo.runner)throw Error(`${IO_DENIED} Invalid arguments for the "bash" tool: internal authorization wrappers are not product commands. Send the plain target-relative Linux command.`);
       if(protocol.programIo&&!["bash","todowrite"].includes(input.tool))throw Error(`${IO_DENIED} This tool is unavailable in kernel-isolated mode. Use bash for target file inspection and permitted changes; never delegate to another tool/process host.`);
       if(protocol.guardOwnedProcesses&&input.tool==="bash"&&typeof output.args.command==="string"&&broadProcessTermination(output.args.command,protocol.cwd))
         throw Error(`${UNSCOPED_TERMINATION} Broad process-name termination is blocked BEFORE execution. Never use pkill, killall, taskkill /IM, Stop-Process -Name or kill with pgrep. Close server objects or the child processes this task actually started; use recorded owned PIDs only.`);
@@ -68,14 +70,39 @@ export function kiloCheckHooks(protocol: KiloCheckProtocol) {
       if(protocol.testSourcesReadOnly&&input.tool==="bash"&&(!testCommandAllowed(String(output.args.command??""),protocol.cwd,protocol.commands)))
         throw Error(`${TEST_POLICY} Test role permits registered foreground checks, read-only inspection and mkdir verification only. No repair scripts, custom execution or source writes. Use native read for diagnosis and return FAIL for implementation. Command: ${String(output.args.command??"").slice(0,600)}`);
       if(protocol.programIo&&input.tool==='bash'){
-        if(typeof output.args.command!=="string")throw Error(`${IO_DENIED} bash requires a literal command.`);
+        if(typeof output.args.command!=="string")throw Error(`${IO_DENIED} Invalid arguments for the "bash" tool: expected command (string), never an empty input.`);
         if(protocol.readOnlyRole&&(!testCommandAllowed(output.args.command,protocol.cwd,[])||/\bmkdir\b/.test(output.args.command)))throw Error(`${IO_DENIED} Read-only role permits file inspection only; no checks, code execution or writes.`);
         output.args.command=wrapProgramCommand(output.args.command,protocol.programIo,String(nativeCommand));
         output.args.workdir=protocol.cwd;
       }
     },
     ...(protocol.programIo?{"tool.execute.after":async(input:{tool:string;args:Record<string,unknown>},output:{metadata?:Record<string,unknown>})=>{
-      if(input.tool==="bash")output.metadata={...output.metadata,agentGraphProgramIo:{wrappedCommand:input.args.command}};
+      if(input.tool==="bash"&&typeof input.args.command==="string"){
+        const command=unwrapProgramCommand(input.args.command,protocol.programIo!),proof=programCommandProof(input.args.command,protocol.programIo!);
+        if(!command||!proof)throw Error(`${IO_VIOLATION} Invalid internal command proof.`);
+        output.metadata={...output.metadata,agentGraphProgramIo:proof};
+        input.args.command=command.nativeCommand;
+      }
+    },"experimental.chat.messages.transform":async(_input:unknown,output:{messages:unknown[]})=>{
+      const object=(v:unknown):Record<string,unknown>=>v&&typeof v==="object"?v as Record<string,unknown>:{};
+      for(let i=0;i<output.messages.length;i++){
+        const message=object(output.messages[i]);if(!Array.isArray(message.parts))continue;
+        // Kilo can persist the wrapped input before the after hook. Rewrite a
+        // copy of the model context, preserving raw native evidence in storage.
+        output.messages[i]={...message,parts:message.parts.map(raw=>{
+          const part=object(raw),state=object(part.state),args=object(state.input),metadata=object(state.metadata);
+          if(part.type!=="tool"||part.tool!=="bash"||typeof args.command!=="string")return raw;
+          let command:ReturnType<typeof unwrapProgramCommand>=null;
+          for(const policy of promptPolicies){
+            const direct=unwrapProgramCommand(args.command,policy),recorded=programProofAuthorization(metadata.agentGraphProgramIo,policy);
+            if(direct){command=direct;break;}
+            if(recorded?.nativeCommand===args.command){command=recorded;break;}
+          }
+          if(!command)return raw;
+          const {agentGraphProgramIo,...publicMetadata}=metadata;
+          return{...part,state:{...state,input:{...args,command:command.command},metadata:publicMetadata}};
+        })};
+      }
     }}:{}),
   };
 }
