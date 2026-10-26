@@ -4,8 +4,18 @@
 
 현재 실행·빌드·CI 참조를 확인해 구형 STOP/INTERRUPT 파일을 큐로 옮기던 미호출 변환 함수, 미사용 attempt 타입·경로/백업 helper·화면 controller 타입 별칭을 제거했다. 현재 제어 큐와 session version 3 호환 읽기, 성공 차단·인증·I/O·소유권 회귀는 실제 사용 중이므로 유지했다.
 
-루트 빌드·테스트에서 참조하지 않는 이전 `experiments/kilo-2048-web-20261023`의17파일(자체 테스트2개와 독립 검증 자료 포함)을 제거했다. 과거 결과는 Git 이력과 바탕화면 검증 자료로 확인하며, 아래 과거 검증 설명의 경로는 삭제 전 커밋 permalink로 연결한다. 실험 경로를 Git/npm 제외 및 패키지 검사 금지 목록에 추가했다. 현재 모델·의존성·REST/SSE·공개 CLI 옵션·graph2/connection1/state3은 변경하지 않았다.
+루트 빌드·테스트에서 참조하지 않는 이전 `experiments/kilo-2048-web-20261023`의17파일(자체 테스트2개와 독립 검증 자료 포함)을 제거했다. 과거 결과는 Git 이력과 바탕화면 검증 자료로 확인하며, 아래 과거 검증 설명의 경로는 삭제 전 커밋 permalink로 연결한다. 실험 경로를 Git/npm 제외 및 패키지 검사 금지 목록에 추가했다. 모델·REST/SSE·공개 CLI 옵션·graph2/connection1/state3은 변경하지 않았다. 의존성 패치는 아래 별도 병합 범위로 검증했다.
 
+
+로컬 정리 검증 커밋은 `44bdc258dc53a93a9d66ec736973abdd9c754b13`, 연결된 GitHub 계정으로 반영한 동일 tree 커밋은 `ccc2f6f29e2269141516594030156844c59c09f5`다. [정리 main CI #80](https://github.com/youwonsock/custom-agent-loop-system/actions/runs/40253442963)의 Windows·Ubuntu·macOS·Chromium4작업이 모두 통과했다. 터미널의 다른 계정 인증으로 push403이 발생해 전역 인증을 바꾸지 않고 동일 tree를 소유자 GitHub 연결로 게시했다.
+
+초기 원격 조회에는 main만 있었지만 후속 조회에서 발견한 [Dependabot PR #15](https://github.com/youwonsock/custom-agent-loop-system/pull/15)도 통합 범위에 포함했다. SDK0.3.301→0.3.308, Fastify static10.1.6→10.1.7, Vite8.3.4→8.3.5와 lockfile을 반영했다. [의존성 PR CI](https://github.com/youwonsock/custom-agent-loop-system/actions/runs/40219494523)4작업 성공과 별도로, 정리 코드와 합친 로컬 `da5cfdf753cf78c3b19dabf3eb225a329ae06ccd`의 전체 platform/browser 검사를 수행했다. 원격 실제 병합 커밋 `a33e807945a941248d81ecdf8025a5a8ea32f578`의 전체 tree가 이 로컬 검증 tree와 같은 것을 확인했다.
+
+통합 로컬 결과는 코어319통과·Windows ConPTY1제외(총320), 도구10·GUI25·macOS 실행기4, 패키지87파일·설치 smoke·운영 audit0건이다. VM lock 불일치는 런타임을 새 lock으로 갱신해 해결했으며, 여유 공간 제약에서 기존 이미지층과 동일 Node24.21/ABI137/node-pty1.1.0의 검증된 Linux 바이너리 캐시를 재사용했다. 표준 setup의 실제 lock·이미지 digest·network none 검사, Linux PTY/SDK/Vite/Playwright 로드와 전체 I/O 회귀를 모두 통과했다. VM 증거를 거짓으로 채우거나 보안 조건을 낮추지 않았다.
+
+최초 프로세스 종료 검사1건과 통합 중 비동기 재개·계획 승인 대기2건의 시간 초과를 보존했다. 소스와 시간 한도를 바꾸지 않고 단독 검사 및 중복 없는 전체 재실행을 통과했다. 의존성 브랜치의 과거 push CI에서 발생한 macOS 실행기20초 대기 실패도 위 성공한 PR CI와 구분해 기록했다. 사용 중인 테스트41파일은 모두 유지했다. 최종 기록 커밋의 CI·브랜치 포함 관계·원격/로컬 동일 SHA와 모든 실패·복구 근거는 바탕화면 상세 보고서에 보존한다. 실제 모델 호출은 수행하지 않았다.
+
+[상세 보고서](</Users/supercent/Desktop/agent graph test/project-cleanup-20261026-071006/TEST_RESULTS.md>) · [기계 판독 결과](</Users/supercent/Desktop/agent graph test/project-cleanup-20261026-071006/RESULTS.json>)
 
 ## 2026-10-25 자체 Node 영역 계약 강화와 Kilo 실제 무인 검증
 
