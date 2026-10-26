@@ -1,9 +1,8 @@
 import * as crypto from "node:crypto";
-import * as fs from "node:fs";
 import * as fsp from "node:fs/promises";
 import * as path from "node:path";
 
-import { AttemptStatus, FailureKind } from "../shared/execution_types";
+import { FailureKind } from "../shared/execution_types";
 export type { AttemptStatus, FailureKind } from "../shared/execution_types";
 
 export interface AttemptFailure {
@@ -16,33 +15,6 @@ export interface AttemptFailure {
   phase: string | null;
   exitCode: number | null;
   cliSessionId: string | null;
-}
-
-export interface AgentAttemptState {
-  attemptId: string;
-  role: string;
-  phase: string;
-  status: AttemptStatus;
-  ownerPid: number;
-  childPid: number | null;
-  cliSessionId: string | null;
-  attemptNumber: number;
-  maxAttempts: number;
-  reconnectUsed: boolean;
-  cycleStartedAt: string;
-  startedAt: string;
-  lastOutputAt: string | null;
-  lastProgressAt: string | null;
-  deadlineAt: string;
-  nextRetryAt: string | null;
-  endedAt: string | null;
-  exitCode: number | null;
-  failureKind: FailureKind | null;
-  failureMessage: string | null;
-  outputLogPath: string | null;
-  activity: "initial_transport" | "model_generation" | "tool_execution";
-  mode: "standard" | "completion_recovery";
-  completionRecoveryNumber: number;
 }
 
 export interface SessionLease {
@@ -158,24 +130,6 @@ export function assertSafeSessionId(sessionId: string): void {
   ) {
     throw new Error(`Unsafe session ID: ${JSON.stringify(sessionId)}`);
   }
-}
-
-export function resolveContainedSessionPath(
-  sessionsRoot: string,
-  sessionId: string,
-): string {
-  assertSafeSessionId(sessionId);
-  const root = path.resolve(sessionsRoot);
-  const resolved = path.resolve(root, sessionId);
-  const relative = path.relative(root, resolved);
-  if (
-    relative.startsWith("..") ||
-    path.isAbsolute(relative) ||
-    relative.length === 0
-  ) {
-    throw new Error(`Session path escapes sessions root: ${sessionId}`);
-  }
-  return resolved;
 }
 
 export function collectRecoveredChildPids(
@@ -657,52 +611,4 @@ export async function readControlAck(
   requestId: string,
 ): Promise<ControlAck | null> {
   return readJsonFile<ControlAck>(path.join(paths.acks, `${requestId}.json`));
-}
-
-export async function importLegacyControlFiles(
-  paths: ControlQueuePaths,
-  stopPath: string,
-  interruptPath: string,
-): Promise<void> {
-  const importOne = async (
-    filePath: string,
-    type: ControlRequest["type"],
-  ): Promise<void> => {
-    try {
-      const message = (await fsp.readFile(filePath, "utf8")).trim();
-      if (message.length > 0) {
-        await enqueueControlRequest(
-          paths,
-          type,
-          type === "INTERRUPT" ? message : null,
-        );
-      }
-      await fsp.rm(filePath, { force: true });
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
-    }
-  };
-  await importOne(stopPath, "STOP");
-  await importOne(interruptPath, "INTERRUPT");
-}
-
-export async function backupFileOnce(
-  filePath: string,
-  suffix: string,
-): Promise<string | null> {
-  const backupPath = `${filePath}.${suffix}`;
-  try {
-    await fsp.access(backupPath, fs.constants.F_OK);
-    return backupPath;
-  } catch {
-    // Continue.
-  }
-  try {
-    await fsp.copyFile(filePath, backupPath, fs.constants.COPYFILE_EXCL);
-    return backupPath;
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === "ENOENT") return null;
-    if ((err as NodeJS.ErrnoException).code === "EEXIST") return backupPath;
-    throw err;
-  }
 }

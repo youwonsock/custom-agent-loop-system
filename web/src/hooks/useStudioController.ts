@@ -16,4 +16,3 @@ export function useStudioController() {
     ...runs,
   };
 }
-export type StudioController = ReturnType<typeof useStudioController>;

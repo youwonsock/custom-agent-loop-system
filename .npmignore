@@ -6,6 +6,7 @@
 .goal/
 .kilo/
 test/
+experiments/
 src/
 web/
 vscode-extension/

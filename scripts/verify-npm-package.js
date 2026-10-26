@@ -56,6 +56,7 @@ const forbidden = [...files].filter(
     file.endsWith(".ts") ||
     file.endsWith(".test.js") ||
     file.startsWith("test/") ||
+    file.startsWith("experiments/") ||
     file.startsWith("vscode-extension/") ||
     file.startsWith("desktop-app/") ||
     file.startsWith(".build/") ||

@@ -54,3 +54,6 @@ coverage/
 /test/index.html
 /test/render.js
 /test/styles.css
+
+# Retired standalone game experiments
+/experiments/
