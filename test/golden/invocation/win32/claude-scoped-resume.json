@@ -1,0 +1,148 @@
+{
+  "planning": {
+    "binary": "<NODE>",
+    "args": [
+      "<FIXTURE>",
+      "-p",
+      "GOLDEN PROMPT",
+      "--output-format",
+      "stream-json",
+      "--verbose",
+      "--model",
+      "golden-model",
+      "--disallowedTools",
+      "Edit,Write,NotebookEdit,Bash",
+      "--add-dir",
+      "<EXTRA>",
+      "--effort",
+      "high",
+      "--resume",
+      "resume-1"
+    ],
+    "env": {
+      "PATH": "<PATH>"
+    },
+    "transport": null
+  },
+  "implementation": {
+    "binary": "<NODE>",
+    "args": [
+      "<FIXTURE>",
+      "-p",
+      "GOLDEN PROMPT",
+      "--output-format",
+      "stream-json",
+      "--verbose",
+      "--model",
+      "golden-model",
+      "--add-dir",
+      "<EXTRA>",
+      "--effort",
+      "high",
+      "--resume",
+      "resume-1"
+    ],
+    "env": {
+      "PATH": "<PATH>"
+    },
+    "transport": null
+  },
+  "test": {
+    "binary": "<NODE>",
+    "args": [
+      "<FIXTURE>",
+      "-p",
+      "GOLDEN PROMPT",
+      "--output-format",
+      "stream-json",
+      "--verbose",
+      "--model",
+      "golden-model",
+      "--add-dir",
+      "<EXTRA>",
+      "--effort",
+      "high",
+      "--resume",
+      "resume-1"
+    ],
+    "env": {
+      "PATH": "<PATH>"
+    },
+    "transport": null
+  },
+  "review": {
+    "binary": "<NODE>",
+    "args": [
+      "<FIXTURE>",
+      "-p",
+      "GOLDEN PROMPT",
+      "--output-format",
+      "stream-json",
+      "--verbose",
+      "--model",
+      "golden-model",
+      "--disallowedTools",
+      "Edit,Write,NotebookEdit,Bash",
+      "--add-dir",
+      "<EXTRA>",
+      "--effort",
+      "high",
+      "--resume",
+      "resume-1"
+    ],
+    "env": {
+      "PATH": "<PATH>"
+    },
+    "transport": null
+  },
+  "approval": {
+    "binary": "<NODE>",
+    "args": [
+      "<FIXTURE>",
+      "-p",
+      "GOLDEN PROMPT",
+      "--output-format",
+      "stream-json",
+      "--verbose",
+      "--model",
+      "golden-model",
+      "--disallowedTools",
+      "Edit,Write,NotebookEdit,Bash",
+      "--add-dir",
+      "<EXTRA>",
+      "--effort",
+      "high",
+      "--resume",
+      "resume-1"
+    ],
+    "env": {
+      "PATH": "<PATH>"
+    },
+    "transport": null
+  },
+  "interrupt": {
+    "binary": "<NODE>",
+    "args": [
+      "<FIXTURE>",
+      "-p",
+      "GOLDEN PROMPT",
+      "--output-format",
+      "stream-json",
+      "--verbose",
+      "--model",
+      "golden-model",
+      "--disallowedTools",
+      "Edit,Write,NotebookEdit,Bash",
+      "--add-dir",
+      "<EXTRA>",
+      "--effort",
+      "high",
+      "--resume",
+      "resume-1"
+    ],
+    "env": {
+      "PATH": "<PATH>"
+    },
+    "transport": null
+  }
+}

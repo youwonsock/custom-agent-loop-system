@@ -1,0 +1,134 @@
+{
+  "planning": {
+    "binary": "<NODE>",
+    "args": [
+      "<FIXTURE>",
+      "exec",
+      "--json",
+      "--model",
+      "golden-model",
+      "--skip-git-repo-check",
+      "--sandbox",
+      "read-only",
+      "-c",
+      "allow_login_shell=false",
+      "-c",
+      "shell_environment_policy.set.PATH=\"<PATH>\"",
+      "GOLDEN PROMPT"
+    ],
+    "env": {
+      "PATH": "<PATH>"
+    },
+    "transport": null
+  },
+  "implementation": {
+    "binary": "<NODE>",
+    "args": [
+      "<FIXTURE>",
+      "exec",
+      "--json",
+      "--model",
+      "golden-model",
+      "--skip-git-repo-check",
+      "--sandbox",
+      "workspace-write",
+      "-c",
+      "allow_login_shell=false",
+      "-c",
+      "shell_environment_policy.set.PATH=\"<PATH>\"",
+      "GOLDEN PROMPT"
+    ],
+    "env": {
+      "PATH": "<PATH>"
+    },
+    "transport": null
+  },
+  "test": {
+    "binary": "<NODE>",
+    "args": [
+      "<FIXTURE>",
+      "exec",
+      "--json",
+      "--model",
+      "golden-model",
+      "--skip-git-repo-check",
+      "--sandbox",
+      "workspace-write",
+      "-c",
+      "allow_login_shell=false",
+      "-c",
+      "shell_environment_policy.set.PATH=\"<PATH>\"",
+      "GOLDEN PROMPT"
+    ],
+    "env": {
+      "PATH": "<PATH>"
+    },
+    "transport": null
+  },
+  "review": {
+    "binary": "<NODE>",
+    "args": [
+      "<FIXTURE>",
+      "exec",
+      "--json",
+      "--model",
+      "golden-model",
+      "--skip-git-repo-check",
+      "--sandbox",
+      "read-only",
+      "-c",
+      "allow_login_shell=false",
+      "-c",
+      "shell_environment_policy.set.PATH=\"<PATH>\"",
+      "GOLDEN PROMPT"
+    ],
+    "env": {
+      "PATH": "<PATH>"
+    },
+    "transport": null
+  },
+  "approval": {
+    "binary": "<NODE>",
+    "args": [
+      "<FIXTURE>",
+      "exec",
+      "--json",
+      "--model",
+      "golden-model",
+      "--skip-git-repo-check",
+      "--sandbox",
+      "read-only",
+      "-c",
+      "allow_login_shell=false",
+      "-c",
+      "shell_environment_policy.set.PATH=\"<PATH>\"",
+      "GOLDEN PROMPT"
+    ],
+    "env": {
+      "PATH": "<PATH>"
+    },
+    "transport": null
+  },
+  "interrupt": {
+    "binary": "<NODE>",
+    "args": [
+      "<FIXTURE>",
+      "exec",
+      "--json",
+      "--model",
+      "golden-model",
+      "--skip-git-repo-check",
+      "--sandbox",
+      "read-only",
+      "-c",
+      "allow_login_shell=false",
+      "-c",
+      "shell_environment_policy.set.PATH=\"<PATH>\"",
+      "GOLDEN PROMPT"
+    ],
+    "env": {
+      "PATH": "<PATH>"
+    },
+    "transport": null
+  }
+}
