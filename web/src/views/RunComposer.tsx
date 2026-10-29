@@ -24,6 +24,7 @@ export default function RunComposer({
     starting,
     start,
     issues,
+    isolation,
     conflict,
   } = controller;
   return (
@@ -56,6 +57,13 @@ export default function RunComposer({
             폴더 선택
           </button>
         </div>
+        {isolation.length > 0 && (
+          <ul className="isolation-notes" aria-label="격리 보장 범위">
+            {isolation.map((note) => (
+              <li key={note}>{note}</li>
+            ))}
+          </ul>
+        )}
       </div>
       <div className="composer-options">
         <label>

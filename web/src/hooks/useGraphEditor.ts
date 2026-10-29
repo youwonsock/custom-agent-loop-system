@@ -8,6 +8,7 @@ import {
 import { api, ApiError, id } from "../api";
 import { typeMeta } from "../nodeMeta";
 import { backupKey, fingerprint, clientDiagnostics } from "../studioTypes";
+import { isolationNotes } from "../../../src/shared/isolation";
 import type { StudioData } from "./useStudioData";
 
 export function useGraphEditor(
@@ -20,10 +21,19 @@ export function useGraphEditor(
     | "setNotice"
     | "setError"
     | "refreshGraphs"
+    | "connections"
   >,
 ) {
-  const { boot, view, setView, setGraphs, setNotice, setError, refreshGraphs } =
-    data;
+  const {
+    boot,
+    view,
+    setView,
+    setGraphs,
+    setNotice,
+    setError,
+    refreshGraphs,
+    connections,
+  } = data;
   const [draft, setDraft] = useState<AgentGraphDocument | null>(null),
     draftRef = useRef<AgentGraphDocument | null>(null),
     dirty = useRef(false),
@@ -367,7 +377,11 @@ export function useGraphEditor(
     });
   };
   const selected = draft?.nodes.find((n) => n.id === selectedNode),
-    issues = draft ? clientDiagnostics(draft) : [];
+    issues = draft ? clientDiagnostics(draft) : [],
+    isolation =
+      draft && boot?.isolation
+        ? isolationNotes(draft, connections, boot.isolation)
+        : [];
   const updateNode = (fn: (n: AgentNode) => void) =>
     change((g) => {
       const n = g.nodes.find((n) => n.id === selectedNode);
@@ -407,6 +421,7 @@ export function useGraphEditor(
     connect,
     selected,
     issues,
+    isolation,
     updateNode,
   };
 }

@@ -145,5 +145,6 @@ export type RunComposerModel = Pick<
   | "starting"
   | "start"
   | "issues"
+  | "isolation"
   | "conflict"
 >;

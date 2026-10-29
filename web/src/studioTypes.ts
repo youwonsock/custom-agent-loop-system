@@ -1,5 +1,6 @@
 import type { SessionSummary } from "../../src/shared/session_updates";
 import { graphDiagnostics } from "../../src/shared/graph_validation";
+import type { IsolationSupport } from "../../src/shared/isolation";
 import type {
   AgentGraphDocument,
   LocalConnection,
@@ -9,6 +10,8 @@ export interface Bootstrap {
   version: string;
   root: string;
   defaultTarget: string;
+  /** Absent from servers older than the isolation notice. */
+  isolation?: IsolationSupport;
   graphs: AgentGraphDocument[];
   connections: LocalConnection[];
   catalogs: ModelCatalog[];

@@ -900,6 +900,16 @@ button {
 .target-row > span {
   color: #8194b1;
 }
+.isolation-notes {
+  margin: 10px 0 0;
+  padding: 8px 10px 8px 26px;
+  border: 1px solid #5c4a24;
+  border-radius: 6px;
+  background: #241f14;
+  color: #e2c98a;
+  font-size: 11px;
+  line-height: 1.5;
+}
 .target-row input {
   border: 0;
   background: transparent;
