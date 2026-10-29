@@ -1,0 +1,3 @@
+# Formatting-only commits; configure with: git config blame.ignoreRevsFile .git-blame-ignore-revs
+# Format sources with Prettier
+d6315cd222ccea226d4b11edd3f45b392f9d3fbb

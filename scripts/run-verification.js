@@ -134,6 +134,7 @@ async function main() {
           command: script(name),
         }))
       : [
+          "format:check",
           "typecheck",
           "test:tooling",
           "test",
