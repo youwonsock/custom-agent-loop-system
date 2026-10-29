@@ -302,11 +302,6 @@ export class CommandTracker {
   }
 }
 
-export function mergeReceipts(
-  ...groups: (CommandReceipt[] | undefined)[]
-): CommandReceipt[] {
-  return mergeProjectReceipts(undefined, ...groups);
-}
 export function mergeProjectReceipts(
   cwd: string | undefined,
   ...groups: (CommandReceipt[] | undefined)[]

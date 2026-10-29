@@ -58,7 +58,8 @@
   "files": [
     "dist",
     "README.md",
-    "docs",
+    "docs/AUTONOMOUS_WORKFLOW.md",
+    "docs/EXECUTION_CONDITIONS.md",
     "scripts/fix-pty-permissions.js"
   ]
 }

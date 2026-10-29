@@ -5,7 +5,6 @@ import {
   CommandTracker,
   currentTestProof,
   isVerificationCommand,
-  mergeReceipts,
   projectCommandKey,
   isBrowserVerificationCommand,
   mergeProjectReceipts,
@@ -309,8 +308,14 @@ test("the latest real rerun replaces a failed receipt across log redirects, whil
   tracker.observe(codex("npm test > verification/model-tests.txt 2>&1", 0));
   assert.equal(tracker.receipts.length, 1);
   assert.equal(tracker.receipts[0]!.exitCode, 0);
-  assert.equal(mergeReceipts(failed, tracker.receipts).length, 1);
-  assert.equal(mergeReceipts(failed, tracker.receipts)[0]!.exitCode, 0);
+  assert.equal(
+    mergeProjectReceipts(undefined, failed, tracker.receipts).length,
+    1,
+  );
+  assert.equal(
+    mergeProjectReceipts(undefined, failed, tracker.receipts)[0]!.exitCode,
+    0,
+  );
   tracker.observe(codex("npm test || true", 0));
   assert.equal(tracker.receipts.length, 1);
 });

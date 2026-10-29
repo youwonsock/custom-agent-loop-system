@@ -119,19 +119,6 @@ export function checkProcessLiveness(
   }
 }
 
-export function assertSafeSessionId(sessionId: string): void {
-  if (
-    sessionId.length === 0 ||
-    sessionId === "." ||
-    sessionId === ".." ||
-    sessionId.includes("/") ||
-    sessionId.includes("\\") ||
-    sessionId.includes("\0")
-  ) {
-    throw new Error(`Unsafe session ID: ${JSON.stringify(sessionId)}`);
-  }
-}
-
 export function collectRecoveredChildPids(
   previousLease: SessionLease | null,
   activeAttemptChildPid: number | null | undefined,

@@ -18,11 +18,6 @@ artifacts/
 .goal/sessions/
 .goal/sessions/**/
 
-# Orchestrator runtime registries / backups
-sessions_registry.json
-sessions_registry.json.tmp.*
-sessions_registry.json.corrupt.*
-
 # Logs
 *.log
 npm-debug.log*
@@ -45,15 +40,7 @@ coverage/
 # Launcher initialization ownership
 .agent-graph-setup.lock*
 
-# Retired desktop/extension and native build outputs
+# Local leftovers of retired desktop builds and game experiments
 /desktop-app/
-/vscode-extension/
 /.build/
-/native/
-/test/game.js
-/test/index.html
-/test/render.js
-/test/styles.css
-
-# Retired standalone game experiments
 /experiments/

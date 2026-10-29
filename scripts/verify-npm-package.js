@@ -56,20 +56,19 @@ const forbidden = [...files].filter(
     file.endsWith(".ts") ||
     file.endsWith(".test.js") ||
     file.startsWith("test/") ||
+    // Untracked local folders that may exist beside a source checkout.
     file.startsWith("experiments/") ||
-    file.startsWith("vscode-extension/") ||
     file.startsWith("desktop-app/") ||
     file.startsWith(".build/") ||
-    file.startsWith("native/") ||
     file.startsWith(".goal/") ||
     file.startsWith(".kilo/") ||
-    file.startsWith("sessions_registry.json") ||
     file.startsWith("src/") ||
     file.startsWith("web/") ||
     file.startsWith("artifacts/") ||
     file.startsWith("test-results/") ||
-    file.endsWith(".vsix") ||
-    /^(?:agent_roles|agent_loop|loop_config)\./.test(file),
+    // Release records name maintainers' machines; only user docs ship.
+    file === "docs/VERIFICATION.md" ||
+    file === "docs/IMPLEMENTATION_PLAN.md",
 );
 if (forbidden.length > 0) {
   throw new Error(
