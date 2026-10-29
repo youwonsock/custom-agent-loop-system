@@ -13,8 +13,9 @@ import { nodeTestVerificationCommand } from "../core/node_test_command";
 const origin = "http://127.0.0.1:4317",
   host = "127.0.0.1:4317",
   binary = path.resolve(__dirname, "../../../test/fixture_cli.cjs");
-// ConPTY drains output for about a second per role before reporting process exit.
-const sessionWaitMs = process.platform === "win32" ? 20_000 : 10_000;
+// ConPTY drains output for about a second per role before reporting process exit;
+// seven-role autonomous workflows measured up to ~20s on a loaded Windows host.
+const sessionWaitMs = process.platform === "win32" ? 45_000 : 10_000;
 const execute = promisify(execFile);
 // Match production's worker isolation: ConPTY may retain native handles in the
 // calling process even after every runtime assertion and lease release passes.
@@ -1097,6 +1098,10 @@ for (const type of ["stop", "interrupt"] as const)
       type === "stop" ? "STOPPED" : "PAUSED",
     );
     const { checkProcessLiveness } = await import("../core/resilience.js");
+    // Windows can report a terminated process as alive briefly while its handle closes.
+    const killedBy = Date.now() + 2000;
+    while (checkProcessLiveness(pid) !== "dead" && Date.now() < killedBy)
+      await delay(20);
     assert.equal(checkProcessLiveness(pid), "dead");
     if (type === "stop") assert.equal(state.visits.length, 0);
     else

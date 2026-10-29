@@ -10,24 +10,24 @@ import { delay } from "../core/resilience";
 
 // Characterization of GraphRuntime.execute() exits that the scenario suite in
 // app.test.ts does not reach. Each case pins the whole resulting session state
-// (status, reason, recovery, visit and attempt), not only the status, so the
-// planned execute() decomposition cannot silently change a halt's side effects.
+// (status, reason, recovery, visit and attempt), not only the status, so a
+// halt's side effects cannot change silently. docs/ARCHITECTURE.md lists them.
 //
-// Exit inventory (src/core/runtime.ts, win32). Measured by injecting probes into the
+// Exit inventory (GraphRuntime, win32). Measured by injecting probes into the
 // built runtime and running the full suite: V8 coverage undercounts worker-process code
 // and reported the hash-diff branch as unreached although it runs.
-//   preflight   518-545  source snapshot, contract lock, runner, deliverables, source read  covered
-//   loop top    572-579  poll / contract / session budget / stage budget                    573, 579 uncovered
-//   loop top    590-596  phase deadline or attempt limit reached before a call             uncovered (time-only)
-//   invocation  617-620  IO_UNAVAILABLE -> BLOCKED, visit paused, recovery untouched       this file
-//   supervisor  760-780  orphaned process / control request                                 760 uncovered
-//   evidence    782-825  VM receipts (macOS only), scope, protected writes, policy, stage    825 uncovered
-//   hashes      828-841  product hash diff for automation without testSourceGuard          this file
-//   failure     921-925  classifyFailure orphaned_process: unreachable, the supervisor
-//                        always sets outcome and failureKind together (handled at 760)
+//   preflight       source snapshot, contract lock, runner, deliverables, source read   covered
+//   attemptGuards   poll / contract / session budget / stage budget                     poll, stage uncovered
+//   execute loop    phase deadline or attempt limit reached before a call               uncovered (time-only)
+//   execute loop    IO_UNAVAILABLE -> BLOCKED, visit paused, recovery untouched         this file
+//   evidenceGates   orphaned process (uncovered), control request, VM receipts (macOS only),
+//                   scope, protected writes, frozen-test policy, stage budget (uncovered)
+//   evidenceGates   product hash diff for automation without testSourceGuard            this file
+//   failure         classifyFailure orphaned_process: unreachable, the supervisor always
+//                   sets outcome and failureKind together (handled in evidenceGates)
 const origin = "http://127.0.0.1:4317";
 const binary = path.resolve(__dirname, "../../../test/fixture_cli.cjs");
-const sessionWaitMs = process.platform === "win32" ? 20_000 : 10_000;
+const sessionWaitMs = process.platform === "win32" ? 45_000 : 10_000;
 const quickSettings = {
   maxAgentAttempts: 1,
   maxCompletionRecoveryAttempts: 1,

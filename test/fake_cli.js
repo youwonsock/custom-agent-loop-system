@@ -272,8 +272,8 @@ switch (mode) {
       '{"type":"text","id":"split-secret","part":{"id":"split-secret","text":"credential=top-',
     );
     setTimeout(() => {
-      process.stdout.write('secret\\n[PHASE_DONE]"}}\n');
-      process.exit(0);
+      // Windows TTY writes are asynchronous: exit only after the tail is flushed.
+      process.stdout.write('secret\\n[PHASE_DONE]"}}\n', () => process.exit(0));
     }, 30);
     break;
   case "wrapped-secret-echo":
@@ -281,8 +281,8 @@ switch (mode) {
       '{"type":"text","id":"wrapped-secret","part":{"id":"wrapped-secret","text":"credential=top-\r\n',
     );
     setTimeout(() => {
-      process.stdout.write('secret\\n[PHASE_DONE]"}}\n');
-      process.exit(0);
+      // Windows TTY writes are asynchronous: exit only after the tail is flushed.
+      process.stdout.write('secret\\n[PHASE_DONE]"}}\n', () => process.exit(0));
     }, 30);
     break;
   case "incomplete":
