@@ -9,7 +9,7 @@ import { AgentGraphDocument, SessionState } from "../shared/domain";
 import { delay } from "../core/resilience";
 
 // Characterization of GraphRuntime.execute() exits that the scenario suite in
-// app.test.ts does not reach. Each case pins the whole resulting session state
+// app_*.test.ts does not reach. Each case pins the whole resulting session state
 // (status, reason, recovery, visit and attempt), not only the status, so a
 // halt's side effects cannot change silently. docs/ARCHITECTURE.md lists them.
 //
