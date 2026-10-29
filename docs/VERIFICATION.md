@@ -616,3 +616,19 @@ Actions 실행은 네 작업 모두 성공했고, OS별 플랫폼 artifact 3개�
 전체 관찰은 **PASS_WITH_FINDINGS**다. 파싱된 native 완료 명령107건/비정상 exit5건을 보존했고 모든 시도의 인식된 receipt/read 집계가 엔진과 일치하며 수락된 단계는 원시 파싱 오류 없이 대조됐다. 거절된 첫 검토의 큰 JSON1건에 CLI stderr 경고가 끼어들어 원시 전체 감사는 불완전하다. 원본을 유지하고 해당 경고 한 줄만 제거한 파생 진단을 별도 보존했으며 workflow에 대입하지 않았다. 중첩 셸 읽기 인식·stdout/stderr 분리·Chromium 사전 검토 지시의 실행 관측은 후속 개선 후보다. Codex에는 Kilo VM/서명 범위 hook이 적용되지 않는다. 이번 native sandbox와 정확한 명령의 자동 검토 결과를 임의 프로그램 내부 I/O 격리·모든 목표의 무인 안정성·장기 공급자 가용성으로 일반화하지 않는다.
 
 자연 SUCCESS 뒤 workflow stop 없이 관리자10522/포트58047과 기록 호스트 식별74개·실행 폴더 cwd 잔류0을 확인했다. 실제 관리·검사 포트7개 모두 폐쇄, SUCCESS state 바이트 유지다. 모델 실행에 VM은 사용하지 않았고 공용 Codex daemon·전역 인증을 종료/수집/변경하지 않았다. 상세 결과는 `/Users/supercent/Desktop/agent graph test/gpt-luna-http-final-20261025-213250/TEST_RESULTS.md`, `RESULTS.json`, `FINDINGS.md`, `results/workflow-evaluation.json`, `results/raw-log-gap-diagnostic.json`, `results/all-recorded-ports.json`, `results/cleanup-verification.json`이다. 앞선 중단 실행과 native 사전 진단은 `/Users/supercent/Desktop/agent graph test/gpt-luna-http-permissions-20261025-205048`에 별도로 남겼다.
+
+## 실행 엔진 구조 정리·안전망·Windows PATH 수정 — 2026-10-30
+
+동작 고정 안전망을 먼저 추가했다. 노드 프롬프트 28종과 복구 메시지, CLI 4종의 실행 인자·앱이 바꾼 환경을 골든 파일로 고정했고(`test/golden/`, invocation은 win32/posix 계열별), 기존 시나리오가 닿지 않던 정지 경로 두 곳(`IO_UNAVAILABLE` 차단, testSourceGuard 없이 테스트 역할의 숨은 제품 변경을 해시로 반려)의 세션 상태 전체를 특성 테스트로 고정했다. V8 커버리지는 워커 프로세스 코드를 적게 집계해 해시 비교 분기를 미실행으로 보고했으며, 빌드 산출물에 probe를 넣은 전체 실행으로 실제 도달 여부를 다시 측정했다.
+
+안전망 검토 중 Windows에서 부모 환경 변수 이름이 `Path`이면 CLI 자식에 `Path`(전체)와 `PATH`(node 폴더만)가 함께 전달되고 Codex 셸 PATH가 node 폴더로 고정되는 결함을 재현해 수정했다. 대소문자 표기 모두에 대한 회귀 테스트가 수정 전 실패·수정 후 통과하며, `PATH` 표기 환경의 골든은 변하지 않았다.
+
+Prettier를 도입해 전체 소스를 포맷했다. `scripts/check-format-ast.js`로 변경된 TS/JS 128개 파일이 포맷 전과 같은 구문 트리임을 확인했고 포맷 커밋은 `.git-blame-ignore-revs`에 등록했다. `verify:platform`은 `format:check`를 먼저 실행한다.
+
+`GraphRuntime.execute()`를 약 840행에서 약 110행으로 줄이고 사전 검사·시도 전 가드·호출 구성·감독 실행·결과 기록·증거 게이트·완료 판정·실패 분류를 별도 메서드로 나눴다. 정지 경로는 `halt()`에서 방문 pause·예약 복구 취소 여부를 호출부가 명시하며 기존 경로별 차이를 그대로 유지한다([ARCHITECTURE.md](ARCHITECTURE.md)). CLI 종류에 따른 자동화 결정은 `run_policy.ts`로 모았다. 그래프에 `programIoGuard`가 있으면 실행 화면이 이 호스트에서 Kilo 노드가 정지할 조건과 Kilo 외 연결의 격리 범위를 안내한다.
+
+미사용 코드(`path_utils`, `assertSafeSessionId`, 테스트 전용 `mergeReceipts`)와 은퇴한 파일을 가리키던 ignore·패키지 누출 검사 항목을 제거했다. npm 패키지에는 사용자 문서(`AUTONOMOUS_WORKFLOW.md`, `EXECUTION_CONDITIONS.md`)만 포함하고 이 기록과 인수 기준 문서는 제외한다. 기존 stateVersion 3 스냅샷 읽기와 수동 그래프의 평문 보고 형식은 현재 기능이므로 유지했다. 마이그레이션 코드는 없었다.
+
+Windows의 타이밍 의존 테스트를 안정화했다. 비동기 TTY 쓰기 직후 종료하던 fixture는 쓰기 완료 후 종료하고, 종료된 프로세스 핸들이 닫힐 때까지 최대 2초 기다리며, Windows 세션 대기를 45초로 늘렸다. 검사와 무관한 작업(포맷·타입 검사)을 동시에 실행하면 1초 단위 watchdog 테스트가 `phase_timeout`으로 실패하므로 검증은 단독으로 실행한다.
+
+Windows 11 / Node 24.22.1의 `npm run verify:platform`(변경 대상 fb722bb + 문서)에서 format check, typecheck, tooling 10/10, 단위 337개 중 323 통과·0 실패·macOS 전용 14 건너뜀, smoke, pack:check 86파일, pack:smoke, audit 0건이 통과했다. 실행 화면의 격리 안내는 임시 작업 공간에서 Kilo·Codex 연결로 직접 확인했고 콘솔 오류는 없었다. 브라우저 E2E와 macOS VM 테스트, posix invocation 골든 생성은 이 환경에서 실행하지 않았으며 CI(Linux 브라우저, macOS 코어)와 Mac에서 `UPDATE_GOLDEN=1 npm test`로 확인해야 한다.

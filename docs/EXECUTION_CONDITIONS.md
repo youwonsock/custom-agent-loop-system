@@ -1,6 +1,6 @@
 # 실행 성공·실패·재시도 조건
 
-2026-10-25 기준. 구현: `src/core/completion.ts`, `runtime.ts`, `success_gate.ts`, `verification_evidence.ts`, `graph.ts`, `model_pricing.ts`, `cli_diagnostics.ts`, `agent_attempt_runner.ts`, `src/server/coordinator.ts`, `runtime_defaults.json`.
+2026-10-30 기준. 구현: `src/core/completion.ts`, `runtime.ts`, `run_policy.ts`, `success_gate.ts`, `verification_evidence.ts`, `graph.ts`, `model_pricing.ts`, `cli_diagnostics.ts`, `agent_attempt_runner.ts`, `src/server/coordinator.ts`, `runtime_defaults.json`.
 
 ## 자율 실행 프리셋
 

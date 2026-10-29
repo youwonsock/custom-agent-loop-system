@@ -26,7 +26,7 @@ node dist/src/server/cli.js ui --port 4320 --root /absolute/path/to/workspace
 
 npm 패키지 설치 후에는 `agent-loop ui`로 실행합니다. 기본 저장 영역은 `~/.agent-loop/graph-workspace`입니다. 이전 버전의 설정과 세션은 읽거나 자동 변환하지 않습니다.
 
-새 **자율 웹 제작·검증 프리셋**의 Kilo 실행은 별도 VM 런타임 준비가 필요합니다. 현재 지원 환경은 Apple Silicon macOS 26과 Apple container 1.6.0입니다. `container` 설치 후 소스에서 `npm run sandbox:prepare`를 실행합니다(설치 패키지는 `node dist/src/core/program_io_setup.js`). 최초 이미지 생성에는 네트워크와 8GiB 이상의 여유 공간이 필요합니다. 준비되지 않은 환경은 모델 호출 전에 BLOCKED로 정지합니다. 명령과 자식 프로그램은 네트워크·호스트 홈·소켓을 공유하지 않는 VM에서 실행하며, 공급자 CLI의 인증·통신은 호스트 제어 영역에 남습니다. [설정과 지원 범위](docs/AUTONOMOUS_WORKFLOW.md#kilo-프로그램-내부-io-격리)를 확인하세요.
+새 **자율 웹 제작·검증 프리셋**의 Kilo 실행은 별도 VM 런타임 준비가 필요합니다. 현재 지원 환경은 Apple Silicon macOS 26과 Apple container 1.6.0입니다. `container` 설치 후 소스에서 `npm run sandbox:prepare`를 실행합니다(설치 패키지는 `node dist/src/core/program_io_setup.js`). 최초 이미지 생성에는 네트워크와 8GiB 이상의 여유 공간이 필요합니다. 준비되지 않은 환경은 모델 호출 전에 BLOCKED로 정지합니다. 실행 화면은 실행 전에 이 조건과, Kilo가 아닌 연결에는 각 CLI의 네이티브 샌드박스만 적용된다는 점을 안내합니다. 명령과 자식 프로그램은 네트워크·호스트 홈·소켓을 공유하지 않는 VM에서 실행하며, 공급자 CLI의 인증·통신은 호스트 제어 영역에 남습니다. [설정과 지원 범위](docs/AUTONOMOUS_WORKFLOW.md#kilo-프로그램-내부-io-격리)를 확인하세요.
 
 ## 그래프 만들기
 
@@ -111,10 +111,13 @@ agent-loop verify-node-tests --target /absolute/project
 
 | 영역 | 책임 |
 | --- | --- |
+| `src/core/runtime.ts` | 방문 실행 단계(사전 검사 → 시도 전 가드 → 호출 구성 → 감독 실행 → 증거 게이트 → 완료 판정 → 실패 분류); 정지 경로는 `halt()`에 부수효과를 명시 |
+| `src/core/run_policy.ts` | 그래프 자동화 플래그와 연결 CLI 조합으로 정해지는 실행 결정 (예: Codex 로컬 HTTP, Kilo 범위·VM 격리) |
 | `src/core/session_transitions.ts` | 승인·재개·방문 이동·중지의 상태 변경 규칙; 프로세스와 파일 I/O는 호출자 담당 |
 | `src/core/store.ts`, `session_schema.ts` | version 3 해석, 원자 저장·잠금·저장 순번 비교, 변경된 세션 요약 캐시 |
 | `src/core/provider_events.ts`, `process_output.ts`, `process_lifecycle.ts` | 네이티브 이벤트 해석, 출력 프레이밍·마스킹, 제한 시간 내 프로세스 종료 |
 | `src/shared/session_updates.ts`, `graph_validation.ts` | 세션 순서 비교·병합, 서버/화면 공통 실행 진단 |
+| `src/shared/isolation.ts` | 현재 호스트와 그래프 연결 기준의 프로그램 I/O 격리 범위 안내 (실행 화면에 표시) |
 | `web/src/hooks`, `views/viewModels.ts` | 앱 상위 상태 소유자와 화면별로 필요한 상태·동작 계약 |
 
 세션의 내부 `revision`은 저장할 때 증가하며 오래된 워커 쓰기·지연 이벤트가 최신 상태를 덮어쓰지 못하게 합니다. 선택 필드 없는 기존 stateVersion 3은 계속 읽으며 없는 성공 근거는 만들어 넣지 않습니다. GUI는 `?summary=1` 목록·SSE와 선택 세션의 상세 조회를 사용합니다. 기존 기본 API 응답은 유지됩니다. 화면 전환 시 그래프 초안·연결 입력·계획 편집 상태는 상위 hook에 남습니다.
@@ -127,6 +130,7 @@ npx playwright install chromium
 npm run verify:browser
 
 # 개별 검사
+npm run format:check
 npm run typecheck
 npm test
 npm run test:tooling
@@ -139,7 +143,11 @@ npm run pack:smoke
 
 빌드는 코어와 웹 정적 자산을 함께 생성합니다. 모델 조회와 실행 테스트는 네 CLI의 프로토콜을 구현한 결정적 가짜 CLI를 사용해 모델 비용 없이 검증합니다. 실제 설치된 CLI의 목록 조회도 별도로 검증합니다.
 
-구현 목표와 실제 증거는 [인수 기준](docs/IMPLEMENTATION_PLAN.md)과 [검증·수정 기록](docs/VERIFICATION.md)에 기록합니다. CI는 Windows·Linux·macOS 코어 검사와 Linux 브라우저 시나리오를 수행합니다.
+코드 스타일은 Prettier로 통일합니다(`npm run format`). 포맷만 바꾼 커밋은 `.git-blame-ignore-revs`에 등록하며 `git config blame.ignoreRevsFile .git-blame-ignore-revs`로 blame에서 제외합니다. 포맷 전후의 구문 동일성은 `node scripts/check-format-ast.js <기준 revision>`으로 확인합니다.
+
+`test/golden/`은 노드 프롬프트와 CLI 실행 인자·환경을 바이트 단위로 고정합니다. 의도한 변경일 때만 `UPDATE_GOLDEN=1 npm test`로 갱신하고 diff를 검토합니다. invocation 골든은 `win32`/`posix` 계열별로 두며, 해당 계열의 골든이 없으면 그 테스트를 건너뜁니다. 실행 구조와 정지 경로는 [아키텍처](docs/ARCHITECTURE.md)에 정리했습니다.
+
+구현 목표와 실제 증거는 [인수 기준](docs/IMPLEMENTATION_PLAN.md)과 [검증·수정 기록](docs/VERIFICATION.md)에 기록합니다. 두 문서는 개발 기록이므로 npm 패키지에는 포함하지 않습니다. CI는 Windows·Linux·macOS 코어 검사와 Linux 브라우저 시나리오를 수행합니다.
 
 ## 자율 제작·검증
 
