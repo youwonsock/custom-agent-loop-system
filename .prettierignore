@@ -1,0 +1,12 @@
+dist/
+coverage/
+artifacts/
+test-results/
+playwright-report/
+package-lock.json
+# Byte-exact expectations and recorded evidence
+test/golden/
+test/fixtures/
+# Prose keeps its hand-written tables and line breaks
+*.md
+launchers/
