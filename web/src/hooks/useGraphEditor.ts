@@ -1,22 +1,29 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 import type { Connection } from "@xyflow/react";
-import { type AgentGraphDocument, type AgentNode } from "../../../src/shared/domain";
+import {
+  type AgentGraphDocument,
+  type AgentNode,
+} from "../../../src/shared/domain";
 import { api, ApiError, id } from "../api";
 import { typeMeta } from "../nodeMeta";
 import { backupKey, fingerprint, clientDiagnostics } from "../studioTypes";
 import type { StudioData } from "./useStudioData";
 
-export function useGraphEditor(data: Pick<StudioData, "boot" | "view" | "setView" | "setGraphs" | "setNotice" | "setError" | "refreshGraphs">) {
-  const {
-    boot,
-    view,
-    setView,
-    setGraphs,
-    setNotice,
-    setError,
-    refreshGraphs,
-  } = data;
+export function useGraphEditor(
+  data: Pick<
+    StudioData,
+    | "boot"
+    | "view"
+    | "setView"
+    | "setGraphs"
+    | "setNotice"
+    | "setError"
+    | "refreshGraphs"
+  >,
+) {
+  const { boot, view, setView, setGraphs, setNotice, setError, refreshGraphs } =
+    data;
   const [draft, setDraft] = useState<AgentGraphDocument | null>(null),
     draftRef = useRef<AgentGraphDocument | null>(null),
     dirty = useRef(false),
@@ -245,9 +252,13 @@ export function useGraphEditor(data: Pick<StudioData, "boot" | "view" | "setView
     graphAction(async () => {
       await flush();
       const g = await api<AgentGraphDocument>("/graphs", "POST", {
-        name: empty ? "새 빈 그래프" : autonomous ? "자율 제작·검증 루프" : "새 상호검증 루프",
+        name: empty
+          ? "새 빈 그래프"
+          : autonomous
+            ? "자율 제작·검증 루프"
+            : "새 상호검증 루프",
         empty,
-        ...(autonomous ? {template:"autonomous"} : {}),
+        ...(autonomous ? { template: "autonomous" } : {}),
       });
       await refreshGraphs();
       installDraft(g, false);

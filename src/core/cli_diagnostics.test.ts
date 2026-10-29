@@ -41,26 +41,64 @@ test("auth requires a real code/status or explicit failure rather than identifie
   );
 });
 test("Kilo tool argument aborts, capacity errors and cancelled requests retain actionable types", () => {
-  assert.equal(cliDiagnostic('Stopped after 3 consecutive invalid-argument failures for the "write" tool.').kind, "tool_arguments");
-  assert.equal(cliDiagnostic({ statusCode: 499, message: "status code 499" }).kind, "network");
-  assert.equal(cliDiagnostic({ statusCode: 503, message: "overloaded" }).kind, "rate_limited");
+  assert.equal(
+    cliDiagnostic(
+      'Stopped after 3 consecutive invalid-argument failures for the "write" tool.',
+    ).kind,
+    "tool_arguments",
+  );
+  assert.equal(
+    cliDiagnostic({ statusCode: 499, message: "status code 499" }).kind,
+    "network",
+  );
+  assert.equal(
+    cliDiagnostic({ statusCode: 503, message: "overloaded" }).kind,
+    "rate_limited",
+  );
   const collector = new CliDiagnosticCollector();
-  collector.observeLine('timestamp=2026-10-22T16:51:13Z level=INFO message="providers are currently at capacity"');
+  collector.observeLine(
+    'timestamp=2026-10-22T16:51:13Z level=INFO message="providers are currently at capacity"',
+  );
   assert.equal(JSON.stringify(collector.diagnostics.plainError), "null");
-  collector.observeLine('timestamp=2026-10-22T16:51:13Z level=ERROR run=fixture message="stream error" error.error="AI_APICallError: The request limited providers for this model and they are currently at capacity. Providers considered: reflection."');
+  collector.observeLine(
+    'timestamp=2026-10-22T16:51:13Z level=ERROR run=fixture message="stream error" error.error="AI_APICallError: The request limited providers for this model and they are currently at capacity. Providers considered: reflection."',
+  );
   assert.equal(collector.diagnostics.plainError?.kind, "rate_limited");
 });
 test("billing and exhausted quotas are distinct from temporary capacity and rate limits", () => {
   for (const error of [
     { statusCode: 402, message: "Payment required" },
-    { statusCode: 429, code: "insufficient_quota", message: "Request rejected" },
+    {
+      statusCode: 429,
+      code: "insufficient_quota",
+      message: "Request rejected",
+    },
     { code: "billing_error" },
-    "Provider quota exhausted", "Insufficient credits", "Credit balance is too low",
-    "You exceeded your current quota", "You've hit your usage limit", "You have reached your usage limit",
-  ]) assert.equal(cliDiagnostic(error).kind, "quota_exhausted", JSON.stringify(error));
-  assert.equal(cliDiagnostic({ statusCode: 429, message: "Too many requests" }).kind, "rate_limited");
-  assert.equal(cliDiagnostic({ statusCode: 503, message: "Providers are at capacity" }).kind, "rate_limited");
-  assert.equal(cliDiagnostic("Review the usage limit and credits UI").kind, "process_exit");
+    "Provider quota exhausted",
+    "Insufficient credits",
+    "Credit balance is too low",
+    "You exceeded your current quota",
+    "You've hit your usage limit",
+    "You have reached your usage limit",
+  ])
+    assert.equal(
+      cliDiagnostic(error).kind,
+      "quota_exhausted",
+      JSON.stringify(error),
+    );
+  assert.equal(
+    cliDiagnostic({ statusCode: 429, message: "Too many requests" }).kind,
+    "rate_limited",
+  );
+  assert.equal(
+    cliDiagnostic({ statusCode: 503, message: "Providers are at capacity" })
+      .kind,
+    "rate_limited",
+  );
+  assert.equal(
+    cliDiagnostic("Review the usage limit and credits UI").kind,
+    "process_exit",
+  );
   const collector = new CliDiagnosticCollector();
   collector.observeLine("Insufficient credits");
   assert.equal(collector.diagnostics.plainError?.kind, "quota_exhausted");
@@ -170,55 +208,94 @@ test("diagnostics are redacted and bounded without losing the classified kind", 
   }
 });
 
-
 test("explicit upstream credential failures retry without treating operator authentication failures as transient", () => {
-  const upstream = "AI_APICallError: Upstream request failed: Invalid credential";
+  const upstream =
+    "AI_APICallError: Upstream request failed: Invalid credential";
   assert.equal(cliDiagnostic(upstream).kind, "network");
-  assert.equal(cliDiagnostic({ statusCode: 502, message: upstream }).kind, "network");
-  assert.equal(cliDiagnostic({ statusCode: 401, message: upstream }).kind, "auth");
-  assert.equal(cliDiagnostic({ statusCode: 403, message: upstream }).kind, "auth");
-  for (const message of ["Invalid credential", "Invalid API key", "Upstream authentication failed", "Please fix credentials"])
+  assert.equal(
+    cliDiagnostic({ statusCode: 502, message: upstream }).kind,
+    "network",
+  );
+  assert.equal(
+    cliDiagnostic({ statusCode: 401, message: upstream }).kind,
+    "auth",
+  );
+  assert.equal(
+    cliDiagnostic({ statusCode: 403, message: upstream }).kind,
+    "auth",
+  );
+  for (const message of [
+    "Invalid credential",
+    "Invalid API key",
+    "Upstream authentication failed",
+    "Please fix credentials",
+  ])
     assert.notEqual(cliDiagnostic(message).kind, "network", message);
 });
 
-
 test("Kilo diagnostics isolate auxiliary title errors and parse numeric primary logfmt failures", () => {
   const c = new CliDiagnosticCollector();
-  c.observeLine('timestamp=1 level=ERROR session.id=title-ses_helper agent=title error.error="Invalid API key"');
-  c.observeEvent({type:"error",sessionID:"title-ses_helper",error:{message:"Unauthorized",statusCode:401}});
+  c.observeLine(
+    'timestamp=1 level=ERROR session.id=title-ses_helper agent=title error.error="Invalid API key"',
+  );
+  c.observeEvent({
+    type: "error",
+    sessionID: "title-ses_helper",
+    error: { message: "Unauthorized", statusCode: 401 },
+  });
   assert.equal(JSON.stringify(c.diagnostics.plainError), "null");
   assert.equal(JSON.stringify(c.diagnostics.terminalError), "null");
-  for (let n=0;n<3;n++) c.observeLine(`timestamp=${n} level=ERROR session.id=ses_main error.error.code=504 error.error.message="Upstream idle timeout exceeded"`);
+  for (let n = 0; n < 3; n++)
+    c.observeLine(
+      `timestamp=${n} level=ERROR session.id=ses_main error.error.code=504 error.error.message="Upstream idle timeout exceeded"`,
+    );
   assert.equal(c.diagnostics.plainError?.kind, "network");
   assert.equal(c.retryFailure?.statusCode, 504);
   c.resetRetryFailures();
   assert.equal(c.retryFailure, null);
-  c.observeLine('timestamp=4 level=ERROR session.id=ses_main error.error="Invalid API key"');
+  c.observeLine(
+    'timestamp=4 level=ERROR session.id=ses_main error.error="Invalid API key"',
+  );
   assert.equal(c.diagnostics.plainError?.kind, "auth");
 });
 
 test("duplicate logger errors do not consume retries and real progress resets a failure streak", () => {
   const c = new CliDiagnosticCollector();
-  const error = 'timestamp=1 level=ERROR session.id=ses_main error.error.code=504 error.error.message="Upstream idle timeout exceeded"';
-  for(let n=0;n<10;n++) c.observeLine(error);
-  assert.equal(c.retryFailure,null);
+  const error =
+    'timestamp=1 level=ERROR session.id=ses_main error.error.code=504 error.error.message="Upstream idle timeout exceeded"';
+  for (let n = 0; n < 10; n++) c.observeLine(error);
+  assert.equal(c.retryFailure, null);
   c.resetRetryFailures();
-  c.observeLine(error.replace('timestamp=1','timestamp=2'));
-  c.observeLine(error.replace('timestamp=1','timestamp=3'));
-  assert.equal(c.retryFailure,null);
+  c.observeLine(error.replace("timestamp=1", "timestamp=2"));
+  c.observeLine(error.replace("timestamp=1", "timestamp=3"));
+  assert.equal(c.retryFailure, null);
 });
 
-
 test("native primary 5xx messages without a logged numeric status trigger bounded connection recovery", () => {
- for(const message of ["AI_APICallError: Service Unavailable","AI_APICallError: Bad Gateway","Gateway Timeout","Internal Server Error"]){
-  assert.equal(cliDiagnostic(message).kind,"network");
-  assert.equal(cliDiagnostic({statusCode:401,message}).kind,"auth");
-  assert.equal(cliDiagnostic({statusCode:403,message}).kind,"permission");
- }
- const c=new CliDiagnosticCollector();
- for(let n=0;n<3;n++) c.observeLine(`timestamp=${n} level=ERROR session.id=ses_main error.error="AI_APICallError: Service Unavailable"`);
- assert.equal(c.retryFailure?.kind,"network");assert.equal(c.retryFailure?.statusCode,null);
- const title=new CliDiagnosticCollector();
- for(let n=0;n<3;n++) title.observeLine(`timestamp=${n} level=ERROR session.id=title-ses_aux agent=title error.error="AI_APICallError: Service Unavailable"`);
- assert.equal(title.retryFailure,null);
+  for (const message of [
+    "AI_APICallError: Service Unavailable",
+    "AI_APICallError: Bad Gateway",
+    "Gateway Timeout",
+    "Internal Server Error",
+  ]) {
+    assert.equal(cliDiagnostic(message).kind, "network");
+    assert.equal(cliDiagnostic({ statusCode: 401, message }).kind, "auth");
+    assert.equal(
+      cliDiagnostic({ statusCode: 403, message }).kind,
+      "permission",
+    );
+  }
+  const c = new CliDiagnosticCollector();
+  for (let n = 0; n < 3; n++)
+    c.observeLine(
+      `timestamp=${n} level=ERROR session.id=ses_main error.error="AI_APICallError: Service Unavailable"`,
+    );
+  assert.equal(c.retryFailure?.kind, "network");
+  assert.equal(c.retryFailure?.statusCode, null);
+  const title = new CliDiagnosticCollector();
+  for (let n = 0; n < 3; n++)
+    title.observeLine(
+      `timestamp=${n} level=ERROR session.id=title-ses_aux agent=title error.error="AI_APICallError: Service Unavailable"`,
+    );
+  assert.equal(title.retryFailure, null);
 });

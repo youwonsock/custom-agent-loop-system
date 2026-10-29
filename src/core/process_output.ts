@@ -53,7 +53,8 @@ export class StreamingRedactor {
         // policy events until another chunk (or a watchdog timeout) arrives.
         if (!final && combined.length - index < this.maximumPatternLength) {
           const suffix = combined.slice(index);
-          if (this.patterns.some(pattern => pattern.startsWith(suffix))) break;
+          if (this.patterns.some((pattern) => pattern.startsWith(suffix)))
+            break;
         }
         output += combined[index];
         index += 1;
@@ -124,7 +125,11 @@ export function isInteractiveAccessPrompt(value: string): boolean {
   );
 }
 
-export function appendRing(current: string, chunk: string, maxBytes: number): string {
+export function appendRing(
+  current: string,
+  chunk: string,
+  maxBytes: number,
+): string {
   const combined = current + chunk;
   if (Buffer.byteLength(combined, "utf8") <= maxBytes) return combined;
   const buffer = Buffer.from(combined, "utf8");
@@ -159,4 +164,3 @@ export function isStructurallyCompleteJson(value: string): boolean {
   }
   return !inString && depth === 0;
 }
-

@@ -37,7 +37,7 @@ void (async () => {
       killTimeoutMs: 1_000,
       maxInMemoryOutputBytes,
       rawLogPath: path.join(dir, "attempt.log"),
-      ...(mode.startsWith("scope-") ? {scopeRoots:[dir]} : {}),
+      ...(mode.startsWith("scope-") ? { scopeRoots: [dir] } : {}),
       interactionWhitelist: [],
       destructivePrompts: [],
       sensitiveValues:
@@ -66,7 +66,9 @@ void (async () => {
           0,
         ),
         rawLogIncludesSecret: rawLog.includes("top-secret"),
-        parsedEventIncludesSecret: JSON.stringify(result.events).includes("top-secret"),
+        parsedEventIncludesSecret: JSON.stringify(result.events).includes(
+          "top-secret",
+        ),
       }),
     );
   } finally {

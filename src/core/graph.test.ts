@@ -23,19 +23,37 @@ test("drafts allow partial binding, while execution requires model and complete 
   assert.equal(transition(g, "review", "failure"), "implementation");
 });
 test("execution rejects skipped tests, non-approval success and failure edges to SUCCESS, while drafts remain editable", () => {
-  for (const [source, outcome] of [["implementation", "success"], ["test", "failure"], ["approval", "failure"]] as const) {
+  for (const [source, outcome] of [
+    ["implementation", "success"],
+    ["test", "failure"],
+    ["approval", "failure"],
+  ] as const) {
     const g = createGraph();
-    g.edges.find(e => e.source === source && e.outcome === outcome)!.target = "SUCCESS";
+    g.edges.find((e) => e.source === source && e.outcome === outcome)!.target =
+      "SUCCESS";
     assert.equal(validateGraphDocument(g).version, 2);
-    assert.ok(graphDiagnostics(g, false).some(d => d.code === "unsafe_success"), `${source}/${outcome}`);
+    assert.ok(
+      graphDiagnostics(g, false).some((d) => d.code === "unsafe_success"),
+      `${source}/${outcome}`,
+    );
   }
   for (const entry of ["start", "reentry", "interrupt"] as const) {
     const g = createGraph();
-    if (entry === "interrupt") g.edges.find(e => e.source === "interrupt" && e.outcome === "success")!.target = "approval";
+    if (entry === "interrupt")
+      g.edges.find(
+        (e) => e.source === "interrupt" && e.outcome === "success",
+      )!.target = "approval";
     else g.entrypoints[entry] = "approval";
-    assert.ok(graphDiagnostics(g, false).some(d => d.code === "test_bypass"), entry);
+    assert.ok(
+      graphDiagnostics(g, false).some((d) => d.code === "test_bypass"),
+      entry,
+    );
   }
-  assert.deepEqual(graphDiagnostics(createGraph(), false), [], "normal failure/rework routes remain supported");
+  assert.deepEqual(
+    graphDiagnostics(createGraph(), false),
+    [],
+    "normal failure/rework routes remain supported",
+  );
 });
 test("cycles with an exit are valid; closed cycles and duplicate ports are rejected", () => {
   const g = createGraph();

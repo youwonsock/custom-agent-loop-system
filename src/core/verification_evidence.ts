@@ -78,52 +78,87 @@ export function checkCommandKey(command: string): string {
   // Output capture does not alter the check's exit status; never strip pipes,
   // command chaining, substitutions or a failure-masking suffix.
   return canonicalCommand(command.trim().replace(/^`([^`]+)`$/, "$1"))
-    .replace(/\s+>\s*(?:'[^']*'|"[^"$`]*"|(?:\\[^\r\n]|[^\s;&|$`\\])+)(?:\s+2>&1)?\s*$/, "")
+    .replace(
+      /\s+>\s*(?:'[^']*'|"[^"$`]*"|(?:\\[^\r\n]|[^\s;&|$`\\])+)(?:\s+2>&1)?\s*$/,
+      "",
+    )
     .trim();
 }
 
-export function ownedVerificationCapture(command:string,cwd:string):boolean {
-  const match=command.match(/\s+>\s*((?:'[^']*'|"[^"$`]*"|(?:\\[^\r\n]|[^\s;&|$`\\])+))(?:\s+2>&1)?\s*$/);
-  const words=match?literalShellWords(match[1]!):null;
-  if(words?.length!==1)return false;
-  const api=/^[A-Za-z]:[\\/]/.test(cwd)?path.win32:path.posix;
-  return /^[a-zA-Z0-9_.-]+$/.test(api.basename(words[0]!))&&verificationDirectory(api.dirname(words[0]!),cwd);
+export function ownedVerificationCapture(
+  command: string,
+  cwd: string,
+): boolean {
+  const match = command.match(
+    /\s+>\s*((?:'[^']*'|"[^"$`]*"|(?:\\[^\r\n]|[^\s;&|$`\\])+))(?:\s+2>&1)?\s*$/,
+  );
+  const words = match ? literalShellWords(match[1]!) : null;
+  if (words?.length !== 1) return false;
+  const api = /^[A-Za-z]:[\\/]/.test(cwd) ? path.win32 : path.posix;
+  return (
+    /^[a-zA-Z0-9_.-]+$/.test(api.basename(words[0]!)) &&
+    verificationDirectory(api.dirname(words[0]!), cwd)
+  );
 }
 
 /** Literal preparation may create only output directories owned by this check. */
-export function verificationDirectory(name:string,cwd?:string):boolean {
+export function verificationDirectory(name: string, cwd?: string): boolean {
   if (/[\r\n\0]/.test(name) || name.split(/[\\/]/).includes("..")) return false;
-  const api=cwd&&/^[A-Za-z]:[\\/]/.test(cwd)?path.win32:path.posix;
-  const relative=cwd?api.relative(api.resolve(cwd,"verification"),api.resolve(cwd,name)):name.replace(/^verification\/?/,"");
-  if(!cwd&&!/^verification(?:\/|$)/.test(name))return false;
-  return relative===""||/^[a-zA-Z0-9_-]+(?:[\\/][a-zA-Z0-9_-]+)*[\\/]?$/.test(relative);
+  const api = cwd && /^[A-Za-z]:[\\/]/.test(cwd) ? path.win32 : path.posix;
+  const relative = cwd
+    ? api.relative(api.resolve(cwd, "verification"), api.resolve(cwd, name))
+    : name.replace(/^verification\/?/, "");
+  if (!cwd && !/^verification(?:\/|$)/.test(name)) return false;
+  return (
+    relative === "" ||
+    /^[a-zA-Z0-9_-]+(?:[\\/][a-zA-Z0-9_-]+)*[\\/]?$/.test(relative)
+  );
 }
-export function verificationMkdir(command:string,cwd?:string):boolean {
-  if(/[\r\n]/.test(command))return false;
-  const words=literalShellWords(command);
-  return !!words&&words.length>=3&&words[0]==="mkdir"&&words[1]==="-p"&&words.slice(2).every(name=>verificationDirectory(name,cwd));
+export function verificationMkdir(command: string, cwd?: string): boolean {
+  if (/[\r\n]/.test(command)) return false;
+  const words = literalShellWords(command);
+  return (
+    !!words &&
+    words.length >= 3 &&
+    words[0] === "mkdir" &&
+    words[1] === "-p" &&
+    words.slice(2).every((name) => verificationDirectory(name, cwd))
+  );
 }
-export function verificationSetupParts(command:string,cwd?:string):{preparation:string[];body:string}|null {
-  const segments=command.split(/\s*&&\s*/);
-  if(segments.length>4)return null;
-  const preparation:string[]=[];
-  for(const segment of segments.slice(0,-1)){
-    const words=literalShellWords(segment);
-    const api=cwd&&/^[A-Za-z]:[\\/]/.test(cwd)?path.win32:path.posix;
-    if(cwd&&words?.length===2&&words[0]==="cd"&&!/[\r\n]/.test(segment)&&api.relative(api.resolve(cwd),api.resolve(cwd,words[1]!))==="")continue;
-    if(!verificationMkdir(segment,cwd))return null;
+export function verificationSetupParts(
+  command: string,
+  cwd?: string,
+): { preparation: string[]; body: string } | null {
+  const segments = command.split(/\s*&&\s*/);
+  if (segments.length > 4) return null;
+  const preparation: string[] = [];
+  for (const segment of segments.slice(0, -1)) {
+    const words = literalShellWords(segment);
+    const api = cwd && /^[A-Za-z]:[\\/]/.test(cwd) ? path.win32 : path.posix;
+    if (
+      cwd &&
+      words?.length === 2 &&
+      words[0] === "cd" &&
+      !/[\r\n]/.test(segment) &&
+      api.relative(api.resolve(cwd), api.resolve(cwd, words[1]!)) === ""
+    )
+      continue;
+    if (!verificationMkdir(segment, cwd)) return null;
     preparation.push(segment);
   }
-  return {preparation,body:segments.at(-1)!.trim()};
+  return { preparation, body: segments.at(-1)!.trim() };
 }
 
 /** Ignore owned output setup and cd to the already-owned project only. */
 export function projectCommandKey(command: string, cwd?: string): string {
   const key = checkCommandKey(command);
-  return verificationSetupParts(key,cwd)?.body??key;
+  return verificationSetupParts(key, cwd)?.body ?? key;
 }
 
-export function isBrowserVerificationCommand(command: string, cwd?: string): boolean {
+export function isBrowserVerificationCommand(
+  command: string,
+  cwd?: string,
+): boolean {
   const native = canonicalCommand(command);
   return (
     !/[`$]/.test(native) &&
@@ -136,15 +171,24 @@ export function isBrowserVerificationCommand(command: string, cwd?: string): boo
 export function isVerificationCommand(command: string, cwd?: string): boolean {
   const c = canonicalCommand(command);
   if (isBrowserVerificationCommand(c, cwd)) return true;
-  if (!/[`$]/.test(c) && projectCommandKey(c,cwd) === nodeTestVerificationCommand()) return true;
+  if (
+    !/[`$]/.test(c) &&
+    projectCommandKey(c, cwd) === nodeTestVerificationCommand()
+  )
+    return true;
   // Do not accept a backgrounded test whose shell exits before the test does.
   if (c.replace(/2>&1/g, "").replace(/&&/g, "").includes("&")) return false;
   if (/[\n;|`]/.test(c) || /\$\(/.test(c)) return false;
-  let parts=verificationSetupParts(c,cwd);
+  let parts = verificationSetupParts(c, cwd);
   // Historical callers without a known project may recognize a literal cd;
   // runtime receipts always supply cwd and still reject a different project.
-  if(!parts&&!cwd){const segments=c.split(/\s*&&\s*/),words=literalShellWords(segments[0]!);if(segments.length===2&&words?.length===2&&words[0]==="cd")parts={preparation:[],body:segments[1]!};}
-  if(!parts)return false;
+  if (!parts && !cwd) {
+    const segments = c.split(/\s*&&\s*/),
+      words = literalShellWords(segments[0]!);
+    if (segments.length === 2 && words?.length === 2 && words[0] === "cd")
+      parts = { preparation: [], body: segments[1]! };
+  }
+  if (!parts) return false;
   return /^(?:(?:[A-Za-z_][\w]*=[^\s]+)\s+)*(?:(?:\S*[\\/])?)(?:(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?(?:test|check|verify)(?:[:\s]|$)|node\s+(?:--test(?:[=\s]|$)|["']?(?:[^\s]*[\\/])?(?:test|verify|check)[^\s]*\.[cm]?js\b)|(?:npx\s+)?(?:vitest|jest|playwright\s+test)\b|(?:python[\d.]*\s+-m\s+)?pytest\b|(?:cargo|go|dotnet)\s+test\b)/i.test(
     parts.body,
   );
@@ -152,7 +196,10 @@ export function isVerificationCommand(command: string, cwd?: string): boolean {
 
 /** Receipts come only from native completed tool events, after redaction. */
 export class CommandTracker {
-  constructor(private readonly cwd?: string,private readonly sourcesGuarded=false) {}
+  constructor(
+    private readonly cwd?: string,
+    private readonly sourcesGuarded = false,
+  ) {}
   readonly receipts: CommandReceipt[] = [];
   private readonly pending = new Map<string, string>();
   private record(
@@ -186,7 +233,11 @@ export class CommandTracker {
       exitCode: code,
       environmentError: blocked ? blocked[0].slice(0, 300) : null,
     };
-    const old = this.receipts.findIndex((r) => projectCommandKey(r.command, this.cwd) === projectCommandKey(receipt.command, this.cwd));
+    const old = this.receipts.findIndex(
+      (r) =>
+        projectCommandKey(r.command, this.cwd) ===
+        projectCommandKey(receipt.command, this.cwd),
+    );
     if (old >= 0) this.receipts.splice(old, 1);
     this.receipts.push(receipt);
     if (this.receipts.length > 64) this.receipts.shift();
@@ -254,11 +305,15 @@ export class CommandTracker {
 export function mergeReceipts(
   ...groups: (CommandReceipt[] | undefined)[]
 ): CommandReceipt[] {
-  return mergeProjectReceipts(undefined,...groups);
+  return mergeProjectReceipts(undefined, ...groups);
 }
-export function mergeProjectReceipts(cwd: string|undefined,...groups: (CommandReceipt[]|undefined)[]): CommandReceipt[] {
+export function mergeProjectReceipts(
+  cwd: string | undefined,
+  ...groups: (CommandReceipt[] | undefined)[]
+): CommandReceipt[] {
   const latest = new Map<string, CommandReceipt>();
-  for (const r of groups.flatMap((g) => g ?? [])) latest.set(projectCommandKey(r.command,cwd), r);
+  for (const r of groups.flatMap((g) => g ?? []))
+    latest.set(projectCommandKey(r.command, cwd), r);
   return [...latest.values()].slice(-64);
 }
 
@@ -273,7 +328,7 @@ export function acceptedVisit(visit: NodeVisit, cwd?: string): boolean {
     !attempt.failureKind &&
     !!attempt.endedAt &&
     !attempt.pid &&
-    !failedVerificationCommand(visitCommands(visit,cwd)) &&
+    !failedVerificationCommand(visitCommands(visit, cwd)) &&
     visit.output.trim().split("\n").at(-1)?.trim() === "[PHASE_DONE]"
   );
 }
@@ -285,12 +340,18 @@ export function failedVerificationCommand(
   return commands.find((c) => c.exitCode !== 0 || !!c.environmentError);
 }
 
-export function visitCommands(visit: NodeVisit,cwd?:string): CommandReceipt[] {
+export function visitCommands(
+  visit: NodeVisit,
+  cwd?: string,
+): CommandReceipt[] {
   let commands: CommandReceipt[] = [];
   for (const attempt of visit.attempts ?? []) {
-    if(attempt.verificationInvalidation){commands=[];continue;}
+    if (attempt.verificationInvalidation) {
+      commands = [];
+      continue;
+    }
     if (attempt.fileMutation) commands = [];
-    commands = mergeProjectReceipts(cwd,commands, attempt.commands);
+    commands = mergeProjectReceipts(cwd, commands, attempt.commands);
   }
   return commands;
 }
@@ -302,13 +363,13 @@ export function verifiedTestCommands(
 ): CommandReceipt[] {
   if (
     !requirements.length ||
-    !acceptedVisit(visit,cwd) ||
+    !acceptedVisit(visit, cwd) ||
     visit.verdict !== "PASS" ||
     !evaluateRequirementCoverage(visit.output, requirements).allSatisfied
   )
     return [];
   // Reconstruct from observed attempt receipts, never from prose or a saved verdict.
-  const commands = visitCommands(visit,cwd);
+  const commands = visitCommands(visit, cwd);
   if (
     !commands.length ||
     failedVerificationCommand(commands) ||
@@ -348,16 +409,22 @@ export function currentTestProof(
     const type = state.graph.nodes.find((n) => n.id === visit.nodeId)?.type;
     if (type !== "review" && type !== "approval") proof = [];
     if (type === "test") {
-      proof = verifiedTestCommands(visit, state.requirements.items, state.targetProjectPath);
+      proof = verifiedTestCommands(
+        visit,
+        state.requirements.items,
+        state.targetProjectPath,
+      );
       if (
         state.graph.automation?.browserVerification &&
-        !proof.some((c) => isBrowserVerificationCommand(c.command, state.targetProjectPath))
+        !proof.some((c) =>
+          isBrowserVerificationCommand(c.command, state.targetProjectPath),
+        )
       )
         proof = [];
     }
     if (
       (type === "review" || type === "approval") &&
-      (!acceptedVisit(visit,state.targetProjectPath) ||
+      (!acceptedVisit(visit, state.targetProjectPath) ||
         visit.verdict !== "APPROVED" ||
         !evaluateRequirementCoverage(visit.output, state.requirements.items)
           .allSatisfied)
@@ -366,8 +433,16 @@ export function currentTestProof(
   }
   return proof;
 }
-export function currentNodeTestProof(state:SessionState,before:NodeVisit) {
-  if(!currentTestProof(state,before).length)return undefined;
-  const index=state.visits.findIndex(v=>v.id===before.id);
-  return state.visits.slice(0,index).reverse().find(v=>state.graph.nodes.find(n=>n.id===v.nodeId)?.type==="test"&&acceptedVisit(v,state.targetProjectPath)&&v.verdict==="PASS")?.nodeTestProof;
+export function currentNodeTestProof(state: SessionState, before: NodeVisit) {
+  if (!currentTestProof(state, before).length) return undefined;
+  const index = state.visits.findIndex((v) => v.id === before.id);
+  return state.visits
+    .slice(0, index)
+    .reverse()
+    .find(
+      (v) =>
+        state.graph.nodes.find((n) => n.id === v.nodeId)?.type === "test" &&
+        acceptedVisit(v, state.targetProjectPath) &&
+        v.verdict === "PASS",
+    )?.nodeTestProof;
 }

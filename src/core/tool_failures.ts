@@ -17,7 +17,11 @@ export class ToolFailureTracker {
     }
     const error = typeof state.error === "string" ? state.error : "";
     if (state.status !== "error") return null;
-    if (!/unavailable tool|invalid (?:tool )?(?:arguments?|input)|required (?:field|parameter)|missing.*(?:filePath|content|command)/i.test(error)) {
+    if (
+      !/unavailable tool|invalid (?:tool )?(?:arguments?|input)|required (?:field|parameter)|missing.*(?:filePath|content|command)/i.test(
+        error,
+      )
+    ) {
       this.previous = "";
       this.count = 0;
       return null;
@@ -26,7 +30,8 @@ export class ToolFailureTracker {
     // Duplicate streamed snapshots of the same failed call cannot consume retries.
     if (!identity || this.seen.has(identity)) return null;
     this.seen.add(identity);
-    if (this.seen.size > 128) this.seen.delete(this.seen.values().next().value!);
+    if (this.seen.size > 128)
+      this.seen.delete(this.seen.values().next().value!);
     const key = `${String(part.tool)}:${error}`;
     this.count = this.previous === key ? this.count + 1 : 1;
     this.previous = key;

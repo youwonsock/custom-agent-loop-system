@@ -47,7 +47,9 @@ export function diagnosticMessage(value: string): string {
 /** Explicit upstream routing failure, not a missing operator credential.
  * A real 401/403 always wins; no generic "invalid credential" retry exemption. */
 export function isUpstreamCredentialFailure(message: string): boolean {
-  return /(?:^|\n)(?:Last observed CLI error: )?(?:AI_APICallError: )?Upstream request failed: Invalid credential(?:[.\r\n]|$)/.test(message);
+  return /(?:^|\n)(?:Last observed CLI error: )?(?:AI_APICallError: )?Upstream request failed: Invalid credential(?:[.\r\n]|$)/.test(
+    message,
+  );
 }
 
 // These phrases describe an actual failure, rather than a mention of auth, a
@@ -58,8 +60,13 @@ function kindOf(
   message: string,
 ): FailureKind {
   const normalized = code.toLowerCase().replace(/[^a-z0-9]/g, "");
-  if (status !== 401 && status !== 403 && isUpstreamCredentialFailure(message)) return "network";
-  if (/^Stopped after \d+ consecutive invalid-argument failures for the ".+" tool\./i.test(message))
+  if (status !== 401 && status !== 403 && isUpstreamCredentialFailure(message))
+    return "network";
+  if (
+    /^Stopped after \d+ consecutive invalid-argument failures for the ".+" tool\./i.test(
+      message,
+    )
+  )
     return "tool_arguments";
   if (
     /^(providerautherror|authenticationerror|authenticationfailed|authrequired|unauthenticated|unauthorized|invalidapikey|missingapikey|expiredtoken|notloggedin)$/.test(
@@ -91,25 +98,30 @@ function kindOf(
   )
     return "model_unavailable";
   if (
-    /^(quotaexceeded|insufficientquota|billingerror|creditsrequired|insufficientcredits|usagelimitreached)$/.test(normalized) ||
+    /^(quotaexceeded|insufficientquota|billingerror|creditsrequired|insufficientcredits|usagelimitreached)$/.test(
+      normalized,
+    ) ||
     status === 402 ||
-    /\b(?:quota|credits?|credit balance|usage limit|spending limit) (?:is |are |has been )?(?:exceeded|exhausted|insufficient|reached|depleted|too low)\b|\b(?:insufficient|exhausted|depleted) (?:quota|credits?|credit balance)\b|\bexceeded (?:your |the )?(?:current )?quota\b|\b(?:hit|reached|exceeded) (?:your |the )?(?:usage|spending) limit\b/i.test(message)
+    /\b(?:quota|credits?|credit balance|usage limit|spending limit) (?:is |are |has been )?(?:exceeded|exhausted|insufficient|reached|depleted|too low)\b|\b(?:insufficient|exhausted|depleted) (?:quota|credits?|credit balance)\b|\bexceeded (?:your |the )?(?:current )?quota\b|\b(?:hit|reached|exceeded) (?:your |the )?(?:usage|spending) limit\b/i.test(
+      message,
+    )
   )
     return "quota_exhausted";
   if (
-    /^(ratelimit|ratelimiterror|ratelimitexceeded)$/.test(
-      normalized,
-    ) ||
-    status === 429 || status === 503 ||
-    /\bproviders? (?:for this model )?.*\b(?:at capacity|overloaded)\b/i.test(message) ||
-    /\brate[ _-]?limit(?:ed| exceeded)?\b/i.test(
+    /^(ratelimit|ratelimiterror|ratelimitexceeded)$/.test(normalized) ||
+    status === 429 ||
+    status === 503 ||
+    /\bproviders? (?:for this model )?.*\b(?:at capacity|overloaded)\b/i.test(
       message,
-    )
+    ) ||
+    /\brate[ _-]?limit(?:ed| exceeded)?\b/i.test(message)
   )
     return "rate_limited";
   if (
     [499, 502, 504].includes(status ?? 0) ||
-    /^(?:AI_APICallError:\s*)?(?:Service Unavailable|Bad Gateway|Gateway Timeout|Internal Server Error)\b/i.test(message) ||
+    /^(?:AI_APICallError:\s*)?(?:Service Unavailable|Bad Gateway|Gateway Timeout|Internal Server Error)\b/i.test(
+      message,
+    ) ||
     /^(econnreset|econnrefused|enotfound|etimedout|networkerror|transporterror)$/.test(
       normalized,
     ) ||
@@ -255,18 +267,38 @@ export class CliDiagnosticCollector {
             ...(code ? { statusCode: Number(code[1]) } : {}),
           });
           this.diagnostics.plainError = next;
-          if (!["network", "rate_limited", "quota_exhausted"].includes(next.kind)) this.resetRetryFailures();
-          if (["network", "rate_limited", "quota_exhausted"].includes(next.kind) && line !== this.lastFailureLine) {
+          if (
+            !["network", "rate_limited", "quota_exhausted"].includes(next.kind)
+          )
+            this.resetRetryFailures();
+          if (
+            ["network", "rate_limited", "quota_exhausted"].includes(
+              next.kind,
+            ) &&
+            line !== this.lastFailureLine
+          ) {
             const key = `${next.kind}:${next.statusCode}:${next.message}`;
-            this.repeatedFailure = { key, count: this.repeatedFailure?.key === key ? this.repeatedFailure.count + 1 : 1 };
+            this.repeatedFailure = {
+              key,
+              count:
+                this.repeatedFailure?.key === key
+                  ? this.repeatedFailure.count + 1
+                  : 1,
+            };
             this.lastFailureLine = line;
             if (this.repeatedFailure.count >= 3) this.retryFailure = next;
           }
-        } catch { /* malformed logger fields remain raw log only */ }
+        } catch {
+          /* malformed logger fields remain raw log only */
+        }
       }
       return;
     }
-    if (/^(?:insufficient credits?\b|credit balance\b|(?:your )?(?:usage|spending) limit\b|you(?:'ve| have)? (?:hit|reached|exceeded) (?:your |the )?(?:usage|spending) limit\b)/i.test(line)) {
+    if (
+      /^(?:insufficient credits?\b|credit balance\b|(?:your )?(?:usage|spending) limit\b|you(?:'ve| have)? (?:hit|reached|exceeded) (?:your |the )?(?:usage|spending) limit\b)/i.test(
+        line,
+      )
+    ) {
       this.diagnostics.plainError = cliDiagnostic(line);
       return;
     }

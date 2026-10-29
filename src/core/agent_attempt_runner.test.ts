@@ -107,11 +107,31 @@ test("auth, orphan, attempt exhaustion, and budget exhaustion do not retry", () 
   }
 });
 
-
 test("upstream credential failures retry a fresh native session, preserving attempt and budget bounds", () => {
-  const runner = new AgentAttemptRunner({ maxAttempts: 2, retryBackoffMs: [5] }, () => 0.5);
-  const input = { failure: { ...failure("idle_timeout"), message: "Idle timeout\nLast observed CLI error: AI_APICallError: Upstream request failed: Invalid credential" }, attemptNumber: 1, budgetRemainingMs: 1000, cliSessionId: "bad-route", reconnectUsed: false };
-  assert.deepEqual(runner.decideRetry(input), { retry: true, reconnect: false, delayMs: 5, reason: "start_fresh_session" });
+  const runner = new AgentAttemptRunner(
+    { maxAttempts: 2, retryBackoffMs: [5] },
+    () => 0.5,
+  );
+  const input = {
+    failure: {
+      ...failure("idle_timeout"),
+      message:
+        "Idle timeout\nLast observed CLI error: AI_APICallError: Upstream request failed: Invalid credential",
+    },
+    attemptNumber: 1,
+    budgetRemainingMs: 1000,
+    cliSessionId: "bad-route",
+    reconnectUsed: false,
+  };
+  assert.deepEqual(runner.decideRetry(input), {
+    retry: true,
+    reconnect: false,
+    delayMs: 5,
+    reason: "start_fresh_session",
+  });
   assert.equal(runner.decideRetry({ ...input, attemptNumber: 2 }).retry, false);
-  assert.equal(runner.decideRetry({ ...input, budgetRemainingMs: 0 }).retry, false);
+  assert.equal(
+    runner.decideRetry({ ...input, budgetRemainingMs: 0 }).retry,
+    false,
+  );
 });

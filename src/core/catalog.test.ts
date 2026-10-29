@@ -113,15 +113,25 @@ test("native invocation preserves MCP/web/hooks and never forces pure mode", asy
     assert.equal(invocation.args.includes("--search"), false);
     assert.equal(JSON.stringify(invocation).includes("mcpServers"), false);
     if (type === "kilo") {
-      assert.ok(invocation.args.indexOf("--print-logs") < invocation.args.indexOf("run"));
+      assert.ok(
+        invocation.args.indexOf("--print-logs") <
+          invocation.args.indexOf("run"),
+      );
       assert.match(invocation.args.at(-1)!, /filePath.*content/);
-      if (process.platform === "win32") assert.match(invocation.args.at(-1)!, /npm\.cmd.*execution policy/);
-      if (process.platform === "win32") assert.equal(invocation.transport, "pipe");
+      if (process.platform === "win32")
+        assert.match(invocation.args.at(-1)!, /npm\.cmd.*execution policy/);
+      if (process.platform === "win32")
+        assert.equal(invocation.transport, "pipe");
       const review = await buildInvocation(
         { id: type, label: type, type, binary },
         { connectionId: type, modelId: "fixture-model" },
-        g.nodes.find(n => n.type === "review")!,
-        { prompt: "review", cwd: os.tmpdir(), fullAccess: false, allowedPaths: [] },
+        g.nodes.find((n) => n.type === "review")!,
+        {
+          prompt: "review",
+          cwd: os.tmpdir(),
+          fullAccess: false,
+          allowedPaths: [],
+        },
       );
       assert.match(review.args.at(-1)!, /only permitted read-only tools/);
       assert.doesNotMatch(review.args.at(-1)!, /use bash/);
@@ -217,14 +227,35 @@ test("OpenCode and Kilo use native auto permission flag only for approved writab
   }
 });
 
-
 test("Codex uses the orchestrator Node PATH without a login shell or changing sandbox permissions", async () => {
   for (const role of ["implementation", "test", "review"] as const) {
-    const invocation = await buildInvocation({ id: "codex", label: "codex", type: "codex", binary }, { connectionId: "codex", modelId: "fixture-model" }, createGraph().nodes.find(n => n.type === role)!, { prompt: "check", cwd: os.tmpdir(), fullAccess: false, allowedPaths: [] });
+    const invocation = await buildInvocation(
+      { id: "codex", label: "codex", type: "codex", binary },
+      { connectionId: "codex", modelId: "fixture-model" },
+      createGraph().nodes.find((n) => n.type === role)!,
+      {
+        prompt: "check",
+        cwd: os.tmpdir(),
+        fullAccess: false,
+        allowedPaths: [],
+      },
+    );
     assert.ok(invocation.args.includes("allow_login_shell=false"));
-    assert.ok(invocation.args.some(a => a.startsWith("shell_environment_policy.set.PATH=") && a.includes(path.dirname(process.execPath).replaceAll("\\", "\\\\"))));
-    assert.equal(invocation.args[invocation.args.indexOf("--sandbox") + 1], role === "review" ? "read-only" : "workspace-write");
+    assert.ok(
+      invocation.args.some(
+        (a) =>
+          a.startsWith("shell_environment_policy.set.PATH=") &&
+          a.includes(path.dirname(process.execPath).replaceAll("\\", "\\\\")),
+      ),
+    );
+    assert.equal(
+      invocation.args[invocation.args.indexOf("--sandbox") + 1],
+      role === "review" ? "read-only" : "workspace-write",
+    );
     assert.equal(invocation.args.includes("--approve-for-me"), false);
-    assert.equal(invocation.args.some(a => a.includes("network_access=true")), false);
+    assert.equal(
+      invocation.args.some((a) => a.includes("network_access=true")),
+      false,
+    );
   }
 });

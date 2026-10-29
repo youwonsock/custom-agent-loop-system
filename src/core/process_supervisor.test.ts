@@ -28,24 +28,40 @@ interface CaseResult {
   rawLogIncludesSecret: boolean;
   parsedEventIncludesSecret: boolean;
 }
-test("scope-denied native calls do not become actual mutations or approval waits, while escaped access survives ring eviction",async()=>{
- const denied=await runFake("scope-denied-then-inside",{transportMode:"pipe"});
- assert.equal(denied.outcome,"succeeded");assert.equal(denied.evidence.fileMutation,false);assert.equal(denied.evidence.scopeAudit!.blockedCalls,1);assert.equal(denied.evidence.scopeAudit!.outsideCalls,0);
- const escaped=await runFake("scope-outside-flood",{transportMode:"pipe",maxBytes:1024});
- assert.equal(escaped.outcome,"process_exit");assert.equal(escaped.failureKind,"role_violation");assert.equal(escaped.evidence.scopeAudit!.outsideCalls,1);assert.ok(escaped.eventBytes<=1024);
+test("scope-denied native calls do not become actual mutations or approval waits, while escaped access survives ring eviction", async () => {
+  const denied = await runFake("scope-denied-then-inside", {
+    transportMode: "pipe",
+  });
+  assert.equal(denied.outcome, "succeeded");
+  assert.equal(denied.evidence.fileMutation, false);
+  assert.equal(denied.evidence.scopeAudit!.blockedCalls, 1);
+  assert.equal(denied.evidence.scopeAudit!.outsideCalls, 0);
+  const escaped = await runFake("scope-outside-flood", {
+    transportMode: "pipe",
+    maxBytes: 1024,
+  });
+  assert.equal(escaped.outcome, "process_exit");
+  assert.equal(escaped.failureKind, "role_violation");
+  assert.equal(escaped.evidence.scopeAudit!.outsideCalls, 1);
+  assert.ok(escaped.eventBytes <= 1024);
 });
 test("file mutation, search and spend survive eviction from the recent event ring", async () => {
   const result = await runFake("evidence-flood", { maxBytes: 1024 });
   assert.equal(result.evidence.fileMutation, true);
   assert.equal(result.evidence.completedSearches, 1);
   assert.equal(result.evidence.maxTokens, 123);
-  assert.deepEqual(result.evidence.commands.map(c => [c.command, c.exitCode]), [["npm test", 0]]);
+  assert.deepEqual(
+    result.evidence.commands.map((c) => [c.command, c.exitCode]),
+    [["npm test", 0]],
+  );
   assert.ok(result.eventBytes <= 1024);
 });
 test("pipe JSON preserves long Unicode records while stderr arrives inside a stdout record", async () => {
-  const result = await runFake("pipe-json-interleaved", { transportMode: "pipe" });
+  const result = await runFake("pipe-json-interleaved", {
+    transportMode: "pipe",
+  });
   assert.equal(result.outcome, "succeeded");
-  assert.equal(result.assistantText, '한글🙂'.repeat(1200) + '\n[PHASE_DONE]');
+  assert.equal(result.assistantText, "한글🙂".repeat(1200) + "\n[PHASE_DONE]");
   assert.equal(result.cliSessionId, "pipe-session");
   assert.equal(result.evidence.maxTokens, 42);
   assert.equal(result.evidence.actualModelId, "kilo/pipe-fixture");
@@ -55,7 +71,10 @@ test("pipe transport retains streaming credential redaction and bounded terminat
   const secret = await runFake("split-secret-echo", { transportMode: "pipe" });
   assert.equal(secret.rawLogIncludesSecret, false);
   assert.doesNotMatch(secret.assistantText, /top-secret/);
-  const stopped = await runFake("ignore-termination", { transportMode: "pipe", transport: 100 });
+  const stopped = await runFake("ignore-termination", {
+    transportMode: "pipe",
+    transport: 100,
+  });
   assert.equal(stopped.outcome, "transport_timeout");
 });
 
@@ -138,7 +157,10 @@ test(
         phase: 2_000,
       });
       assert.equal(result.exitCode, 0);
-      assert.equal(result.outcome, mode === "success" ? "succeeded" : "process_exit");
+      assert.equal(
+        result.outcome,
+        mode === "success" ? "succeeded" : "process_exit",
+      );
       assert.equal(result.failureKind, mode === "success" ? null : "auth");
     }
   },
@@ -222,7 +244,11 @@ test("initial transport timeout stops after connection and model generation gets
   assert.match(result.assistantText, /\[PHASE_DONE\]/);
 });
 test("Kilo bootstrap logs establish transport but repeated capacity logs cannot extend model idle time", async () => {
-  const result = await runFake("native-provider-retries", { transport: 750, idle: 250, phase: 2000 });
+  const result = await runFake("native-provider-retries", {
+    transport: 750,
+    idle: 250,
+    phase: 2000,
+  });
   assert.equal(result.outcome, "idle_timeout");
   assert.equal(result.cliSessionId, "ses_nativeRetry");
   assert.equal(result.diagnostics.plainError?.kind, "rate_limited");
@@ -329,21 +355,38 @@ test("permission denial correlation excludes unexecuted writes but retains poten
   assert.equal(partial.outcome, "succeeded");
 });
 
-
 test("retry step IDs do not renew idle time, and repeated primary failures stop before idle", async () => {
-  const noise = await runFake("retry-step-noise", { transport: 750, idle: 250, phase: 1500 });
+  const noise = await runFake("retry-step-noise", {
+    transport: 750,
+    idle: 250,
+    phase: 1500,
+  });
   assert.equal(noise.outcome, "idle_timeout");
-  const errors = await runFake("primary-provider-failures", { transport: 750, idle: 1500, phase: 2500 });
+  const errors = await runFake("primary-provider-failures", {
+    transport: 750,
+    idle: 1500,
+    phase: 2500,
+  });
   assert.equal(errors.failureKind, "network");
   assert.match(errors.failureMessage!, /3 repeated provider failures/);
   assert.equal(errors.diagnostics.plainError?.statusCode, 504);
-  const tools = await runFake("unavailable-tools", { transport: 750, idle: 1500, phase: 2500 });
+  const tools = await runFake("unavailable-tools", {
+    transport: 750,
+    idle: 1500,
+    phase: 2500,
+  });
   assert.equal(tools.failureKind, "tool_arguments");
   assert.match(tools.failureMessage!, /3 consecutive/);
 });
 
-
 test("statusless native Service Unavailable loops terminate after three failures without waiting for idle timeout", async () => {
- const result=await runFake("primary-provider-errors-without-status",{transport:750,idle:1500,phase:2500});
- assert.equal(result.failureKind,"network");assert.equal(result.outcome,"process_exit");assert.match(result.failureMessage!,/3 repeated provider failures/);assert.equal(result.diagnostics.plainError?.statusCode,null);
+  const result = await runFake("primary-provider-errors-without-status", {
+    transport: 750,
+    idle: 1500,
+    phase: 2500,
+  });
+  assert.equal(result.failureKind, "network");
+  assert.equal(result.outcome, "process_exit");
+  assert.match(result.failureMessage!, /3 repeated provider failures/);
+  assert.equal(result.diagnostics.plainError?.statusCode, null);
 });

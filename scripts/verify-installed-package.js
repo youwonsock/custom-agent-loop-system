@@ -3,7 +3,10 @@ const os = require("node:os");
 const path = require("node:path");
 const { execFileSync, spawn, spawnSync } = require("node:child_process");
 const { once } = require("node:events");
-const { checkUris, checkBodyParser } = require("../test/helpers/dependency-security.cjs");
+const {
+  checkUris,
+  checkBodyParser,
+} = require("../test/helpers/dependency-security.cjs");
 
 async function main() {
   const npmCli = process.env.npm_execpath;
@@ -52,8 +55,13 @@ async function main() {
       "custom-agent-loop-system",
     );
     const cli = path.join(installed, "dist", "src", "server", "cli.js");
-    const security = { uriConsumers: checkUris(installed), bodyParser: await checkBodyParser(installed) };
-    process.stdout.write(`Installed dependency security: ${JSON.stringify(security)}\n`);
+    const security = {
+      uriConsumers: checkUris(installed),
+      bodyParser: await checkBodyParser(installed),
+    };
+    process.stdout.write(
+      `Installed dependency security: ${JSON.stringify(security)}\n`,
+    );
     const help = execFileSync(process.execPath, [cli, "--help"], {
       encoding: "utf8",
     });
@@ -65,84 +73,305 @@ async function main() {
     const project = path.join(temporary, "project");
     await fs.mkdir(project);
     const core = path.join(installed, "dist", "src", "core");
-    const { nodeTestVerificationCommand } = require(path.join(core, "node_test_command.js"));
-    const { readNodeTestProof } = require(path.join(core, "node_test_verification.js"));
+    const { nodeTestVerificationCommand } = require(
+      path.join(core, "node_test_command.js"),
+    );
+    const { readNodeTestProof } = require(
+      path.join(core, "node_test_verification.js"),
+    );
     const qualityProject = path.join(temporary, "own-node-project");
-    await fs.mkdir(path.join(qualityProject, ".agent-graph"), { recursive: true });
+    await fs.mkdir(path.join(qualityProject, ".agent-graph"), {
+      recursive: true,
+    });
     await fs.mkdir(path.join(qualityProject, "test"));
     await fs.mkdir(path.join(qualityProject, "probes"));
-    const nodeTests = { checkId: "quality", suiteCheckId: "node", scopes: [{ id: "value", file: "test/value.test.mjs", requirements: ["REQ-001"], cases: ["value:correct"], challenges: [{ id: "wrong-value", adapter: "probes/value.mjs", targets: ["value.mjs"] }] }] };
-    await fs.writeFile(path.join(qualityProject, "package.json"), JSON.stringify({ type: "module", scripts: { test: "node --test --test-concurrency=1 test/value.test.mjs" } }));
-    await fs.writeFile(path.join(qualityProject, "value.mjs"), "export const value=1;\n");
-    await fs.writeFile(path.join(qualityProject, "test/value.test.mjs"), "import test from 'node:test';import a from 'node:assert/strict';import {value} from '../value.mjs';test('value:correct',()=>a.equal(value,1));\n");
-    await fs.writeFile(path.join(qualityProject, "probes/value.mjs"), "export async function mutate({enabled}){return {'value.mjs':'export const value='+ (enabled?2:1)+';\\n'}}\n");
-    await fs.writeFile(path.join(qualityProject, ".agent-graph", "verification.json"), JSON.stringify({ version: 1, protectedFiles: ["probes/value.mjs"], checks: [{ id: "node", command: "npm test", requirements: ["REQ-001"] }, { id: "quality", command: nodeTestVerificationCommand(), requirements: ["REQ-001"] }], nodeTests }));
-    const ownSummary = JSON.parse(execFileSync(process.execPath, [cli, "verify-node-tests", "--target", qualityProject], { encoding: "utf8", stdio: "pipe" }));
-    if (ownSummary.reportFile !== "verification/node-tests/report.json" || !ownSummary.allPassed || ownSummary.scopes[0]?.challenges[0]?.killedBy[0] !== "value:correct")
+    const nodeTests = {
+      checkId: "quality",
+      suiteCheckId: "node",
+      scopes: [
+        {
+          id: "value",
+          file: "test/value.test.mjs",
+          requirements: ["REQ-001"],
+          cases: ["value:correct"],
+          challenges: [
+            {
+              id: "wrong-value",
+              adapter: "probes/value.mjs",
+              targets: ["value.mjs"],
+            },
+          ],
+        },
+      ],
+    };
+    await fs.writeFile(
+      path.join(qualityProject, "package.json"),
+      JSON.stringify({
+        type: "module",
+        scripts: {
+          test: "node --test --test-concurrency=1 test/value.test.mjs",
+        },
+      }),
+    );
+    await fs.writeFile(
+      path.join(qualityProject, "value.mjs"),
+      "export const value=1;\n",
+    );
+    await fs.writeFile(
+      path.join(qualityProject, "test/value.test.mjs"),
+      "import test from 'node:test';import a from 'node:assert/strict';import {value} from '../value.mjs';test('value:correct',()=>a.equal(value,1));\n",
+    );
+    await fs.writeFile(
+      path.join(qualityProject, "probes/value.mjs"),
+      "export async function mutate({enabled}){return {'value.mjs':'export const value='+ (enabled?2:1)+';\\n'}}\n",
+    );
+    await fs.writeFile(
+      path.join(qualityProject, ".agent-graph", "verification.json"),
+      JSON.stringify({
+        version: 1,
+        protectedFiles: ["probes/value.mjs"],
+        checks: [
+          { id: "node", command: "npm test", requirements: ["REQ-001"] },
+          {
+            id: "quality",
+            command: nodeTestVerificationCommand(),
+            requirements: ["REQ-001"],
+          },
+        ],
+        nodeTests,
+      }),
+    );
+    const ownSummary = JSON.parse(
+      execFileSync(
+        process.execPath,
+        [cli, "verify-node-tests", "--target", qualityProject],
+        { encoding: "utf8", stdio: "pipe" },
+      ),
+    );
+    if (
+      ownSummary.reportFile !== "verification/node-tests/report.json" ||
+      !ownSummary.allPassed ||
+      ownSummary.scopes[0]?.challenges[0]?.killedBy[0] !== "value:correct"
+    )
       throw new Error("Installed own Node verifier compact feedback failed.");
     const ownProof = await readNodeTestProof(qualityProject, nodeTests);
-    const ownReport = JSON.parse(await fs.readFile(path.join(qualityProject, "verification/node-tests/report.json"), "utf8"));
-    if (ownProof.scopes.length !== 1 || !ownReport.allPassed || !ownReport.processesStopped || !ownReport.workspacesRemoved || ownReport.workers.length !== 3 || ownReport.workers.some(w => !w.stopped))
-      throw new Error("Installed own Node verifier failed assertion/control/mutation/cleanup proof.");
-    process.stdout.write("Installed own Node verifier verified: authored assertion, no-op control, production mutation, current proof and owned process cleanup.\n");
+    const ownReport = JSON.parse(
+      await fs.readFile(
+        path.join(qualityProject, "verification/node-tests/report.json"),
+        "utf8",
+      ),
+    );
+    if (
+      ownProof.scopes.length !== 1 ||
+      !ownReport.allPassed ||
+      !ownReport.processesStopped ||
+      !ownReport.workspacesRemoved ||
+      ownReport.workers.length !== 3 ||
+      ownReport.workers.some((w) => !w.stopped)
+    )
+      throw new Error(
+        "Installed own Node verifier failed assertion/control/mutation/cleanup proof.",
+      );
+    process.stdout.write(
+      "Installed own Node verifier verified: authored assertion, no-op control, production mutation, current proof and owned process cleanup.\n",
+    );
     const plugin = require(path.join(core, "kilo_protocol_plugin.js"));
     const previousProtocol = process.env.AGENT_GRAPH_KILO_CHECKS;
     try {
-      process.env.AGENT_GRAPH_KILO_CHECKS = JSON.stringify({cwd:project,commands:["npm test"]});
-      const hooks = await plugin.server(), output = {args:{command:"npm test 2>&1 | tail -20"}};
-      await hooks["tool.execute.before"]({tool:"bash"},output);
-      if (plugin.id !== "agent-graph-check-protocol" || output.args.command !== "npm test")
+      process.env.AGENT_GRAPH_KILO_CHECKS = JSON.stringify({
+        cwd: project,
+        commands: ["npm test"],
+      });
+      const hooks = await plugin.server(),
+        output = { args: { command: "npm test 2>&1 | tail -20" } };
+      await hooks["tool.execute.before"]({ tool: "bash" }, output);
+      if (
+        plugin.id !== "agent-graph-check-protocol" ||
+        output.args.command !== "npm test"
+      )
         throw new Error("Installed native verification protocol failed.");
-      process.env.AGENT_GRAPH_KILO_CHECKS = JSON.stringify({cwd:project,commands:["npm test"],testSourcesReadOnly:true});
+      process.env.AGENT_GRAPH_KILO_CHECKS = JSON.stringify({
+        cwd: project,
+        commands: ["npm test"],
+        testSourcesReadOnly: true,
+      });
       const guarded = await plugin.server();
-      let prevented=false;
-      try { await guarded["tool.execute.before"]({tool:"write"},{args:{filePath:path.join(project,"app.mjs"),content:"unexpected"}}); }
-      catch(error) { prevented=String(error).includes("[AGENT_GRAPH_TEST_POLICY]"); }
-      if(!prevented)throw Error("Installed test source guard did not prevent a native write.");
-      const prepared={args:{command:`mkdir -p ${JSON.stringify(path.join(project,"verification"))} && npm test`}};
-      await guarded["tool.execute.before"]({tool:"bash"},prepared);
-      if(!prepared.args.command.endsWith(" && npm test"))throw Error("Installed owned output preparation failed.");
-      await guarded["tool.execute.before"]({tool:"bash"},{args:{command:'ls verification/ 2>/dev/null; echo "---"; node --version'}});
-      process.env.AGENT_GRAPH_KILO_CHECKS = JSON.stringify({cwd:project,commands:[],guardOwnedProcesses:true});
-      const processGuard=await plugin.server();let processPrevented=false;
-      try { await processGuard["tool.execute.before"]({tool:"bash"},{args:{command:'pkill -9 -f "node.*server"'}}); }
-      catch(error) { processPrevented=String(error).includes("[AGENT_GRAPH_UNSCOPED_TERMINATION]"); }
-      if(!processPrevented)throw Error("Installed implementation process guard failed.");
-      process.env.AGENT_GRAPH_KILO_CHECKS=JSON.stringify({cwd:project,commands:[],scopeRoots:[project]});
-      const scoped=await plugin.server();let scopePrevented=false;
-      try{await scoped["tool.execute.before"]({tool:"glob"},{args:{path:path.dirname(project),pattern:"**/*"}});}catch(error){scopePrevented=String(error).includes("[AGENT_GRAPH_SCOPE_DENIED]");}
-      if(!scopePrevented)throw Error("Installed native directory scope guard failed.");
-      await scoped["tool.execute.before"]({tool:"read"},{args:{filePath:path.join(project,"package.json")}});
-      let flaggedPrevented=false;
-      try{await scoped['tool.execute.before']({tool:'bash'},{args:{command:`cat -n ${JSON.stringify(path.join(path.dirname(project),'outside.txt'))} 2>/dev/null`}});}catch(error){flaggedPrevented=String(error).includes('[AGENT_GRAPH_SCOPE_DENIED]');}
-      if(!flaggedPrevented)throw Error('Installed flagged shell inspection escaped the scope guard.');
+      let prevented = false;
+      try {
+        await guarded["tool.execute.before"](
+          { tool: "write" },
+          {
+            args: {
+              filePath: path.join(project, "app.mjs"),
+              content: "unexpected",
+            },
+          },
+        );
+      } catch (error) {
+        prevented = String(error).includes("[AGENT_GRAPH_TEST_POLICY]");
+      }
+      if (!prevented)
+        throw Error(
+          "Installed test source guard did not prevent a native write.",
+        );
+      const prepared = {
+        args: {
+          command: `mkdir -p ${JSON.stringify(path.join(project, "verification"))} && npm test`,
+        },
+      };
+      await guarded["tool.execute.before"]({ tool: "bash" }, prepared);
+      if (!prepared.args.command.endsWith(" && npm test"))
+        throw Error("Installed owned output preparation failed.");
+      await guarded["tool.execute.before"](
+        { tool: "bash" },
+        {
+          args: {
+            command: 'ls verification/ 2>/dev/null; echo "---"; node --version',
+          },
+        },
+      );
+      process.env.AGENT_GRAPH_KILO_CHECKS = JSON.stringify({
+        cwd: project,
+        commands: [],
+        guardOwnedProcesses: true,
+      });
+      const processGuard = await plugin.server();
+      let processPrevented = false;
+      try {
+        await processGuard["tool.execute.before"](
+          { tool: "bash" },
+          { args: { command: 'pkill -9 -f "node.*server"' } },
+        );
+      } catch (error) {
+        processPrevented = String(error).includes(
+          "[AGENT_GRAPH_UNSCOPED_TERMINATION]",
+        );
+      }
+      if (!processPrevented)
+        throw Error("Installed implementation process guard failed.");
+      process.env.AGENT_GRAPH_KILO_CHECKS = JSON.stringify({
+        cwd: project,
+        commands: [],
+        scopeRoots: [project],
+      });
+      const scoped = await plugin.server();
+      let scopePrevented = false;
+      try {
+        await scoped["tool.execute.before"](
+          { tool: "glob" },
+          { args: { path: path.dirname(project), pattern: "**/*" } },
+        );
+      } catch (error) {
+        scopePrevented = String(error).includes("[AGENT_GRAPH_SCOPE_DENIED]");
+      }
+      if (!scopePrevented)
+        throw Error("Installed native directory scope guard failed.");
+      await scoped["tool.execute.before"](
+        { tool: "read" },
+        { args: { filePath: path.join(project, "package.json") } },
+      );
+      let flaggedPrevented = false;
+      try {
+        await scoped["tool.execute.before"](
+          { tool: "bash" },
+          {
+            args: {
+              command: `cat -n ${JSON.stringify(path.join(path.dirname(project), "outside.txt"))} 2>/dev/null`,
+            },
+          },
+        );
+      } catch (error) {
+        flaggedPrevented = String(error).includes("[AGENT_GRAPH_SCOPE_DENIED]");
+      }
+      if (!flaggedPrevented)
+        throw Error(
+          "Installed flagged shell inspection escaped the scope guard.",
+        );
     } finally {
-      if (previousProtocol === undefined) delete process.env.AGENT_GRAPH_KILO_CHECKS;
+      if (previousProtocol === undefined)
+        delete process.env.AGENT_GRAPH_KILO_CHECKS;
       else process.env.AGENT_GRAPH_KILO_CHECKS = previousProtocol;
     }
-    const {buildInvocation} = require(path.join(core, "invocation.js"));
+    const { buildInvocation } = require(path.join(core, "invocation.js"));
     const graph = require(path.join(core, "graph.js")).createAutonomousGraph();
     const invocation = await buildInvocation(
-      {id:"kilo",label:"Kilo",type:"kilo",binary:path.join(repo,"test","fixture_cli.cjs")},
-      {connectionId:"kilo",modelId:"fixture/fixture-model"},
-      graph.nodes.find(n=>n.type==="implementation"),
-      {prompt:"Installed native protocol smoke",cwd:project,fullAccess:false,allowedPaths:[],verificationCommands:["npm test"],disableWrite:true},
+      {
+        id: "kilo",
+        label: "Kilo",
+        type: "kilo",
+        binary: path.join(repo, "test", "fixture_cli.cjs"),
+      },
+      { connectionId: "kilo", modelId: "fixture/fixture-model" },
+      graph.nodes.find((n) => n.type === "implementation"),
+      {
+        prompt: "Installed native protocol smoke",
+        cwd: project,
+        fullAccess: false,
+        allowedPaths: [],
+        verificationCommands: ["npm test"],
+        disableWrite: true,
+      },
     );
-    if (JSON.parse(invocation.env.KILO_CONFIG_CONTENT).agent.fixture.tools.write !== false)
+    if (
+      JSON.parse(invocation.env.KILO_CONFIG_CONTENT).agent.fixture.tools
+        .write !== false
+    )
       throw new Error("Installed native write fallback failed.");
-    process.stdout.write("Installed Kilo protocol verified: native hook, invocation-local write fallback, no model calls.\n");
-    if(process.platform==="darwin"){
-      const io=require(path.join(core,"program_io.js"));
-      const outside=path.join(temporary,"io-outside.txt");await fs.writeFile(outside,"unchanged");
-      const vmAvailable=require(path.join(core,"program_io_vm.js")).vmRuntimeAvailable();
-      const policy=io.prepareProgramIo({cwd:project,directory:path.join(temporary,"io-broker"),testRole:false,readOnly:false,...(vmAvailable?{}:{backend:"macos-seatbelt"})});
-      const script=`try{require('node:fs').readFileSync(${JSON.stringify(outside)});process.exit(9)}catch(e){if(!['EPERM','EACCES','ENOENT'].includes(e.code))throw e;console.log('kernel-denied')}`;
-      const quote=s=>"'"+s.replace(/'/g,"'\\''")+"'",command=io.wrapProgramCommand("node -e "+quote(script),policy);
-      const result=spawnSync("/bin/sh",["-c",command],{cwd:project,env:{...process.env,AGENT_GRAPH_PROGRAM_IO:JSON.stringify(policy)},encoding:"utf8",timeout:15000});
-      if(result.status!==0||result.stdout.trim()!=="kernel-denied"||(await fs.readFile(outside,"utf8"))!=="unchanged")throw Error("Installed kernel I/O isolation failed: "+result.stderr);
-      const tracker=new io.ProgramIoTracker(policy);tracker.normalize({type:"tool_use",part:{id:"installed-io",tool:"bash",state:{status:"completed",input:{command},metadata:{exit:0}}}});
-      const audit=tracker.finish();if(audit.completedCommands!==1||audit.invalidReceipts||audit.unresolvedCommands)throw Error("Installed broker proof failed.");
-      process.stdout.write("Installed kernel I/O isolation and signed command evidence verified.\n");
+    process.stdout.write(
+      "Installed Kilo protocol verified: native hook, invocation-local write fallback, no model calls.\n",
+    );
+    if (process.platform === "darwin") {
+      const io = require(path.join(core, "program_io.js"));
+      const outside = path.join(temporary, "io-outside.txt");
+      await fs.writeFile(outside, "unchanged");
+      const vmAvailable = require(
+        path.join(core, "program_io_vm.js"),
+      ).vmRuntimeAvailable();
+      const policy = io.prepareProgramIo({
+        cwd: project,
+        directory: path.join(temporary, "io-broker"),
+        testRole: false,
+        readOnly: false,
+        ...(vmAvailable ? {} : { backend: "macos-seatbelt" }),
+      });
+      const script = `try{require('node:fs').readFileSync(${JSON.stringify(outside)});process.exit(9)}catch(e){if(!['EPERM','EACCES','ENOENT'].includes(e.code))throw e;console.log('kernel-denied')}`;
+      const quote = (s) => "'" + s.replace(/'/g, "'\\''") + "'",
+        command = io.wrapProgramCommand("node -e " + quote(script), policy);
+      const result = spawnSync("/bin/sh", ["-c", command], {
+        cwd: project,
+        env: { ...process.env, AGENT_GRAPH_PROGRAM_IO: JSON.stringify(policy) },
+        encoding: "utf8",
+        timeout: 15000,
+      });
+      if (
+        result.status !== 0 ||
+        result.stdout.trim() !== "kernel-denied" ||
+        (await fs.readFile(outside, "utf8")) !== "unchanged"
+      )
+        throw Error("Installed kernel I/O isolation failed: " + result.stderr);
+      const tracker = new io.ProgramIoTracker(policy);
+      tracker.normalize({
+        type: "tool_use",
+        part: {
+          id: "installed-io",
+          tool: "bash",
+          state: {
+            status: "completed",
+            input: { command },
+            metadata: { exit: 0 },
+          },
+        },
+      });
+      const audit = tracker.finish();
+      if (
+        audit.completedCommands !== 1 ||
+        audit.invalidReceipts ||
+        audit.unresolvedCommands
+      )
+        throw Error("Installed broker proof failed.");
+      process.stdout.write(
+        "Installed kernel I/O isolation and signed command evidence verified.\n",
+      );
     }
     for (const type of ["codex", "claude", "opencode", "kilo"]) {
       const result = await queryModels(
@@ -200,12 +429,18 @@ async function main() {
         throw new Error("Installed web asset cannot be served: " + match[1]);
     }
     // Lazy chunks are not referenced by the entry HTML; verify the entire installed asset set.
-    for (const name of await fs.readdir(path.join(installed, "dist", "web", "assets"))) {
+    for (const name of await fs.readdir(
+      path.join(installed, "dist", "web", "assets"),
+    )) {
       if (!/\.(js|css)$/.test(name)) continue;
       const asset = await fetch(`${url}/assets/${name}`);
-      const local = await fs.readFile(path.join(installed, "dist", "web", "assets", name));
+      const local = await fs.readFile(
+        path.join(installed, "dist", "web", "assets", name),
+      );
       if (!asset.ok || !Buffer.from(await asset.arrayBuffer()).equals(local))
-        throw new Error(`Installed lazy asset is missing or incorrect: ${name}`);
+        throw new Error(
+          `Installed lazy asset is missing or incorrect: ${name}`,
+        );
     }
     const bootstrap = await (await fetch(url + "/api/bootstrap")).json();
     if (

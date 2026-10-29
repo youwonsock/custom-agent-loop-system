@@ -1,5 +1,9 @@
 import { shellMutation } from "./shell_mutation";
-import { CommandReceipt, NativeScopeAudit, ProgramIoAudit } from "../shared/domain";
+import {
+  CommandReceipt,
+  NativeScopeAudit,
+  ProgramIoAudit,
+} from "../shared/domain";
 type Event = Record<string, unknown>;
 export interface EventEvidence {
   programIoAudit?: ProgramIoAudit;
@@ -31,7 +35,12 @@ export function preExecutionDenied(error: unknown, metadata: unknown): boolean {
     rule = obj(approval.rule);
   if (rule.action === "deny" || approval.action === "deny") return true;
   const message = typeof error === "string" ? error : "";
-  if(/^(?:Error:\s*)?\[AGENT_GRAPH_(?:TEST_POLICY|SCOPE_DENIED|IO_DENIED|CHECK_DENIED|UNSCOPED_TERMINATION)\]/.test(message))return true;
+  if (
+    /^(?:Error:\s*)?\[AGENT_GRAPH_(?:TEST_POLICY|SCOPE_DENIED|IO_DENIED|CHECK_DENIED|UNSCOPED_TERMINATION)\]/.test(
+      message,
+    )
+  )
+    return true;
   return /^(?:Model tried to call unavailable tool\b|The user has specified a rule which prevents you from using this specific tool call\b|(?:The )?[Uu]ser (?:denied|rejected) (?:this )?tool (?:use|call)\b|Tool (?:use|call) (?:was )?(?:denied|rejected) (?:by|before)\b|PreToolUse hook .*?(?:denied|blocked))/i.test(
     message,
   );

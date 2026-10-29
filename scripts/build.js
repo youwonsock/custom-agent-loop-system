@@ -24,9 +24,24 @@ fs.writeFileSync(
   "**/*.test.js\n**/*.map\n",
   "utf8",
 );
-fs.writeFileSync(path.join(root,"dist/program_io_dependencies.json"),JSON.stringify({version:1,lockDigest:require("node:crypto").createHash("sha256").update(fs.readFileSync(path.join(root,"package-lock.json"))).digest("hex")})+"\n");
-fs.copyFileSync(path.join(root,"package-lock.json"),path.join(root,"dist/program_io_package_lock.json"));
+fs.writeFileSync(
+  path.join(root, "dist/program_io_dependencies.json"),
+  JSON.stringify({
+    version: 1,
+    lockDigest: require("node:crypto")
+      .createHash("sha256")
+      .update(fs.readFileSync(path.join(root, "package-lock.json")))
+      .digest("hex"),
+  }) + "\n",
+);
+fs.copyFileSync(
+  path.join(root, "package-lock.json"),
+  path.join(root, "dist/program_io_package_lock.json"),
+);
 for (const name of fs.readdirSync(path.join(root, "dist", "web", "assets"))) {
-  if (name.endsWith(".js") && fs.statSync(path.join(root, "dist", "web", "assets", name)).size > 500_000)
+  if (
+    name.endsWith(".js") &&
+    fs.statSync(path.join(root, "dist", "web", "assets", name)).size > 500_000
+  )
     throw new Error(`Web JavaScript chunk exceeds 500 kB: ${name}`);
 }

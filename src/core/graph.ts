@@ -59,14 +59,22 @@ export function validateGraphDocument(input: unknown): AgentGraphDocument {
       typeof g.automation.nativeApprovalReview !== "boolean" ||
       (g.automation.browserVerification !== undefined &&
         typeof g.automation.browserVerification !== "boolean") ||
-      (g.automation.verificationContract !== undefined && typeof g.automation.verificationContract !== "boolean") ||
-      (g.automation.authoredNodeTests !== undefined && typeof g.automation.authoredNodeTests !== "boolean") ||
-      (g.automation.testSourceGuard !== undefined && typeof g.automation.testSourceGuard !== "boolean") ||
-      (g.automation.reserveFinalizationBudget !== undefined && typeof g.automation.reserveFinalizationBudget !== "boolean") ||
-      (g.automation.guardOwnedProcesses !== undefined && typeof g.automation.guardOwnedProcesses !== "boolean") ||
-      (g.automation.targetScopeGuard !== undefined && typeof g.automation.targetScopeGuard !== "boolean") ||
-      (g.automation.programIoGuard !== undefined && typeof g.automation.programIoGuard !== "boolean") ||
-      (g.automation.programIoGuard === true && g.automation.targetScopeGuard !== true))
+      (g.automation.verificationContract !== undefined &&
+        typeof g.automation.verificationContract !== "boolean") ||
+      (g.automation.authoredNodeTests !== undefined &&
+        typeof g.automation.authoredNodeTests !== "boolean") ||
+      (g.automation.testSourceGuard !== undefined &&
+        typeof g.automation.testSourceGuard !== "boolean") ||
+      (g.automation.reserveFinalizationBudget !== undefined &&
+        typeof g.automation.reserveFinalizationBudget !== "boolean") ||
+      (g.automation.guardOwnedProcesses !== undefined &&
+        typeof g.automation.guardOwnedProcesses !== "boolean") ||
+      (g.automation.targetScopeGuard !== undefined &&
+        typeof g.automation.targetScopeGuard !== "boolean") ||
+      (g.automation.programIoGuard !== undefined &&
+        typeof g.automation.programIoGuard !== "boolean") ||
+      (g.automation.programIoGuard === true &&
+        g.automation.targetScopeGuard !== true))
   )
     throw new AppError(
       400,
@@ -178,13 +186,30 @@ export function validateGraphDocument(input: unknown): AgentGraphDocument {
             ...(g.automation.browserVerification !== undefined
               ? { browserVerification: g.automation.browserVerification }
               : {}),
-            ...(g.automation.verificationContract !== undefined ? { verificationContract: g.automation.verificationContract } : {}),
-            ...(g.automation.authoredNodeTests !== undefined ? { authoredNodeTests:g.automation.authoredNodeTests } : {}),
-            ...(g.automation.testSourceGuard !== undefined ? {testSourceGuard:g.automation.testSourceGuard} : {}),
-            ...(g.automation.reserveFinalizationBudget !== undefined ? {reserveFinalizationBudget:g.automation.reserveFinalizationBudget} : {}),
-            ...(g.automation.guardOwnedProcesses !== undefined ? {guardOwnedProcesses:g.automation.guardOwnedProcesses} : {}),
-            ...(g.automation.targetScopeGuard !== undefined ? {targetScopeGuard:g.automation.targetScopeGuard} : {}),
-            ...(g.automation.programIoGuard !== undefined ? {programIoGuard:g.automation.programIoGuard} : {}),
+            ...(g.automation.verificationContract !== undefined
+              ? { verificationContract: g.automation.verificationContract }
+              : {}),
+            ...(g.automation.authoredNodeTests !== undefined
+              ? { authoredNodeTests: g.automation.authoredNodeTests }
+              : {}),
+            ...(g.automation.testSourceGuard !== undefined
+              ? { testSourceGuard: g.automation.testSourceGuard }
+              : {}),
+            ...(g.automation.reserveFinalizationBudget !== undefined
+              ? {
+                  reserveFinalizationBudget:
+                    g.automation.reserveFinalizationBudget,
+                }
+              : {}),
+            ...(g.automation.guardOwnedProcesses !== undefined
+              ? { guardOwnedProcesses: g.automation.guardOwnedProcesses }
+              : {}),
+            ...(g.automation.targetScopeGuard !== undefined
+              ? { targetScopeGuard: g.automation.targetScopeGuard }
+              : {}),
+            ...(g.automation.programIoGuard !== undefined
+              ? { programIoGuard: g.automation.programIoGuard }
+              : {}),
           },
         }
       : {}),
@@ -287,9 +312,9 @@ export function createAutonomousGraph(
     authoredNodeTests: true,
     testSourceGuard: true,
     reserveFinalizationBudget: true,
-    guardOwnedProcesses:true,
-    targetScopeGuard:true,
-    programIoGuard:true,
+    guardOwnedProcesses: true,
+    targetScopeGuard: true,
+    programIoGuard: true,
   };
   graph.nodes.find((n) => n.type === "planning")!.planning = {
     requiresApproval: false,

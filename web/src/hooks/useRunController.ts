@@ -1,11 +1,32 @@
-import { isNewerSession, mergeSessions, sessionSummary } from "../../../src/shared/session_updates";
+import {
+  isNewerSession,
+  mergeSessions,
+  sessionSummary,
+} from "../../../src/shared/session_updates";
 import { useEffect, useRef, useState } from "react";
-import { type SessionState, type SessionAction } from "../../../src/shared/domain";
+import {
+  type SessionState,
+  type SessionAction,
+} from "../../../src/shared/domain";
 import { api, id } from "../api";
 import type { StudioData } from "./useStudioData";
 import type { GraphEditor } from "./useGraphEditor";
 
-export function useRunController(data: Pick<StudioData, "view" | "setView" | "sessions" | "setSessions" | "target" | "goal" | "setNotice" | "setError" | "attempt">, graph: Pick<GraphEditor, "flush">) {
+export function useRunController(
+  data: Pick<
+    StudioData,
+    | "view"
+    | "setView"
+    | "sessions"
+    | "setSessions"
+    | "target"
+    | "goal"
+    | "setNotice"
+    | "setError"
+    | "attempt"
+  >,
+  graph: Pick<GraphEditor, "flush">,
+) {
   const {
     view,
     setView,
@@ -16,12 +37,12 @@ export function useRunController(data: Pick<StudioData, "view" | "setView" | "se
     setNotice,
     attempt,
   } = data;
-  const {
-    flush,
-  } = graph;
+  const { flush } = graph;
   const [accessMode, setAccessMode] = useState<"ask" | "full_access">("ask"),
-    [maxIterations, setMaxIterations] = useState(20), [starting, setStarting] = useState(false),
-    [sessionMinutes,setSessionMinutes] = useState(60), [maxSessionAttempts,setMaxSessionAttempts] = useState(24),
+    [maxIterations, setMaxIterations] = useState(20),
+    [starting, setStarting] = useState(false),
+    [sessionMinutes, setSessionMinutes] = useState(60),
+    [maxSessionAttempts, setMaxSessionAttempts] = useState(24),
     [selectedRun, setSelectedRun] = useState<string | null>(null);
   const [run, setRun] = useState<SessionState | undefined>();
   const [log, setLog] = useState(""),
@@ -47,9 +68,13 @@ export function useRunController(data: Pick<StudioData, "view" | "setView" | "se
         goal,
         targetProjectPath: target,
         accessMode,
-        settings: { maxIterations, sessionTimeoutMs: sessionMinutes*60000, maxSessionAttempts },
+        settings: {
+          maxIterations,
+          sessionTimeoutMs: sessionMinutes * 60000,
+          maxSessionAttempts,
+        },
       });
-      setSessions(values => mergeSessions(values, [sessionSummary(state)]));
+      setSessions((values) => mergeSessions(values, [sessionSummary(state)]));
       setRun(state);
       setSelectedRun(state.id);
       setView("runs");
@@ -57,13 +82,30 @@ export function useRunController(data: Pick<StudioData, "view" | "setView" | "se
     });
     setStarting(false);
   };
-  const summary = sessions.find(s => s.id === selectedRun);
+  const summary = sessions.find((s) => s.id === selectedRun);
   useEffect(() => {
-    if (!summary) { setRun(undefined); return; }
+    if (!summary) {
+      setRun(undefined);
+      return;
+    }
     const controller = new AbortController();
-    void api<SessionState>(`/sessions/${summary.id}`, "GET", undefined, controller.signal)
-      .then(next => { if (!controller.signal.aborted) setRun(current => !current || current.id !== next.id || isNewerSession(next, current) ? next : current); })
-      .catch(e => { if (!controller.signal.aborted) data.setError(e.message); });
+    void api<SessionState>(
+      `/sessions/${summary.id}`,
+      "GET",
+      undefined,
+      controller.signal,
+    )
+      .then((next) => {
+        if (!controller.signal.aborted)
+          setRun((current) =>
+            !current || current.id !== next.id || isNewerSession(next, current)
+              ? next
+              : current,
+          );
+      })
+      .catch((e) => {
+        if (!controller.signal.aborted) data.setError(e.message);
+      });
     return () => controller.abort();
   }, [selectedRun, summary?.revision, summary?.updatedAt]);
   const visit =
@@ -100,7 +142,12 @@ export function useRunController(data: Pick<StudioData, "view" | "setView" | "se
           offset: number;
           visitId?: string;
           attemptId?: string;
-        }>(`/sessions/${selectedRun}/logs?offset=${logOffset.current}`, "GET", undefined, controller.signal);
+        }>(
+          `/sessions/${selectedRun}/logs?offset=${logOffset.current}`,
+          "GET",
+          undefined,
+          controller.signal,
+        );
         if (!alive) return;
         const key = `${data.visitId}:${data.attemptId}`;
         if (logKey.current && logKey.current !== key) {
@@ -141,8 +188,12 @@ export function useRunController(data: Pick<StudioData, "view" | "setView" | "se
         "POST",
         { ...action, requestId: id() },
       );
-      setSessions(values => mergeSessions(values, [sessionSummary(next)]));
-      setRun(current => !current || current.id !== next.id || isNewerSession(next, current) ? next : current);
+      setSessions((values) => mergeSessions(values, [sessionSummary(next)]));
+      setRun((current) =>
+        !current || current.id !== next.id || isNewerSession(next, current)
+          ? next
+          : current,
+      );
       if (action.type === "edit_plan") {
         setPlanEditing(false);
         setNotice("계획 문서를 저장했습니다. 저장된 문서를 승인하세요.");
@@ -156,7 +207,10 @@ export function useRunController(data: Pick<StudioData, "view" | "setView" | "se
     setAccessMode,
     maxIterations,
     setMaxIterations,
-    sessionMinutes,setSessionMinutes,maxSessionAttempts,setMaxSessionAttempts,
+    sessionMinutes,
+    setSessionMinutes,
+    maxSessionAttempts,
+    setMaxSessionAttempts,
     starting,
     selectedRun,
     setSelectedRun,

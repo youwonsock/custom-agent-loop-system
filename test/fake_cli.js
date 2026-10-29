@@ -11,35 +11,85 @@ const assistant = (text, id = `text-${Date.now()}`) =>
 
 switch (mode) {
   case "pipe-json-interleaved": {
-    const text = '한글🙂'.repeat(1200) + '\n[PHASE_DONE]';
-    const bytes = Buffer.from(JSON.stringify({ type: 'text', sessionID: 'pipe-session', part: { text } }) + '\n');
+    const text = "한글🙂".repeat(1200) + "\n[PHASE_DONE]";
+    const bytes = Buffer.from(
+      JSON.stringify({
+        type: "text",
+        sessionID: "pipe-session",
+        part: { text },
+      }) + "\n",
+    );
     process.stdout.write(bytes.subarray(0, 3601));
-    process.stderr.write('timestamp=2026-10-22T16:51:13Z level=ERROR message="stream error" error.error="Providers for this model are at capacity."\n');
+    process.stderr.write(
+      'timestamp=2026-10-22T16:51:13Z level=ERROR message="stream error" error.error="Providers for this model are at capacity."\n',
+    );
     setTimeout(() => {
       process.stdout.write(bytes.subarray(3601));
-      emit({ type: 'step_finish', part: { model: { providerID: 'kilo', modelID: 'pipe-fixture' }, tokens: { total: 42 } } });
+      emit({
+        type: "step_finish",
+        part: {
+          model: { providerID: "kilo", modelID: "pipe-fixture" },
+          tokens: { total: 42 },
+        },
+      });
     }, 40);
     break;
   }
   case "retry-step-noise": {
-    let n=0;
-    setInterval(() => { emit({type:"step_start",part:{id:`retry-${n++}`},sessionID:"ses_retryNoise"}); emit({type:"step_finish",part:{id:`done-${n++}`}}); }, 25);
+    let n = 0;
+    setInterval(() => {
+      emit({
+        type: "step_start",
+        part: { id: `retry-${n++}` },
+        sessionID: "ses_retryNoise",
+      });
+      emit({ type: "step_finish", part: { id: `done-${n++}` } });
+    }, 25);
     break;
   }
   case "primary-provider-errors-without-status":
   case "primary-provider-failures": {
-    let n=0;
-    setInterval(() => {console.error(mode === "primary-provider-errors-without-status" ? `timestamp=${n++} level=ERROR message="stream error" session.id=ses_primary error.error="AI_APICallError: Service Unavailable"` : `timestamp=${n++} level=ERROR message="stream error" session.id=ses_primary error.error.code=504 error.error.message="Upstream idle timeout exceeded"`);emit({type:"step_start",part:{id:`retry-${n}`}});}, 30);
+    let n = 0;
+    setInterval(() => {
+      console.error(
+        mode === "primary-provider-errors-without-status"
+          ? `timestamp=${n++} level=ERROR message="stream error" session.id=ses_primary error.error="AI_APICallError: Service Unavailable"`
+          : `timestamp=${n++} level=ERROR message="stream error" session.id=ses_primary error.error.code=504 error.error.message="Upstream idle timeout exceeded"`,
+      );
+      emit({ type: "step_start", part: { id: `retry-${n}` } });
+    }, 30);
     break;
   }
   case "unavailable-tools": {
-    let n=0;
-    setInterval(() => emit({type:"tool_use",part:{id:`bad-${n++}`,tool:"exec",state:{status:"error",error:"Model tried to call unavailable tool 'exec'"}}}),30);
+    let n = 0;
+    setInterval(
+      () =>
+        emit({
+          type: "tool_use",
+          part: {
+            id: `bad-${n++}`,
+            tool: "exec",
+            state: {
+              status: "error",
+              error: "Model tried to call unavailable tool 'exec'",
+            },
+          },
+        }),
+      30,
+    );
     break;
   }
   case "native-provider-retries":
-    console.error('timestamp=2026-10-22T16:51:12Z level=INFO message=stream session.id=ses_nativeRetry');
-    setInterval(() => console.error('timestamp=2026-10-22T16:51:13Z level=ERROR message="stream error" error.error="Providers for this model are currently at capacity."'), 30);
+    console.error(
+      "timestamp=2026-10-22T16:51:12Z level=INFO message=stream session.id=ses_nativeRetry",
+    );
+    setInterval(
+      () =>
+        console.error(
+          'timestamp=2026-10-22T16:51:13Z level=ERROR message="stream error" error.error="Providers for this model are currently at capacity."',
+        ),
+      30,
+    );
     break;
   case "qa-auth-regression":
     for (const line of fs
@@ -142,13 +192,64 @@ switch (mode) {
     process.exit(0);
     break;
   case "scope-denied-then-inside":
-    emit({type:"tool_use",part:{id:"scope-blocked",tool:"write",state:{status:"error",input:{filePath:require("node:path").join(process.cwd(),"..","outside.txt")},error:"[AGENT_GRAPH_SCOPE_DENIED] Blocked BEFORE execution"}}});
-    emit({type:"tool_use",part:{id:"scope-inside",tool:"read",state:{status:"completed",input:{filePath:require("node:path").join(process.cwd(),"inside.txt")},output:"inside"}}});
-    assistant("[PHASE_DONE]");process.exit(0);break;
+    emit({
+      type: "tool_use",
+      part: {
+        id: "scope-blocked",
+        tool: "write",
+        state: {
+          status: "error",
+          input: {
+            filePath: require("node:path").join(
+              process.cwd(),
+              "..",
+              "outside.txt",
+            ),
+          },
+          error: "[AGENT_GRAPH_SCOPE_DENIED] Blocked BEFORE execution",
+        },
+      },
+    });
+    emit({
+      type: "tool_use",
+      part: {
+        id: "scope-inside",
+        tool: "read",
+        state: {
+          status: "completed",
+          input: {
+            filePath: require("node:path").join(process.cwd(), "inside.txt"),
+          },
+          output: "inside",
+        },
+      },
+    });
+    assistant("[PHASE_DONE]");
+    process.exit(0);
+    break;
   case "scope-outside-flood":
-    emit({type:"tool_use",part:{id:"scope-escaped",tool:"glob",state:{status:"completed",input:{path:require("node:path").dirname(process.cwd()),pattern:"*"},output:"outside directory listing"}}});
-    for(let i=0;i<2000;i++)emit({type:"text",part:{id:"scope-flood-"+i,text:"x".repeat(100)}});
-    setInterval(()=>{},1000);break;
+    emit({
+      type: "tool_use",
+      part: {
+        id: "scope-escaped",
+        tool: "glob",
+        state: {
+          status: "completed",
+          input: {
+            path: require("node:path").dirname(process.cwd()),
+            pattern: "*",
+          },
+          output: "outside directory listing",
+        },
+      },
+    });
+    for (let i = 0; i < 2000; i++)
+      emit({
+        type: "text",
+        part: { id: "scope-flood-" + i, text: "x".repeat(100) },
+      });
+    setInterval(() => {}, 1000);
+    break;
   case "planner":
     assistant(
       "=== PLAN OPTIONS ===\n" +
@@ -208,7 +309,17 @@ switch (mode) {
         item: { id: "searched", type: "web_search" },
       });
       emit({ type: "turn.completed", usage: { output_tokens: 123 } });
-      emit({ type: "item.completed", item: { id: "check", type: "command_execution", command: "npm test", exit_code: 0, status: "completed", aggregated_output: "pass 1" } });
+      emit({
+        type: "item.completed",
+        item: {
+          id: "check",
+          type: "command_execution",
+          command: "npm test",
+          exit_code: 0,
+          status: "completed",
+          aggregated_output: "pass 1",
+        },
+      });
     }
     for (let index = 0; index < 20; index++) {
       emit({

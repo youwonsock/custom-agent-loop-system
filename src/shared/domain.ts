@@ -1,4 +1,9 @@
-import type { Activity, AttemptStatus, FailureKind, NodeVerdict } from "./execution_types";
+import type {
+  Activity,
+  AttemptStatus,
+  FailureKind,
+  NodeVerdict,
+} from "./execution_types";
 export const NODE_TYPES = [
   "planning",
   "implementation",
@@ -41,7 +46,18 @@ export interface AgentGraphDocument {
   nodes: AgentNode[];
   edges: GraphEdge[];
   defaultBinding?: ExecutionBinding;
-  automation?: { maxRepairCycles: number; nativeApprovalReview: boolean; browserVerification?: boolean; verificationContract?: boolean; authoredNodeTests?:boolean; testSourceGuard?:boolean; reserveFinalizationBudget?:boolean; guardOwnedProcesses?:boolean; targetScopeGuard?:boolean; programIoGuard?:boolean };
+  automation?: {
+    maxRepairCycles: number;
+    nativeApprovalReview: boolean;
+    browserVerification?: boolean;
+    verificationContract?: boolean;
+    authoredNodeTests?: boolean;
+    testSourceGuard?: boolean;
+    reserveFinalizationBudget?: boolean;
+    guardOwnedProcesses?: boolean;
+    targetScopeGuard?: boolean;
+    programIoGuard?: boolean;
+  };
   entrypoints: {
     start: string | null;
     reentry: string | null;
@@ -135,7 +151,7 @@ export interface NodeTestPolicy {
     file: string;
     requirements: string[];
     cases: string[];
-    challenges: Array<{id: string; adapter: string; targets: string[]}>;
+    challenges: Array<{ id: string; adapter: string; targets: string[] }>;
   }>;
 }
 export interface NodeTestProof {
@@ -143,7 +159,12 @@ export interface NodeTestProof {
   runId: string;
   reportDigest: string;
   sourceHashes: Record<string, string>;
-  scopes: Array<{id: string; file: string; cases: string[]; challenges: string[]}>;
+  scopes: Array<{
+    id: string;
+    file: string;
+    cases: string[];
+    challenges: string[];
+  }>;
 }
 export interface VerificationContract {
   version: 1;
@@ -167,27 +188,43 @@ export interface CommandReceipt {
   environmentError: string | null;
 }
 export interface NativeScopeAudit {
-  version:1;
-  cwd:string;
-  roots:string[];
-  inspectedCalls:number;
-  blockedCalls:number;
-  outsideCalls:number;
-  unresolvedCalls:number;
-  blocked:Array<{tool:string;path:string}>;
-  violations:Array<{tool:string;path:string}>;
+  version: 1;
+  cwd: string;
+  roots: string[];
+  inspectedCalls: number;
+  blockedCalls: number;
+  outsideCalls: number;
+  unresolvedCalls: number;
+  blocked: Array<{ tool: string; path: string }>;
+  violations: Array<{ tool: string; path: string }>;
 }
 export interface ProgramIoAudit {
-  version:1; backend:"macos-seatbelt"|"apple-container-vm"; policyId:string; profileDigest:string;
-  cwd:string; preflightPassed:boolean; nativeCommands:number; completedCommands:number;
-  unwrappedCommands:number; unresolvedCommands:number; invalidReceipts:number;
-  runtimeReadRoots:string[];
-  commands:Array<{id:string;command:string;exitCode:number;pid:number;processGroupStopped:boolean;containerRemoved?:boolean;containerName?:string}>;
+  version: 1;
+  backend: "macos-seatbelt" | "apple-container-vm";
+  policyId: string;
+  profileDigest: string;
+  cwd: string;
+  preflightPassed: boolean;
+  nativeCommands: number;
+  completedCommands: number;
+  unwrappedCommands: number;
+  unresolvedCommands: number;
+  invalidReceipts: number;
+  runtimeReadRoots: string[];
+  commands: Array<{
+    id: string;
+    command: string;
+    exitCode: number;
+    pid: number;
+    processGroupStopped: boolean;
+    containerRemoved?: boolean;
+    containerName?: string;
+  }>;
 }
 export interface AttemptRecord {
   programIoAudit?: ProgramIoAudit;
   scopeAudit?: NativeScopeAudit;
-  verificationInvalidation?: {at:string;reason:string;files:string[]};
+  verificationInvalidation?: { at: string; reason: string; files: string[] };
   readFiles?: string[];
   /** Written only after runtime completion validation; absent legacy evidence fails closed. */
   completionAccepted?: boolean;
@@ -222,7 +259,7 @@ export interface PlanChoice {
 }
 export interface NodeVisit {
   stageDeadlineAt?: string;
-  verificationSourceHashes?: Record<string,string>;
+  verificationSourceHashes?: Record<string, string>;
   verifiedCommands?: CommandReceipt[];
   nodeTestProof?: NodeTestProof;
   id: string;

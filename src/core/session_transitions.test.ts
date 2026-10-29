@@ -63,9 +63,17 @@ test("autonomous repair is bounded and never resumes explicit interrupt or appro
       transitionCommitted: false,
     } as unknown as import("../shared/domain").NodeVisit;
     s.visits.push(v);
-    advanceVisit(s, s.graph.nodes.find((n) => n.id === "test")!, v);
+    advanceVisit(
+      s,
+      s.graph.nodes.find((n) => n.id === "test")!,
+      v,
+    );
     assert.equal(s.currentNodeId, i < 2 ? "implementation" : "PAUSED");
-    advanceVisit(s, s.graph.nodes.find((n) => n.id === "test")!, v);
+    advanceVisit(
+      s,
+      s.graph.nodes.find((n) => n.id === "test")!,
+      v,
+    );
     assert.equal(
       s.visits.length,
       i + 1,

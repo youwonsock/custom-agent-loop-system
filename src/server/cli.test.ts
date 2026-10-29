@@ -46,7 +46,10 @@ test("public CLI init, graphs, models, run and resume share the standalone works
     .filter((e) => graph.nodes.some((n) => n.id === e.source))
     .map((e) =>
       e.source === "test"
-        ? { ...e, target: e.outcome === "success" ? "approval" : "implementation" }
+        ? {
+            ...e,
+            target: e.outcome === "success" ? "approval" : "implementation",
+          }
         : e,
     );
   graph.entrypoints = {

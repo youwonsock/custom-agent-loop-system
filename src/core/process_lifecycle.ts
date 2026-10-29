@@ -50,4 +50,3 @@ export async function terminateProcessTreeBounded(
   }
   return checkProcessLiveness(pid);
 }
-

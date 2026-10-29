@@ -61,23 +61,25 @@ export class AgentAttemptRunner {
       ["network", "transport_timeout", "idle_timeout"].includes(
         input.failure.kind,
       );
-    const configured =
-      ["rate_limited", "quota_exhausted"].includes(input.failure.kind)
-        ? (input.retryAfterMs ?? 30_000)
-        : (this.settings.retryBackoffMs[
-            Math.min(
-              input.attemptNumber - 1,
-              this.settings.retryBackoffMs.length - 1,
-            )
-          ] ?? 5_000);
+    const configured = ["rate_limited", "quota_exhausted"].includes(
+      input.failure.kind,
+    )
+      ? (input.retryAfterMs ?? 30_000)
+      : (this.settings.retryBackoffMs[
+          Math.min(
+            input.attemptNumber - 1,
+            this.settings.retryBackoffMs.length - 1,
+          )
+        ] ?? 5_000);
     const jittered = Math.max(
       0,
       Math.round(configured * (0.8 + this.random() * 0.4)),
     );
-    const capped =
-      ["rate_limited", "quota_exhausted"].includes(input.failure.kind)
-        ? Math.min(120_000, jittered)
-        : jittered;
+    const capped = ["rate_limited", "quota_exhausted"].includes(
+      input.failure.kind,
+    )
+      ? Math.min(120_000, jittered)
+      : jittered;
     return {
       retry: true,
       reconnect,

@@ -26,7 +26,11 @@ import { missingContractReceipts } from "./verification_contract";
 import { deliverableInspectionProblem } from "./deliverables";
 import { implementationBlocker } from "./implementation_blocker";
 import { diagnosticMessage } from "./cli_diagnostics";
-import { nodeTestProofProblem, nodeScopeAuditProblem, nodeInspectionProblem } from "./node_test_policy";
+import {
+  nodeTestProofProblem,
+  nodeScopeAuditProblem,
+  nodeInspectionProblem,
+} from "./node_test_policy";
 export const requiresResearch = (goal: string): boolean =>
   /(?:인터넷|웹)\s*(?:을|를|에서|으로)?\s*(?:검색|조사|찾)|\b(?:search|browse|research|look\s*up)(?:\s+the)?\s+(?:internet|web)\b|\b(?:internet|web)\s+(?:search|research)\b/i.test(
     goal.replace(/\s+/g, " "),
@@ -45,16 +49,24 @@ export function parsePlans(output: string): PlanChoice[] {
 }
 /** Plan references are prose, not execution evidence. Recognize explicit lists
  * and bounded ranges of known IDs without changing the model's original plan. */
-function planReferences(body: string, requirements: RequirementItem[]): Set<string> {
+function planReferences(
+  body: string,
+  requirements: RequirementItem[],
+): Set<string> {
   const ids = new Set(body.match(/\bREQ-\d+\b/g) ?? []);
-  const known = new Set(requirements.map(r => r.id));
+  const known = new Set(requirements.map((r) => r.id));
   const id = (digits: string) => `REQ-${digits}`;
-  for (const match of body.matchAll(/\bREQ-\d{3,}(?:\s*[\/,]\s*(?:REQ-)?\d{3,}\b)+/g))
+  for (const match of body.matchAll(
+    /\bREQ-\d{3,}(?:\s*[\/,]\s*(?:REQ-)?\d{3,}\b)+/g,
+  ))
     for (const number of match[0].matchAll(/\d{3,}\b/g))
       if (known.has(id(number[0]))) ids.add(id(number[0]));
-  for (const match of body.matchAll(/\bREQ-(\d{3,})\s*(?:\.\.|[-–—~])\s*(?:REQ-)?(\d{3,})\b/g)) {
+  for (const match of body.matchAll(
+    /\bREQ-(\d{3,})\s*(?:\.\.|[-–—~])\s*(?:REQ-)?(\d{3,})\b/g,
+  )) {
     if (!known.has(id(match[1]!)) || !known.has(id(match[2]!))) continue;
-    const start = Number(match[1]), end = Number(match[2]);
+    const start = Number(match[1]),
+      end = Number(match[2]);
     if (end < start) continue;
     // Iterate only the finite ledger, never a model-supplied numeric range.
     for (const r of requirements) {
@@ -92,11 +104,14 @@ export function validateCompletion(
   // Canonicalize only the observed autonomous implementation variation; quoted,
   // repeated, fenced or nonterminal markers and all audit roles stay strict.
   if (
-    automation && node.type === "implementation" &&
+    automation &&
+    node.type === "implementation" &&
     (output.match(/\[PHASE_DONE\]/g) ?? []).length === 1 &&
-    !output.includes("```") && !output.includes("~~~") &&
+    !output.includes("```") &&
+    !output.includes("~~~") &&
     /[.!?。][\t ]+\[PHASE_DONE\]$/.test(output)
-  ) output = output.replace(/[\t ]+\[PHASE_DONE\]$/, "\n[PHASE_DONE]");
+  )
+    output = output.replace(/[\t ]+\[PHASE_DONE\]$/, "\n[PHASE_DONE]");
   const answer: Completion = {
     valid: true,
     reason: null,
@@ -126,22 +141,52 @@ export function validateCompletion(
       "읽기 전용 역할에서 파일 변경이 관측되었습니다.",
       "role_violation",
     );
-  if(node.type==="implementation"){
-    try{
-      const observed=commands.find(c=>c.environmentError),reported=implementationBlocker(output);
-      if(observed||reported){
-        if(!observed&&reported?.kind!=="external")return fail(`구현이 ${reported?.kind} blocker를 보고했습니다. 같은 구현 역할에서 원인을 수정한 뒤 완료하세요: ${reported?.evidence}`);
-        answer.verdict="BLOCKED";
-        answer.environmentBlocked=diagnosticMessage(`구현 외부 환경 제약: ${observed?`${observed.command} → ${observed.environmentError}`:reported?.evidence}. 제품 수정이나 테스트 호출로 반복하지 않습니다.`);
+  if (node.type === "implementation") {
+    try {
+      const observed = commands.find((c) => c.environmentError),
+        reported = implementationBlocker(output);
+      if (observed || reported) {
+        if (!observed && reported?.kind !== "external")
+          return fail(
+            `구현이 ${reported?.kind} blocker를 보고했습니다. 같은 구현 역할에서 원인을 수정한 뒤 완료하세요: ${reported?.evidence}`,
+          );
+        answer.verdict = "BLOCKED";
+        answer.environmentBlocked = diagnosticMessage(
+          `구현 외부 환경 제약: ${observed ? `${observed.command} → ${observed.environmentError}` : reported?.evidence}. 제품 수정이나 테스트 호출로 반복하지 않습니다.`,
+        );
         return answer;
       }
-    }catch(error){return fail(`구현 blocker 보고 보완 필요: ${error instanceof Error?error.message:String(error)}`);}
+    } catch (error) {
+      return fail(
+        `구현 blocker 보고 보완 필요: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
   }
   try {
-    const rendered = renderStructuredReport(output, node, requirements, node.type === "test" ? commands : priorTestProof, contract, cwd);
-    if (automation?.verificationContract && contract?.status === "locked" && ["test","review","approval"].includes(node.type) && rendered === null) return fail("고정 검증 계약은 AGENT_REPORT JSON v1 보고가 필요합니다.");
-    if (rendered !== null) { output = rendered; answer.output = rendered; }
-  } catch (error) { return fail(`구조화 보고 보완 필요: ${error instanceof Error ? error.message : String(error)}`); }
+    const rendered = renderStructuredReport(
+      output,
+      node,
+      requirements,
+      node.type === "test" ? commands : priorTestProof,
+      contract,
+      cwd,
+    );
+    if (
+      automation?.verificationContract &&
+      contract?.status === "locked" &&
+      ["test", "review", "approval"].includes(node.type) &&
+      rendered === null
+    )
+      return fail("고정 검증 계약은 AGENT_REPORT JSON v1 보고가 필요합니다.");
+    if (rendered !== null) {
+      output = rendered;
+      answer.output = rendered;
+    }
+  } catch (error) {
+    return fail(
+      `구조화 보고 보완 필요: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
   const productionEdits = (result.evidence.changedFiles ?? []).filter(
     (file) =>
       !/^(?:test|tests|verification|\.agent-graph|artifacts|test-results|playwright-report)(?:\/|$)|(?:^|\/)[^/]+\.(?:test|spec)\.[cm]?[jt]sx?$|^playwright\.config\.[cm]?[jt]s$/.test(
@@ -212,10 +257,14 @@ export function validateCompletion(
     const missing = answer.plans.flatMap((p) => {
       const ids = planReferences(p.body, requirements);
       const absent = requirements.filter((r) => !ids.has(r.id));
-      return absent.length ? [`OPTION ${p.id}: ${absent.map((r) => r.id).join(", ")}`] : [];
+      return absent.length
+        ? [`OPTION ${p.id}: ${absent.map((r) => r.id).join(", ")}`]
+        : [];
     });
     if (missing.length)
-      return fail(`계획별 필수 REQ ID 누락: ${missing.join("; ")}. 해결되지 않은 각 ID를 전체 표기로 작성하세요 (예: REQ-006, REQ-007). 알려진 ID의 명확한 목록·범위만 참조로 해석합니다. 구현이나 도구 재실행 없이 전체 계획 보고만 보완하세요.`);
+      return fail(
+        `계획별 필수 REQ ID 누락: ${missing.join("; ")}. 해결되지 않은 각 ID를 전체 표기로 작성하세요 (예: REQ-006, REQ-007). 알려진 ID의 명확한 목록·범위만 참조로 해석합니다. 구현이나 도구 재실행 없이 전체 계획 보고만 보완하세요.`,
+      );
   }
   if (node.type === "test") {
     const testOutput = repairableBlocker
@@ -260,15 +309,27 @@ export function validateCompletion(
   }
   if (answer.verdict === "PASS" || answer.verdict === "APPROVED") {
     if (answer.verdict === "APPROVED") {
-      const inspection = deliverableInspectionProblem(contract?.manifest, inspectedFiles);
+      const inspection = deliverableInspectionProblem(
+        contract?.manifest,
+        inspectedFiles,
+      );
       if (inspection) return fail(inspection);
     }
-    if(answer.verdict==="APPROVED"&&contract?.manifest?.nodeTests){
-      const inspection=nodeInspectionProblem(contract.manifest.nodeTests,inspectedFiles);
-      if(inspection)return fail(inspection);
+    if (answer.verdict === "APPROVED" && contract?.manifest?.nodeTests) {
+      const inspection = nodeInspectionProblem(
+        contract.manifest.nodeTests,
+        inspectedFiles,
+      );
+      if (inspection) return fail(inspection);
     }
-    const problem=nodeTestProofProblem(contract?.manifest?.nodeTests,nodeTestProof)??nodeScopeAuditProblem(contract?.manifest?.nodeTests,output);
-    if(problem){answer.verdict=node.type==="test"?"FAIL":"REJECTED";answer.reason=problem;return answer;}
+    const problem =
+      nodeTestProofProblem(contract?.manifest?.nodeTests, nodeTestProof) ??
+      nodeScopeAuditProblem(contract?.manifest?.nodeTests, output);
+    if (problem) {
+      answer.verdict = node.type === "test" ? "FAIL" : "REJECTED";
+      answer.reason = problem;
+      return answer;
+    }
     const failed = failedVerificationCommand(commands);
     if (failed) {
       answer.verdict = node.type === "test" ? "FAIL" : "REJECTED";
@@ -277,10 +338,20 @@ export function validateCompletion(
     }
   }
   if (answer.verdict === "PASS" || answer.verdict === "APPROVED") {
-    const missing = missingContractReceipts(contract, node.type === "test" ? commands : priorTestProof, !!automation?.verificationContract, cwd);
+    const missing = missingContractReceipts(
+      contract,
+      node.type === "test" ? commands : priorTestProof,
+      !!automation?.verificationContract,
+      cwd,
+    );
     if (missing.length) {
-      if (node.type === "test") return fail(`검증 계약의 실제 성공 기록이 필요합니다: ${missing.join(", ")}. 계약의 해당 명령만 단독 foreground 호출로 실행하세요. Missing native receipts: execute EVERY missing registry command literally, without | tail, | head, semicolon, echo, status wrappers or extra flags; read saved reports separately. Native tools may truncate displayed output without changing exit status.`);
-      answer.verdict = "REJECTED"; answer.reason = `검증 계약의 테스트 기록이 부족합니다: ${missing.join(", ")}`; return answer;
+      if (node.type === "test")
+        return fail(
+          `검증 계약의 실제 성공 기록이 필요합니다: ${missing.join(", ")}. 계약의 해당 명령만 단독 foreground 호출로 실행하세요. Missing native receipts: execute EVERY missing registry command literally, without | tail, | head, semicolon, echo, status wrappers or extra flags; read saved reports separately. Native tools may truncate displayed output without changing exit status.`,
+        );
+      answer.verdict = "REJECTED";
+      answer.reason = `검증 계약의 테스트 기록이 부족합니다: ${missing.join(", ")}`;
+      return answer;
     }
   }
   if (answer.verdict === "PASS") {

@@ -4,7 +4,9 @@ declare module "node-pty" {
     cols: number;
     rows: number;
     onData(listener: (data: string) => void): { dispose(): void };
-    onExit(listener: (e: { exitCode: number; signal?: number }) => void): { dispose(): void };
+    onExit(listener: (e: { exitCode: number; signal?: number }) => void): {
+      dispose(): void;
+    };
     write(data: string): boolean | void;
     resize(cols: number, rows: number): void;
     kill(signal?: string): void;
@@ -23,5 +25,9 @@ declare module "node-pty" {
     conptyInheritCursor?: boolean;
   }
 
-  export function spawn(file: string, args: string[] | string, options: IPtyForkOptions): IPty;
+  export function spawn(
+    file: string,
+    args: string[] | string,
+    options: IPtyForkOptions,
+  ): IPty;
 }

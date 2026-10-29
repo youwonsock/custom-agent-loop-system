@@ -1,6 +1,10 @@
 import type { SessionSummary } from "../../src/shared/session_updates";
 import { graphDiagnostics } from "../../src/shared/graph_validation";
-import type { AgentGraphDocument, LocalConnection, ModelCatalog } from "../../src/shared/domain";
+import type {
+  AgentGraphDocument,
+  LocalConnection,
+  ModelCatalog,
+} from "../../src/shared/domain";
 export interface Bootstrap {
   version: string;
   root: string;
@@ -20,7 +24,11 @@ export const statusNames: Record<string, string> = {
   SUCCESS: "완료",
   FAILED: "실패",
 };
-export const pricingNames = { free: "무료 확인", paid: "유료", unknown: "가격 미확인" };
+export const pricingNames = {
+  free: "무료 확인",
+  paid: "유료",
+  unknown: "가격 미확인",
+};
 export const stamp = (value: string) =>
   new Date(value).toLocaleString("ko-KR", {
     month: "short",
@@ -33,5 +41,5 @@ export const fingerprint = (g: AgentGraphDocument) =>
 export const backupKey = (root: string, graphId: string) =>
   `agent-graph-draft:${root}:${graphId}`;
 export function clientDiagnostics(g: AgentGraphDocument): string[] {
-  return graphDiagnostics(g).map(d => d.message);
+  return graphDiagnostics(g).map((d) => d.message);
 }

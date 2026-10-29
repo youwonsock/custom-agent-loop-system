@@ -28,37 +28,80 @@ async function waitForCanvasFit(page: Page) {
 test.beforeAll(async () => {
   await fs.mkdir(target, { recursive: true });
 });
-test("editor disables execution and explains completion paths that bypass tests or final approval", async ({ page }) => {
-  await page.route("**/api/bootstrap*", async route => {
+test("editor disables execution and explains completion paths that bypass tests or final approval", async ({
+  page,
+}) => {
+  await page.route("**/api/bootstrap*", async (route) => {
     const response = await route.fetch();
     const boot = await response.json();
-    const graph = boot.graphs.find((g: any) => g.nodes.some((n: any) => n.id === "approval") && g.nodes.some((n: any) => n.id === "test"));
-    graph.defaultBinding = { connectionId: "fixture", modelId: "fixture-model" };
-    graph.edges.find((e: any) => e.source === "implementation" && e.outcome === "success").target = "SUCCESS";
+    const graph = boot.graphs.find(
+      (g: any) =>
+        g.nodes.some((n: any) => n.id === "approval") &&
+        g.nodes.some((n: any) => n.id === "test"),
+    );
+    graph.defaultBinding = {
+      connectionId: "fixture",
+      modelId: "fixture-model",
+    };
+    graph.edges.find(
+      (e: any) => e.source === "implementation" && e.outcome === "success",
+    ).target = "SUCCESS";
     boot.graphs = [graph];
     await route.fulfill({ response, json: boot });
   });
   await page.goto("/");
   await page.getByLabel("실행 목표").fill("Do not skip verification");
-  await expect(page.getByText("완료(SUCCESS)는 최종 승인 노드의 성공 경로로만 연결하세요.", { exact: true })).toBeVisible();
-  await expect(page.getByText("실행·재진입·중단 경로에서 테스트를 건너뛰고 완료할 수 없습니다.", { exact: true })).toBeVisible();
-  await expect(page.getByRole("button", { name: "그래프 실행", exact: false })).toBeDisabled();
-  await page.screenshot({ path: "artifacts/screenshots/unsafe-success-blocked.png", fullPage: true });
+  await expect(
+    page.getByText(
+      "완료(SUCCESS)는 최종 승인 노드의 성공 경로로만 연결하세요.",
+      { exact: true },
+    ),
+  ).toBeVisible();
+  await expect(
+    page.getByText(
+      "실행·재진입·중단 경로에서 테스트를 건너뛰고 완료할 수 없습니다.",
+      { exact: true },
+    ),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "그래프 실행", exact: false }),
+  ).toBeDisabled();
+  await page.screenshot({
+    path: "artifacts/screenshots/unsafe-success-blocked.png",
+    fullPage: true,
+  });
 });
-test("editor rejects a closed execution cycle using the shared server diagnostics", async ({ page }) => {
-  await page.route("**/api/bootstrap*", async route => {
+test("editor rejects a closed execution cycle using the shared server diagnostics", async ({
+  page,
+}) => {
+  await page.route("**/api/bootstrap*", async (route) => {
     const response = await route.fetch();
     const boot = await response.json();
-    const graph = boot.graphs.find((g: any) => g.nodes.some((n: any) => n.id === "approval"));
-    graph.defaultBinding = { connectionId: "fixture", modelId: "fixture-model" };
-    graph.edges = graph.edges.map((e: any) => e.source === "interrupt" ? e : { ...e, target: e.source });
+    const graph = boot.graphs.find((g: any) =>
+      g.nodes.some((n: any) => n.id === "approval"),
+    );
+    graph.defaultBinding = {
+      connectionId: "fixture",
+      modelId: "fixture-model",
+    };
+    graph.edges = graph.edges.map((e: any) =>
+      e.source === "interrupt" ? e : { ...e, target: e.source },
+    );
     boot.graphs = [graph];
     await route.fulfill({ response, json: boot });
   });
   await page.goto("/");
   await page.getByLabel("실행 목표").fill("Closed cycles must not run");
-  await expect(page.getByText("완료 또는 일시정지로 나갈 수 있는 경로가 없습니다.", { exact: true }).first()).toBeVisible();
-  await expect(page.getByRole("button", { name: "그래프 실행", exact: false })).toBeDisabled();
+  await expect(
+    page
+      .getByText("완료 또는 일시정지로 나갈 수 있는 경로가 없습니다.", {
+        exact: true,
+      })
+      .first(),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "그래프 실행", exact: false }),
+  ).toBeDisabled();
 });
 test("graph editing, model connection, plan editing/approval and complete execution", async ({
   page,
@@ -108,7 +151,10 @@ test("graph editing, model connection, plan editing/approval and complete execut
   });
   await page.getByLabel("전체 시간 예산").fill("45");
   await page.getByLabel("전체 에이전트 시도 한도").fill("18");
-  const submitted = page.waitForRequest(request => request.method() === "POST" && request.url().endsWith("/api/sessions"));
+  const submitted = page.waitForRequest(
+    (request) =>
+      request.method() === "POST" && request.url().endsWith("/api/sessions"),
+  );
   await page.getByRole("button", { name: "그래프 실행", exact: false }).click();
   const budget = (await submitted).postDataJSON().settings;
   expect(budget.sessionTimeoutMs).toBe(45 * 60000);
@@ -123,7 +169,9 @@ test("graph editing, model connection, plan editing/approval and complete execut
   await area.fill(body + "\nOperator acceptance review complete.");
   await page.getByRole("button", { name: "CLI 연결", exact: false }).click();
   await page.getByRole("button", { name: "실행 기록", exact: false }).click();
-  await expect(area).toHaveValue(body + "\nOperator acceptance review complete.");
+  await expect(area).toHaveValue(
+    body + "\nOperator acceptance review complete.",
+  );
   await page.getByRole("button", { name: "문서 저장", exact: true }).click();
   await expect(page.getByText(/문서 rev 2/)).toBeVisible();
   await page.screenshot({
@@ -137,7 +185,10 @@ test("graph editing, model connection, plan editing/approval and complete execut
     timeout: 20_000,
   });
   await expect(
-    page.getByText("모든 필수 요구사항, 실제 테스트 실행 증거와 최종 승인을 확인했습니다.", { exact: true }),
+    page.getByText(
+      "모든 필수 요구사항, 실제 테스트 실행 증거와 최종 승인을 확인했습니다.",
+      { exact: true },
+    ),
   ).toBeVisible();
   await expect(page.locator(".visit-panel")).toContainText("최종 승인");
   await page.screenshot({
@@ -528,7 +579,12 @@ test("graph removal uses its identity while completed execution snapshots remain
   await expect(page.locator(".page-heading .status-pill")).toHaveText("완료");
 });
 
-async function startQaFixture(page: Page, goal: string, pricing?: Record<string, unknown>, settings: Record<string, unknown> = {}) {
+async function startQaFixture(
+  page: Page,
+  goal: string,
+  pricing?: Record<string, unknown>,
+  settings: Record<string, unknown> = {},
+) {
   await page.goto("/");
   await expect(page.getByLabel("그래프 이름")).toBeVisible();
   const headers = { Origin: "http://127.0.0.1:4379" };
@@ -537,7 +593,11 @@ async function startQaFixture(page: Page, goal: string, pricing?: Record<string,
     `artifacts/qa-error-project-${crypto.randomUUID()}`,
   );
   await fs.mkdir(project, { recursive: true });
-  if (pricing) await fs.writeFile(path.join(project, ".fixture-model-metadata.json"), JSON.stringify(pricing));
+  if (pricing)
+    await fs.writeFile(
+      path.join(project, ".fixture-model-metadata.json"),
+      JSON.stringify(pricing),
+    );
   const connectionResponse = await page.request.post("/api/connections", {
     headers,
     data: {
@@ -602,23 +662,48 @@ async function startQaFixture(page: Page, goal: string, pricing?: Record<string,
 }
 
 for (const isFree of [true, false]) {
-  test(`${isFree ? "free recovery" : "paid limit"} displays the pricing evidence and stop reason`, async ({ page }) => {
-    const { id } = await startQaFixture(page, "fixture:spent-network", { isFree }, {
-      maxAutomaticRecoveryCycles: 1, automaticRecoveryBackoffMs: [60000],
-    });
+  test(`${isFree ? "free recovery" : "paid limit"} displays the pricing evidence and stop reason`, async ({
+    page,
+  }) => {
+    const { id } = await startQaFixture(
+      page,
+      "fixture:spent-network",
+      { isFree },
+      {
+        maxAutomaticRecoveryCycles: 1,
+        automaticRecoveryBackoffMs: [60000],
+      },
+    );
     try {
-      await expect(page.locator(".page-heading .status-pill")).toHaveText(isFree ? "복구 예약" : "일시정지");
-      await expect(page.locator(".run-reason")).toContainText(isFree ? "무료로 확인된 모델" : "유료 모델이므로");
-      await expect(page.locator(".attempt-detail").first()).toContainText(isFree ? "무료 확인" : "유료");
-      const state = await (await page.request.get(`/api/sessions/${id}`)).json();
+      await expect(page.locator(".page-heading .status-pill")).toHaveText(
+        isFree ? "복구 예약" : "일시정지",
+      );
+      await expect(page.locator(".run-reason")).toContainText(
+        isFree ? "무료로 확인된 모델" : "유료 모델이므로",
+      );
+      await expect(page.locator(".attempt-detail").first()).toContainText(
+        isFree ? "무료 확인" : "유료",
+      );
+      const state = await (
+        await page.request.get(`/api/sessions/${id}`)
+      ).json();
       expect(state.visits[0].attempts).toHaveLength(1);
-      expect(state.visits[0].attempts[0].pricing.status).toBe(isFree ? "free" : "paid");
-      await page.screenshot({ path: `artifacts/screenshots/${isFree ? "free-model-recovery" : "paid-model-limit"}.png`, fullPage: true });
+      expect(state.visits[0].attempts[0].pricing.status).toBe(
+        isFree ? "free" : "paid",
+      );
+      await page.screenshot({
+        path: `artifacts/screenshots/${isFree ? "free-model-recovery" : "paid-model-limit"}.png`,
+        fullPage: true,
+      });
     } finally {
-      expect((await page.request.post(`/api/sessions/${id}/actions`, {
-        headers: { Origin: "http://127.0.0.1:4379" },
-        data: { requestId: crypto.randomUUID(), type: "stop" },
-      })).status()).toBe(200);
+      expect(
+        (
+          await page.request.post(`/api/sessions/${id}/actions`, {
+            headers: { Origin: "http://127.0.0.1:4379" },
+            data: { requestId: crypto.randomUUID(), type: "stop" },
+          })
+        ).status(),
+      ).toBe(200);
     }
   });
 }
@@ -687,90 +772,157 @@ test("reported Kilo QA log events proceed to final approval through the GUI", as
   expect(run.visits.at(-1).nodeId).toBe("approval");
 });
 
-test("environment-blocked verification displays the cause and resumes only the same test visit", async ({ page }) => {
-  const { id, project } = await startQaFixture(page, "fixture:environment-once");
-  await expect(page.locator(".page-heading .status-pill")).toHaveText("사용자 대기");
+test("environment-blocked verification displays the cause and resumes only the same test visit", async ({
+  page,
+}) => {
+  const { id, project } = await startQaFixture(
+    page,
+    "fixture:environment-once",
+  );
+  await expect(page.locator(".page-heading .status-pill")).toHaveText(
+    "사용자 대기",
+  );
   await expect(page.locator(".run-reason")).toContainText("listen EPERM");
   const before = await (await page.request.get(`/api/sessions/${id}`)).json();
   const visit = before.visits.at(-1);
   expect(visit.nodeId).toBe("test");
   expect(visit.verdict).toBe("BLOCKED");
-  await page.screenshot({ path: "artifacts/screenshots/environment-blocked.png", fullPage: true });
+  await page.screenshot({
+    path: "artifacts/screenshots/environment-blocked.png",
+    fullPage: true,
+  });
   await page.getByRole("button", { name: "재개", exact: true }).click();
   await expect(page.locator(".page-heading .status-pill")).toHaveText("완료");
   const after = await (await page.request.get(`/api/sessions/${id}`)).json();
   expect(after.visits.find((v: any) => v.nodeId === "test").id).toBe(visit.id);
   expect(after.visits.slice(0, 2)).toEqual(before.visits.slice(0, 2));
-  expect(JSON.parse(await fs.readFile(path.join(project, ".fixture-calls.json"), "utf8")))
-    .toEqual({ planning: 1, implementation: 1, test: 2, review: 1, approval: 1 });
+  expect(
+    JSON.parse(
+      await fs.readFile(path.join(project, ".fixture-calls.json"), "utf8"),
+    ),
+  ).toEqual({
+    planning: 1,
+    implementation: 1,
+    test: 2,
+    review: 1,
+    approval: 1,
+  });
 });
 
-test("view changes preserve a pending graph save and unfinished connection input", async ({ page }) => {
+test("view changes preserve a pending graph save and unfinished connection input", async ({
+  page,
+}) => {
   await page.goto("/");
   await page.getByRole("button", { name: "새 그래프", exact: true }).click();
   await expect(page.getByText("저장됨", { exact: true })).toBeVisible();
   let release!: () => void;
-  const pending = new Promise<void>(resolve => { release = resolve; });
-  await page.route("**/api/graphs/*", async route => {
+  const pending = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  await page.route("**/api/graphs/*", async (route) => {
     if (route.request().method() === "PUT") await pending;
     await route.continue();
   });
   try {
-    const saving = page.waitForRequest(request => request.method() === "PUT" && request.url().includes("/api/graphs/"));
+    const saving = page.waitForRequest(
+      (request) =>
+        request.method() === "PUT" && request.url().includes("/api/graphs/"),
+    );
     await page.getByLabel("그래프 이름").fill("전환 중 보존하는 초안");
     await saving;
     await page.getByRole("button", { name: "CLI 연결", exact: false }).click();
     await page.getByLabel("연결 이름").fill("아직 등록하지 않은 연결");
-    await page.getByRole("button", { name: "그래프 편집", exact: false }).click();
-    await expect(page.getByLabel("그래프 이름")).toHaveValue("전환 중 보존하는 초안");
+    await page
+      .getByRole("button", { name: "그래프 편집", exact: false })
+      .click();
+    await expect(page.getByLabel("그래프 이름")).toHaveValue(
+      "전환 중 보존하는 초안",
+    );
     await page.getByRole("button", { name: "CLI 연결", exact: false }).click();
-    await expect(page.getByLabel("연결 이름")).toHaveValue("아직 등록하지 않은 연결");
-  } finally { release(); }
+    await expect(page.getByLabel("연결 이름")).toHaveValue(
+      "아직 등록하지 않은 연결",
+    );
+  } finally {
+    release();
+  }
   await page.getByRole("button", { name: "그래프 편집", exact: false }).click();
   await expect(page.getByText("저장됨", { exact: true })).toBeVisible();
 });
 
-test("view changes keep one SSE subscription and cancel inactive log polling", async ({ page }) => {
+test("view changes keep one SSE subscription and cancel inactive log polling", async ({
+  page,
+}) => {
   await page.addInitScript(() => {
     const probe = { streams: 0, createdStreams: 0, activeLogs: 0, maxLogs: 0 };
     (window as any).__studioProbe = probe;
     const NativeEventSource = window.EventSource;
     window.EventSource = class extends NativeEventSource {
       closed = false;
-      constructor(url: string | URL, init?: EventSourceInit) { super(url, init); probe.streams++; probe.createdStreams++; }
-      close() { if (!this.closed) { probe.streams--; this.closed = true; } super.close(); }
+      constructor(url: string | URL, init?: EventSourceInit) {
+        super(url, init);
+        probe.streams++;
+        probe.createdStreams++;
+      }
+      close() {
+        if (!this.closed) {
+          probe.streams--;
+          this.closed = true;
+        }
+        super.close();
+      }
     };
     const nativeFetch = window.fetch.bind(window);
     window.fetch = async (input, init) => {
       if (!String(input).includes("/logs?")) return nativeFetch(input, init);
       let finished = false;
-      const finish = () => { if (!finished) { finished = true; probe.activeLogs--; } };
-      probe.activeLogs++; probe.maxLogs = Math.max(probe.maxLogs, probe.activeLogs);
+      const finish = () => {
+        if (!finished) {
+          finished = true;
+          probe.activeLogs--;
+        }
+      };
+      probe.activeLogs++;
+      probe.maxLogs = Math.max(probe.maxLogs, probe.activeLogs);
       init?.signal?.addEventListener("abort", finish, { once: true });
-      try { return await nativeFetch(input, init); } finally { finish(); init?.signal?.removeEventListener("abort", finish); }
+      try {
+        return await nativeFetch(input, init);
+      } finally {
+        finish();
+        init?.signal?.removeEventListener("abort", finish);
+      }
     };
   });
-  await page.route("**/api/sessions/*/logs?*", async route => {
-    await new Promise(resolve => setTimeout(resolve, 500));
+  await page.route("**/api/sessions/*/logs?*", async (route) => {
+    await new Promise((resolve) => setTimeout(resolve, 500));
     await route.continue().catch(() => {});
   });
   await startQaFixture(page, "fixture:qa-auth-once");
   for (let i = 0; i < 3; i++) {
-    await expect.poll(() => page.evaluate(() => (window as any).__studioProbe.activeLogs)).toBe(1);
+    await expect
+      .poll(() => page.evaluate(() => (window as any).__studioProbe.activeLogs))
+      .toBe(1);
     await page.getByRole("button", { name: "CLI 연결", exact: false }).click();
-    await expect.poll(() => page.evaluate(() => (window as any).__studioProbe.activeLogs)).toBe(0);
+    await expect
+      .poll(() => page.evaluate(() => (window as any).__studioProbe.activeLogs))
+      .toBe(0);
     await page.getByRole("button", { name: "실행 기록", exact: false }).click();
   }
   const probe = await page.evaluate(() => (window as any).__studioProbe);
-  expect(probe.streams).toBe(1); expect(probe.createdStreams).toBe(1); expect(probe.maxLogs).toBe(1);
+  expect(probe.streams).toBe(1);
+  expect(probe.createdStreams).toBe(1);
+  expect(probe.maxLogs).toBe(1);
 });
 
-test("a failed lazy view reports the error and reload recovers", async ({ page }) => {
-  await page.route("**/assets/ConnectionsView-*.js", route => route.abort());
+test("a failed lazy view reports the error and reload recovers", async ({
+  page,
+}) => {
+  await page.route("**/assets/ConnectionsView-*.js", (route) => route.abort());
   await page.goto("/");
   await expect(page.getByTestId("graph-canvas")).toBeVisible();
   await page.getByRole("button", { name: "CLI 연결", exact: false }).click();
-  await expect(page.getByRole("heading", { name: "화면을 불러오지 못했습니다" })).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "화면을 불러오지 못했습니다" }),
+  ).toBeVisible();
   await page.unroute("**/assets/ConnectionsView-*.js");
   await page.getByRole("button", { name: "새로고침", exact: true }).click();
   await expect(page.getByTestId("graph-canvas")).toBeVisible();
@@ -778,16 +930,41 @@ test("a failed lazy view reports the error and reload recovers", async ({ page }
   await expect(page.getByLabel("연결 이름")).toBeVisible();
 });
 
-test("initial graph JavaScript stays under 500 kB and defers other screens and Markdown", async ({ page }) => {
+test("initial graph JavaScript stays under 500 kB and defers other screens and Markdown", async ({
+  page,
+}) => {
   const scripts = new Map<string, Promise<number>>();
-  page.on("response", response => {
-    if (/\/assets\/[^?]+\.js$/.test(response.url())) scripts.set(response.url(), response.body().then(body => body.length));
+  page.on("response", (response) => {
+    if (/\/assets\/[^?]+\.js$/.test(response.url()))
+      scripts.set(
+        response.url(),
+        response.body().then((body) => body.length),
+      );
   });
   await page.goto("/");
   await expect(page.getByTestId("graph-canvas")).toBeVisible();
-  const bytes = (await Promise.all(scripts.values())).reduce((sum, value) => sum + value, 0);
-  expect(bytes).toBeGreaterThan(0); expect(bytes).toBeLessThanOrEqual(500_000);
-  expect([...scripts.keys()].some(url => /Markdown-|RunsView-|ConnectionsView-/.test(url))).toBe(false);
+  const bytes = (await Promise.all(scripts.values())).reduce(
+    (sum, value) => sum + value,
+    0,
+  );
+  expect(bytes).toBeGreaterThan(0);
+  expect(bytes).toBeLessThanOrEqual(500_000);
+  expect(
+    [...scripts.keys()].some((url) =>
+      /Markdown-|RunsView-|ConnectionsView-/.test(url),
+    ),
+  ).toBe(false);
   await fs.mkdir("artifacts/verification", { recursive: true });
-  await fs.writeFile("artifacts/verification/browser-bundle.json", JSON.stringify({ decodedJavaScriptBytes: bytes, limit: 500_000, assets: [...scripts.keys()].map(url => new URL(url).pathname) }, null, 2));
+  await fs.writeFile(
+    "artifacts/verification/browser-bundle.json",
+    JSON.stringify(
+      {
+        decodedJavaScriptBytes: bytes,
+        limit: 500_000,
+        assets: [...scripts.keys()].map((url) => new URL(url).pathname),
+      },
+      null,
+      2,
+    ),
+  );
 });

@@ -59,7 +59,8 @@ export async function stopChild(
 ): Promise<void> {
   // A dead PID can precede the close event and release of Windows cwd handles.
   let closed =
-    child.stdout.closed && child.stderr.closed &&
+    child.stdout.closed &&
+    child.stderr.closed &&
     (child.exitCode !== null || child.signalCode !== null);
   let onClose: () => void = () => {};
   const close = new Promise<void>((resolve) => {
@@ -75,7 +76,10 @@ export async function stopChild(
     if (child.pid && checkProcessLiveness(child.pid) !== "dead") {
       child.kill("SIGTERM");
       const deadline = Date.now() + 300;
-      while (checkProcessLiveness(child.pid) === "alive" && Date.now() < deadline)
+      while (
+        checkProcessLiveness(child.pid) === "alive" &&
+        Date.now() < deadline
+      )
         await delay(20);
       if (checkProcessLiveness(child.pid) !== "dead")
         await terminateProcessTreeBounded(child.pid, timeoutMs);
@@ -88,7 +92,9 @@ export async function stopChild(
         new Promise<void>((_, reject) => {
           timer = setTimeout(
             () =>
-              reject(new Error("조회 프로세스 연결 종료를 확인할 수 없습니다.")),
+              reject(
+                new Error("조회 프로세스 연결 종료를 확인할 수 없습니다."),
+              ),
             timeoutMs,
           );
         }),

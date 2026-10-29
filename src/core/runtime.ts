@@ -44,21 +44,40 @@ import {
 import { validateCompletion, Completion } from "./completion";
 import { AppError, messageOf } from "./errors";
 import { outsidePaths } from "./access_paths";
-import { currentTestProof, currentNodeTestProof, mergeProjectReceipts } from "./verification_evidence";
+import {
+  currentTestProof,
+  currentNodeTestProof,
+  mergeProjectReceipts,
+} from "./verification_evidence";
 import { readNodeTestProof } from "./node_test_verification";
 import { modelPricing } from "./model_pricing";
 import { productionHashes } from "./verification_sources";
 import { successBlockers } from "./success_gate";
-import { lockContract, contractViolation, verificationRunnerProblem } from "./verification_contract";
+import {
+  lockContract,
+  contractViolation,
+  verificationRunnerProblem,
+} from "./verification_contract";
 import { deliverableProblem } from "./deliverables";
-import { prepareVerificationCaptures, addCapturedEnvironmentDiagnostics } from "./verification_capture";
+import {
+  prepareVerificationCaptures,
+  addCapturedEnvironmentDiagnostics,
+} from "./verification_capture";
 import { sessionBudgetReason, pauseForBudget } from "./session_budget";
 import { stageDeadline, stageBudgetReason } from "./stage_budget";
 import { unscopedTerminationEvent } from "./process_command_policy";
 import { SCOPE_VIOLATION } from "./native_scope";
 import { IO_UNAVAILABLE, IO_VIOLATION } from "./program_io";
 import { nodeTestScript } from "./node_test_policy";
-import { TEST_POLICY, TEST_FAILED, testSources, sourceDifference, testPolicyEvent, failedRegisteredCheck, currentVerificationSources } from "./test_source_guard";
+import {
+  TEST_POLICY,
+  TEST_FAILED,
+  testSources,
+  sourceDifference,
+  testPolicyEvent,
+  failedRegisteredCheck,
+  currentVerificationSources,
+} from "./test_source_guard";
 
 export interface RuntimeHooks {
   onState?: (state: SessionState) => void;
@@ -168,30 +187,66 @@ export class GraphRuntime {
   }
   private async poll(): Promise<boolean> {
     const request = await claimNextControlRequest(this.controls());
-    if (request) { await this.finishControl(request); return true; }
+    if (request) {
+      await this.finishControl(request);
+      return true;
+    }
     const budget = sessionBudgetReason(this.state);
-    if (budget) { await this.budgetStop(budget); return true; }
+    if (budget) {
+      await this.budgetStop(budget);
+      return true;
+    }
     return false;
   }
   private async budgetStop(reason: string): Promise<void> {
-    pauseForBudget(this.state,reason);this.stopRequested=true;await this.save();
+    pauseForBudget(this.state, reason);
+    this.stopRequested = true;
+    await this.save();
   }
-  private async stageStop(reason:string,visit:NodeVisit):Promise<void>{
-    this.state.status="PAUSED";this.state.statusReason=reason;this.state.automaticRecovery=null;visit.status="paused";this.stopRequested=true;await this.save();
+  private async stageStop(reason: string, visit: NodeVisit): Promise<void> {
+    this.state.status = "PAUSED";
+    this.state.statusReason = reason;
+    this.state.automaticRecovery = null;
+    visit.status = "paused";
+    this.stopRequested = true;
+    await this.save();
   }
-  private verificationFailure(node:AgentNode,reason:string):Completion{
-    const verdict=node.type==="test"?"FAIL":"REJECTED";
-    return {valid:true,reason,failureKind:null,output:`[ORCHESTRATOR_VERIFICATION_FAILURE]\n${reason}\nVERDICT: ${verdict}\n[PHASE_DONE]`,verdict,plans:[],researchBlocked:false,environmentBlocked:null};
+  private verificationFailure(node: AgentNode, reason: string): Completion {
+    const verdict = node.type === "test" ? "FAIL" : "REJECTED";
+    return {
+      valid: true,
+      reason,
+      failureKind: null,
+      output: `[ORCHESTRATOR_VERIFICATION_FAILURE]\n${reason}\nVERDICT: ${verdict}\n[PHASE_DONE]`,
+      verdict,
+      plans: [],
+      researchBlocked: false,
+      environmentBlocked: null,
+    };
   }
   private async contractStop(): Promise<boolean> {
     const reason = await contractViolation(this.state);
     if (!reason) return false;
-    this.state.status="BLOCKED";this.state.statusReason=reason;this.state.automaticRecovery=null;this.stopRequested=true;
-    const visit=this.state.visits.find(v=>v.id===this.state.activeVisitId);if(visit)visit.status="paused";
-    await this.save();return true;
+    this.state.status = "BLOCKED";
+    this.state.statusReason = reason;
+    this.state.automaticRecovery = null;
+    this.stopRequested = true;
+    const visit = this.state.visits.find(
+      (v) => v.id === this.state.activeVisitId,
+    );
+    if (visit) visit.status = "paused";
+    await this.save();
+    return true;
   }
   private outside(text: string, intentRoots: string[] = []): string[] {
-    return outsidePaths(text,[this.state.targetProjectPath,...this.state.additionalAllowedPaths,...intentRoots]).filter(file=>path.resolve(file)!==path.resolve(__dirname,"../server/cli.js"));
+    return outsidePaths(text, [
+      this.state.targetProjectPath,
+      ...this.state.additionalAllowedPaths,
+      ...intentRoots,
+    ]).filter(
+      (file) =>
+        path.resolve(file) !== path.resolve(__dirname, "../server/cli.js"),
+    );
   }
   async run(mode: "start" | "manual" | "automatic" = "start"): Promise<void> {
     this.state = await this.store.readSession(this.sessionId);
@@ -208,7 +263,15 @@ export class GraphRuntime {
       leaseTtlMs: settings.leaseTtlMs,
     });
     const acquired = await this.owner.acquire();
-    const budgetTimer = this.state.executionBudget ? setTimeout(() => this.abort.abort(new Error("전체 실행 시간 예산 소진")), Math.max(1,Date.parse(this.state.executionBudget.deadlineAt)-Date.now())) : undefined;
+    const budgetTimer = this.state.executionBudget
+      ? setTimeout(
+          () => this.abort.abort(new Error("전체 실행 시간 예산 소진")),
+          Math.max(
+            1,
+            Date.parse(this.state.executionBudget.deadlineAt) - Date.now(),
+          ),
+        )
+      : undefined;
     budgetTimer?.unref();
     try {
       await ensureControlQueue(this.controls());
@@ -333,7 +396,10 @@ export class GraphRuntime {
         const id = this.state.currentNodeId;
         if (id === "SUCCESS" || id === "PAUSED") {
           const blockers = id === "SUCCESS" ? successBlockers(this.state) : [];
-          if (id === "SUCCESS") { const problem = await deliverableProblem(this.state); if (problem) blockers.push(problem); }
+          if (id === "SUCCESS") {
+            const problem = await deliverableProblem(this.state);
+            if (problem) blockers.push(problem);
+          }
           this.state.status = blockers.length ? "PAUSED" : id;
           this.state.statusReason = blockers.length
             ? `성공 조건 미충족: ${blockers.join(" ")} 수정·테스트·최종 승인을 다시 수행하도록 수동 재개하세요.`
@@ -404,8 +470,15 @@ export class GraphRuntime {
           return;
         }
         if (visit.status === "paused") visit.status = "running";
-        if(this.state.graph.automation?.reserveFinalizationBudget&&!visit.stageDeadlineAt){
-          const end=stageDeadline(this.state,node,visit);if(end!==undefined){visit.stageDeadlineAt=new Date(end).toISOString();await this.save();}
+        if (
+          this.state.graph.automation?.reserveFinalizationBudget &&
+          !visit.stageDeadlineAt
+        ) {
+          const end = stageDeadline(this.state, node, visit);
+          if (end !== undefined) {
+            visit.stageDeadlineAt = new Date(end).toISOString();
+            await this.save();
+          }
         }
         if (!isReadOnly(node.type) && this.state.accessMode === "ask") {
           const ref = this.state.approvedPlanRef;
@@ -414,7 +487,9 @@ export class GraphRuntime {
                 .find((v) => v.id === ref.visitId)
                 ?.plans.find((p) => p.id === ref.choiceId)?.body ?? "")
             : "";
-          const extra = this.outside(`${this.state.goal}\n${approved}\n${node.instructions}`);
+          const extra = this.outside(
+            `${this.state.goal}\n${approved}\n${node.instructions}`,
+          );
           if (extra.length) {
             this.state.pendingAccess = {
               paths: extra,
@@ -477,7 +552,13 @@ export class GraphRuntime {
         return;
       }
       const budget = sessionBudgetReason(this.state);
-      if (budget && (!this.activePid || checkProcessLiveness(this.activePid)==="dead")) { await this.budgetStop(budget); return; }
+      if (
+        budget &&
+        (!this.activePid || checkProcessLiveness(this.activePid) === "dead")
+      ) {
+        await this.budgetStop(budget);
+        return;
+      }
       this.state.status =
         this.activePid && checkProcessLiveness(this.activePid) !== "dead"
           ? "BLOCKED"
@@ -514,20 +595,61 @@ export class GraphRuntime {
     node: AgentNode,
     visit: NodeVisit,
   ): Promise<Completion | null> {
-    const sourceGuard=!!this.state.graph.automation?.testSourceGuard;
-    if(sourceGuard&&["review","approval"].includes(node.type)){
-      const expected=currentVerificationSources(this.state,visit);
-      if(!expected)return this.verificationFailure(node,"현재 테스트 역할의 고정 소스 snapshot이 없습니다. 구현과 전체 테스트를 다시 수행해야 합니다.");
-      const changed=sourceDifference(expected,await testSources(this.state.targetProjectPath));
-      if(changed.length)return this.verificationFailure(node,`테스트 이후 소스가 변경되어 증거를 무효화했습니다: ${changed.join(", ")}. 구현과 모든 등록 검사를 다시 수행해야 합니다.`);
+    const sourceGuard = !!this.state.graph.automation?.testSourceGuard;
+    if (sourceGuard && ["review", "approval"].includes(node.type)) {
+      const expected = currentVerificationSources(this.state, visit);
+      if (!expected)
+        return this.verificationFailure(
+          node,
+          "현재 테스트 역할의 고정 소스 snapshot이 없습니다. 구현과 전체 테스트를 다시 수행해야 합니다.",
+        );
+      const changed = sourceDifference(
+        expected,
+        await testSources(this.state.targetProjectPath),
+      );
+      if (changed.length)
+        return this.verificationFailure(
+          node,
+          `테스트 이후 소스가 변경되어 증거를 무효화했습니다: ${changed.join(", ")}. 구현과 모든 등록 검사를 다시 수행해야 합니다.`,
+        );
     }
-    if (this.state.graph.automation?.verificationContract && node.type === "test" && this.state.verificationContract?.status !== "locked") {
-      try { this.state.verificationContract = await lockContract(this.state,"implementation"); await this.save(); }
-      catch(error) { return { valid:true,reason:`검증 계약 준비 실패: ${messageOf(error)}`,failureKind:null,output:`검증 계약 준비 실패: ${messageOf(error)}\n구현 역할에서 .agent-graph/verification.json과 인수 검사를 준비하세요.\nVERDICT: FAIL\n[PHASE_DONE]`,verdict:"FAIL",plans:[],researchBlocked:false,environmentBlocked:null }; }
+    if (
+      this.state.graph.automation?.verificationContract &&
+      node.type === "test" &&
+      this.state.verificationContract?.status !== "locked"
+    ) {
+      try {
+        this.state.verificationContract = await lockContract(
+          this.state,
+          "implementation",
+        );
+        await this.save();
+      } catch (error) {
+        return {
+          valid: true,
+          reason: `검증 계약 준비 실패: ${messageOf(error)}`,
+          failureKind: null,
+          output: `검증 계약 준비 실패: ${messageOf(error)}\n구현 역할에서 .agent-graph/verification.json과 인수 검사를 준비하세요.\nVERDICT: FAIL\n[PHASE_DONE]`,
+          verdict: "FAIL",
+          plans: [],
+          researchBlocked: false,
+          environmentBlocked: null,
+        };
+      }
     }
     if (node.type === "test") {
       const problem = await verificationRunnerProblem(this.state);
-      if (problem) return { valid:true,reason:problem,failureKind:null,output:`검증 runner 준비 실패: ${problem}\n구현 역할에서 필수 runner를 수정한 뒤 다시 검증하세요.\nVERDICT: FAIL\n[PHASE_DONE]`,verdict:"FAIL",plans:[],researchBlocked:false,environmentBlocked:null };
+      if (problem)
+        return {
+          valid: true,
+          reason: problem,
+          failureKind: null,
+          output: `검증 runner 준비 실패: ${problem}\n구현 역할에서 필수 runner를 수정한 뒤 다시 검증하세요.\nVERDICT: FAIL\n[PHASE_DONE]`,
+          verdict: "FAIL",
+          plans: [],
+          researchBlocked: false,
+          environmentBlocked: null,
+        };
     }
     if (["test", "review", "approval"].includes(node.type)) {
       const problem = await deliverableProblem(this.state);
@@ -536,7 +658,9 @@ export class GraphRuntime {
     let testInputs: Record<string, string> | null = null;
     if (this.state.graph.automation && node.type === "test") {
       try {
-        testInputs = sourceGuard?await testSources(this.state.targetProjectPath):await productionHashes(this.state.targetProjectPath);
+        testInputs = sourceGuard
+          ? await testSources(this.state.targetProjectPath)
+          : await productionHashes(this.state.targetProjectPath);
       } catch (error) {
         visit.status = "paused";
         this.state.status = "WAITING_USER";
@@ -552,7 +676,13 @@ export class GraphRuntime {
       )!;
     const contextMessage = (message: string) =>
       `[${node.name} · ${connection.label}] ${message}`;
-    const deadline = Math.min(Date.parse(visit.cycleDeadlineAt),this.state.graph.automation?.reserveFinalizationBudget&&visit.stageDeadlineAt?Date.parse(visit.stageDeadlineAt):Infinity),
+    const deadline = Math.min(
+        Date.parse(visit.cycleDeadlineAt),
+        this.state.graph.automation?.reserveFinalizationBudget &&
+          visit.stageDeadlineAt
+          ? Date.parse(visit.stageDeadlineAt)
+          : Infinity,
+      ),
       cycleAttempts = () =>
         visit.attempts.filter(
           (a) => Date.parse(a.startedAt) >= Date.parse(visit.cycleStartedAt),
@@ -573,10 +703,16 @@ export class GraphRuntime {
         return null;
       }
       if (await this.contractStop()) return null;
-      const budget = sessionBudgetReason(this.state,true);
-      if (budget) { await this.budgetStop(budget); return null; }
-      const stageReason=stageBudgetReason(this.state,node,visit,true);
-      if(stageReason){await this.stageStop(stageReason,visit);return null;}
+      const budget = sessionBudgetReason(this.state, true);
+      if (budget) {
+        await this.budgetStop(budget);
+        return null;
+      }
+      const stageReason = stageBudgetReason(this.state, node, visit, true);
+      if (stageReason) {
+        await this.stageStop(stageReason, visit);
+        return null;
+      }
       const normal = cycleAttempts().filter(
         (a) => a.mode === "standard",
       ).length;
@@ -595,29 +731,101 @@ export class GraphRuntime {
         );
         return null;
       }
-      const id = randomUUID(),logPath=path.join(this.store.visitDir(this.state.id,visit.id),`${id}.log`);
-      let invocation:Awaited<ReturnType<typeof buildInvocation>>;
-      try { invocation = await buildInvocation(connection, binding, node, {
-        prompt: buildNodePrompt(this.state, node, visit, recoveryMessage),
-        cwd: this.state.targetProjectPath,
-        fullAccess: this.state.accessMode === "full_access",
-        allowedPaths: this.state.additionalAllowedPaths,
-        nativeApprovalReview: this.state.graph.automation?.nativeApprovalReview,
-        localHttpAccess: connection.type==="codex"&&!!this.state.graph.automation?.browserVerification,
-        testSourcesReadOnly:sourceGuard&&node.type==="test",
-        guardOwnedProcesses:this.state.graph.automation?.guardOwnedProcesses,
-        ...(connection.type==="kilo"&&this.state.graph.automation?.targetScopeGuard?{scopeRoots:[this.state.targetProjectPath,...this.state.additionalAllowedPaths]}:{}),
-        ...(connection.type==="kilo"&&this.state.graph.automation?.programIoGuard?{programIoGuard:{directory:path.join(this.store.visitDir(this.state.id,visit.id),`${id}-io`),providerHome:path.join(this.store.sessionDir(this.state.id),"provider-home"),protectedFiles:[".agent-graph/verification.json",...(this.state.verificationContract?.manifest?.protectedFiles??[])],expiresAt:Math.min(deadline,this.state.executionBudget?Date.parse(this.state.executionBudget.deadlineAt):Infinity)}}:{}),
-        ...(this.state.verificationContract?.manifest?.nodeTests?{verificationAliases:{[nodeTestScript(this.state.verificationContract.manifest.nodeTests)]:this.state.verificationContract.manifest.checks.find(c=>c.id===this.state.verificationContract!.manifest!.nodeTests!.suiteCheckId)!.command}}:{}),
-        ...(this.state.graph.automation?.verificationContract && this.state.verificationContract?.status === "locked"
-          ? {verificationCommands: this.state.verificationContract.manifest!.checks.map(c => c.command)} : {}),
-        disableWrite: this.state.visits.some(v =>
-          this.state.bindings[v.nodeId]?.connectionId === connection.id && v.attempts.some(a =>
-            a.failureKind === "tool_arguments" && /for the "write" tool/.test(a.message ?? ""))),
-        ...(nextResume ? { resumeId: nextResume } : {}),
-      }); } catch(error) {
-        if(!messageOf(error).includes(IO_UNAVAILABLE))throw error;
-        this.state.status="BLOCKED";this.state.statusReason=messageOf(error);visit.status="paused";await this.save();return null;
+      const id = randomUUID(),
+        logPath = path.join(
+          this.store.visitDir(this.state.id, visit.id),
+          `${id}.log`,
+        );
+      let invocation: Awaited<ReturnType<typeof buildInvocation>>;
+      try {
+        invocation = await buildInvocation(connection, binding, node, {
+          prompt: buildNodePrompt(this.state, node, visit, recoveryMessage),
+          cwd: this.state.targetProjectPath,
+          fullAccess: this.state.accessMode === "full_access",
+          allowedPaths: this.state.additionalAllowedPaths,
+          nativeApprovalReview:
+            this.state.graph.automation?.nativeApprovalReview,
+          localHttpAccess:
+            connection.type === "codex" &&
+            !!this.state.graph.automation?.browserVerification,
+          testSourcesReadOnly: sourceGuard && node.type === "test",
+          guardOwnedProcesses: this.state.graph.automation?.guardOwnedProcesses,
+          ...(connection.type === "kilo" &&
+          this.state.graph.automation?.targetScopeGuard
+            ? {
+                scopeRoots: [
+                  this.state.targetProjectPath,
+                  ...this.state.additionalAllowedPaths,
+                ],
+              }
+            : {}),
+          ...(connection.type === "kilo" &&
+          this.state.graph.automation?.programIoGuard
+            ? {
+                programIoGuard: {
+                  directory: path.join(
+                    this.store.visitDir(this.state.id, visit.id),
+                    `${id}-io`,
+                  ),
+                  providerHome: path.join(
+                    this.store.sessionDir(this.state.id),
+                    "provider-home",
+                  ),
+                  protectedFiles: [
+                    ".agent-graph/verification.json",
+                    ...(this.state.verificationContract?.manifest
+                      ?.protectedFiles ?? []),
+                  ],
+                  expiresAt: Math.min(
+                    deadline,
+                    this.state.executionBudget
+                      ? Date.parse(this.state.executionBudget.deadlineAt)
+                      : Infinity,
+                  ),
+                },
+              }
+            : {}),
+          ...(this.state.verificationContract?.manifest?.nodeTests
+            ? {
+                verificationAliases: {
+                  [nodeTestScript(
+                    this.state.verificationContract.manifest.nodeTests,
+                  )]: this.state.verificationContract.manifest.checks.find(
+                    (c) =>
+                      c.id ===
+                      this.state.verificationContract!.manifest!.nodeTests!
+                        .suiteCheckId,
+                  )!.command,
+                },
+              }
+            : {}),
+          ...(this.state.graph.automation?.verificationContract &&
+          this.state.verificationContract?.status === "locked"
+            ? {
+                verificationCommands:
+                  this.state.verificationContract.manifest!.checks.map(
+                    (c) => c.command,
+                  ),
+              }
+            : {}),
+          disableWrite: this.state.visits.some(
+            (v) =>
+              this.state.bindings[v.nodeId]?.connectionId === connection.id &&
+              v.attempts.some(
+                (a) =>
+                  a.failureKind === "tool_arguments" &&
+                  /for the "write" tool/.test(a.message ?? ""),
+              ),
+          ),
+          ...(nextResume ? { resumeId: nextResume } : {}),
+        });
+      } catch (error) {
+        if (!messageOf(error).includes(IO_UNAVAILABLE)) throw error;
+        this.state.status = "BLOCKED";
+        this.state.statusReason = messageOf(error);
+        visit.status = "paused";
+        await this.save();
+        return null;
       }
       if (await this.poll()) return null; // Includes bounded native config preflight time.
       const attempt: AttemptRecord = {
@@ -638,7 +846,13 @@ export class GraphRuntime {
         lastProgressAt: null as string | null,
         activity: "initial_transport",
         deadlineAt: new Date(
-          Math.min(Date.now() + s.phaseTimeoutMs, deadline, this.state.executionBudget ? Date.parse(this.state.executionBudget.deadlineAt) : Infinity),
+          Math.min(
+            Date.now() + s.phaseTimeoutMs,
+            deadline,
+            this.state.executionBudget
+              ? Date.parse(this.state.executionBudget.deadlineAt)
+              : Infinity,
+          ),
         ).toISOString(),
         requestedModelId: binding.modelId,
         actualModelId: null as string | null,
@@ -650,9 +864,19 @@ export class GraphRuntime {
       await this.save();
       let progressWrites = Promise.resolve(),
         lastPersist = 0;
-      let policyReason:string|null=null,sourceChanges:string[]=[];
-      const registered=this.state.verificationContract?.manifest?.checks.map(c=>c.command)??[];
-      const captures=sourceGuard&&node.type==="test"?await prepareVerificationCaptures(this.state.targetProjectPath,registered):[];
+      let policyReason: string | null = null,
+        sourceChanges: string[] = [];
+      const registered =
+        this.state.verificationContract?.manifest?.checks.map(
+          (c) => c.command,
+        ) ?? [];
+      const captures =
+        sourceGuard && node.type === "test"
+          ? await prepareVerificationCaptures(
+              this.state.targetProjectPath,
+              registered,
+            )
+          : [];
       const result = await new ProcessSupervisor().run({
         ...invocation,
         cwd: this.state.targetProjectPath,
@@ -666,7 +890,12 @@ export class GraphRuntime {
           s.phaseTimeoutMs,
           Math.max(1, deadline - Date.now()),
         ),
-        absoluteDeadlineAtMs: Math.min(deadline, this.state.executionBudget ? Date.parse(this.state.executionBudget.deadlineAt) : Infinity),
+        absoluteDeadlineAtMs: Math.min(
+          deadline,
+          this.state.executionBudget
+            ? Date.parse(this.state.executionBudget.deadlineAt)
+            : Infinity,
+        ),
         terminationGraceMs: s.terminationGraceMs,
         killTimeoutMs: s.killTimeoutMs,
         maxInMemoryOutputBytes: s.maxInMemoryOutputBytes,
@@ -685,29 +914,76 @@ export class GraphRuntime {
               value &&
               value.length >= 4,
           )
-          .map(([, value]) => value!).concat(invocation.programIoPolicy?[invocation.programIoPolicy.privateKey]:[]),
+          .map(([, value]) => value!)
+          .concat(
+            invocation.programIoPolicy
+              ? [invocation.programIoPolicy.privateKey]
+              : [],
+          ),
         pollControl: () => claimNextControlRequest(this.controls()),
-        ...(connection.type==="kilo"&&this.state.graph.automation?.targetScopeGuard?{scopeRoots:[this.state.targetProjectPath,...this.state.additionalAllowedPaths]}:{}),
-        ...(this.state.graph.automation?.guardOwnedProcesses?{eventPolicy:(event:Record<string,unknown>)=>{policyReason=unscopedTerminationEvent(event);return policyReason;}}:{}),
-        ...(sourceGuard&&node.type==="test"&&testInputs?{
-          sourcesGuarded:true,
-          pollPolicy:async()=>{
-            try{sourceChanges=sourceDifference(testInputs!,await testSources(this.state.targetProjectPath));}
-            catch(error){sourceChanges=[`소스 snapshot 읽기 실패: ${messageOf(error)}`];}
-            if(sourceChanges.length)policyReason=`${TEST_POLICY} 테스트 역할의 소스 변경을 즉시 중단했습니다: ${sourceChanges.join(", ")}. 구현 역할에서 수정한 뒤 모든 등록 검사를 새로 실행해야 합니다.`;
-            return policyReason;
-          },
-          eventPolicy:(event:Record<string,unknown>,evidence:SupervisorResult["evidence"])=>{
-            policyReason??=unscopedTerminationEvent(event)??testPolicyEvent(event);
-            const failed=failedRegisteredCheck(evidence.commands,this.state.targetProjectPath,registered);
-            if(!policyReason&&failed){const part=event.part as {state?:{output?:unknown;error?:unknown}}|undefined,item=event.item as {aggregated_output?:unknown}|undefined;
-              const output=part?.state?.output??part?.state?.error??item?.aggregated_output;
-              const text=typeof output==="string"?output:"";
-              policyReason=`${TEST_FAILED} 등록 검사 실패: ${failed.command} (exit ${failed.exitCode??"unknown"}). 테스트 역할은 제품이나 테스트를 수정하지 않습니다. 구현에서 원인을 고친 뒤 전체 검사를 다시 실행하세요.\n${text.length>6000?text.slice(0,2000)+"\n...\n"+text.slice(-4000):text}`;
+        ...(connection.type === "kilo" &&
+        this.state.graph.automation?.targetScopeGuard
+          ? {
+              scopeRoots: [
+                this.state.targetProjectPath,
+                ...this.state.additionalAllowedPaths,
+              ],
             }
-            return policyReason;
-          },
-        }:{}),
+          : {}),
+        ...(this.state.graph.automation?.guardOwnedProcesses
+          ? {
+              eventPolicy: (event: Record<string, unknown>) => {
+                policyReason = unscopedTerminationEvent(event);
+                return policyReason;
+              },
+            }
+          : {}),
+        ...(sourceGuard && node.type === "test" && testInputs
+          ? {
+              sourcesGuarded: true,
+              pollPolicy: async () => {
+                try {
+                  sourceChanges = sourceDifference(
+                    testInputs!,
+                    await testSources(this.state.targetProjectPath),
+                  );
+                } catch (error) {
+                  sourceChanges = [
+                    `소스 snapshot 읽기 실패: ${messageOf(error)}`,
+                  ];
+                }
+                if (sourceChanges.length)
+                  policyReason = `${TEST_POLICY} 테스트 역할의 소스 변경을 즉시 중단했습니다: ${sourceChanges.join(", ")}. 구현 역할에서 수정한 뒤 모든 등록 검사를 새로 실행해야 합니다.`;
+                return policyReason;
+              },
+              eventPolicy: (
+                event: Record<string, unknown>,
+                evidence: SupervisorResult["evidence"],
+              ) => {
+                policyReason ??=
+                  unscopedTerminationEvent(event) ?? testPolicyEvent(event);
+                const failed = failedRegisteredCheck(
+                  evidence.commands,
+                  this.state.targetProjectPath,
+                  registered,
+                );
+                if (!policyReason && failed) {
+                  const part = event.part as
+                      | { state?: { output?: unknown; error?: unknown } }
+                      | undefined,
+                    item = event.item as
+                      { aggregated_output?: unknown } | undefined;
+                  const output =
+                    part?.state?.output ??
+                    part?.state?.error ??
+                    item?.aggregated_output;
+                  const text = typeof output === "string" ? output : "";
+                  policyReason = `${TEST_FAILED} 등록 검사 실패: ${failed.command} (exit ${failed.exitCode ?? "unknown"}). 테스트 역할은 제품이나 테스트를 수정하지 않습니다. 구현에서 원인을 고친 뒤 전체 검사를 다시 실행하세요.\n${text.length > 6000 ? text.slice(0, 2000) + "\n...\n" + text.slice(-4000) : text}`;
+                }
+                return policyReason;
+              },
+            }
+          : {}),
         onOutput: (text) => this.hooks.onLog?.(visit.id, id, text),
         onProgress: (progress) => {
           const activityChanged = attempt.activity !== progress.activity;
@@ -735,7 +1011,15 @@ export class GraphRuntime {
       });
       await progressWrites;
       const orphaned = result.outcome === "orphaned_process";
-      if(!orphaned)await addCapturedEnvironmentDiagnostics(result.evidence.commands,captures,path.join(this.store.visitDir(this.state.id,visit.id),`${id}-captures`));
+      if (!orphaned)
+        await addCapturedEnvironmentDiagnostics(
+          result.evidence.commands,
+          captures,
+          path.join(
+            this.store.visitDir(this.state.id, visit.id),
+            `${id}-captures`,
+          ),
+        );
       this.activePid = orphaned ? result.pid : null;
       this.owner.setChildPid(this.activePid);
       attempt.status = result.outcome;
@@ -744,11 +1028,17 @@ export class GraphRuntime {
       attempt.cliSessionId = result.cliSessionId;
       attempt.actualModelId = result.evidence.actualModelId;
       attempt.commands = result.evidence.commands;
-      attempt.readFiles=result.evidence.readFiles;
-      attempt.scopeAudit=result.evidence.scopeAudit;
-      attempt.programIoAudit=result.evidence.programIoAudit;
+      attempt.readFiles = result.evidence.readFiles;
+      attempt.scopeAudit = result.evidence.scopeAudit;
+      attempt.programIoAudit = result.evidence.programIoAudit;
       attempt.fileMutation = result.evidence.fileMutation;
-      if (result.evidence.fileMutation && !(sourceGuard&&node.type==="test")) {visit.verifiedCommands = [];delete visit.nodeTestProof;}
+      if (
+        result.evidence.fileMutation &&
+        !(sourceGuard && node.type === "test")
+      ) {
+        visit.verifiedCommands = [];
+        delete visit.nodeTestProof;
+      }
       if (["test", "review", "approval"].includes(node.type))
         visit.verifiedCommands = mergeProjectReceipts(
           this.state.targetProjectPath,
@@ -779,50 +1069,139 @@ export class GraphRuntime {
         await this.finishControl(result.controlRequest);
         return null;
       }
-      if(attempt.programIoAudit&&(attempt.programIoAudit.invalidReceipts||attempt.programIoAudit.unresolvedCommands||attempt.programIoAudit.unwrappedCommands)){
-        this.state.status="BLOCKED";this.state.statusReason=`${IO_VIOLATION} Kernel-isolated command evidence is incomplete or invalid.`;attempt.status="process_exit";attempt.failureKind="role_violation";attempt.message=this.state.statusReason;attempt.completionAccepted=false;this.state.automaticRecovery=null;visit.status="paused";await this.save();return null;
+      if (
+        attempt.programIoAudit &&
+        (attempt.programIoAudit.invalidReceipts ||
+          attempt.programIoAudit.unresolvedCommands ||
+          attempt.programIoAudit.unwrappedCommands)
+      ) {
+        this.state.status = "BLOCKED";
+        this.state.statusReason = `${IO_VIOLATION} Kernel-isolated command evidence is incomplete or invalid.`;
+        attempt.status = "process_exit";
+        attempt.failureKind = "role_violation";
+        attempt.message = this.state.statusReason;
+        attempt.completionAccepted = false;
+        this.state.automaticRecovery = null;
+        visit.status = "paused";
+        await this.save();
+        return null;
       }
-      if(attempt.scopeAudit&&(attempt.scopeAudit.outsideCalls||attempt.scopeAudit.unresolvedCalls)){
-        attempt.completionAccepted=false;attempt.failureKind="role_violation";attempt.message=`${SCOPE_VIOLATION} 대상 밖 native 조회 또는 미확정 실행이 관측돼 실행을 차단했습니다.`;
-        this.state.status="BLOCKED";this.state.statusReason=attempt.message;this.state.automaticRecovery=null;visit.status="paused";await this.save();return null;
+      if (
+        attempt.scopeAudit &&
+        (attempt.scopeAudit.outsideCalls || attempt.scopeAudit.unresolvedCalls)
+      ) {
+        attempt.completionAccepted = false;
+        attempt.failureKind = "role_violation";
+        attempt.message = `${SCOPE_VIOLATION} 대상 밖 native 조회 또는 미확정 실행이 관측돼 실행을 차단했습니다.`;
+        this.state.status = "BLOCKED";
+        this.state.statusReason = attempt.message;
+        this.state.automaticRecovery = null;
+        visit.status = "paused";
+        await this.save();
+        return null;
       }
-      let guardedInputs:Record<string,string>|undefined;
-      if(sourceGuard&&node.type==="test"&&testInputs){
-        try{guardedInputs=await testSources(this.state.targetProjectPath);sourceChanges=[...new Set([...sourceChanges,...sourceDifference(testInputs,guardedInputs)])];}
-        catch(error){sourceChanges.push(`소스 snapshot 읽기 실패: ${messageOf(error)}`);}
-        const nativeSources=(result.evidence.changedFiles??[]).filter(f=>! /^(?:verification|artifacts|test-results|playwright-report|coverage)(?:\/|$)/.test(f.replace(/\\/g,"/")));
-        sourceChanges=[...new Set([...sourceChanges,...nativeSources])];
-        result.evidence.fileMutation=sourceChanges.length>0;attempt.fileMutation=result.evidence.fileMutation;
-        if(sourceChanges.length||policyReason){
-          policyReason??=`${TEST_POLICY} 테스트 역할의 제품·테스트 소스 변경을 반려했습니다: ${sourceChanges.join(", ")}. 구현과 전체 검증을 다시 수행해야 합니다.`;
-          attempt.verificationInvalidation={at:new Date().toISOString(),reason:policyReason,files:sourceChanges};
-          visit.verifiedCommands=[];delete visit.nodeTestProof;delete visit.verificationSourceHashes;
-          attempt.failureKind=policyReason.startsWith(TEST_FAILED)?"process_exit":"role_violation";attempt.message=policyReason;attempt.completionAccepted=false;
+      let guardedInputs: Record<string, string> | undefined;
+      if (sourceGuard && node.type === "test" && testInputs) {
+        try {
+          guardedInputs = await testSources(this.state.targetProjectPath);
+          sourceChanges = [
+            ...new Set([
+              ...sourceChanges,
+              ...sourceDifference(testInputs, guardedInputs),
+            ]),
+          ];
+        } catch (error) {
+          sourceChanges.push(`소스 snapshot 읽기 실패: ${messageOf(error)}`);
+        }
+        const nativeSources = (result.evidence.changedFiles ?? []).filter(
+          (f) =>
+            !/^(?:verification|artifacts|test-results|playwright-report|coverage)(?:\/|$)/.test(
+              f.replace(/\\/g, "/"),
+            ),
+        );
+        sourceChanges = [...new Set([...sourceChanges, ...nativeSources])];
+        result.evidence.fileMutation = sourceChanges.length > 0;
+        attempt.fileMutation = result.evidence.fileMutation;
+        if (sourceChanges.length || policyReason) {
+          policyReason ??= `${TEST_POLICY} 테스트 역할의 제품·테스트 소스 변경을 반려했습니다: ${sourceChanges.join(", ")}. 구현과 전체 검증을 다시 수행해야 합니다.`;
+          attempt.verificationInvalidation = {
+            at: new Date().toISOString(),
+            reason: policyReason,
+            files: sourceChanges,
+          };
+          visit.verifiedCommands = [];
+          delete visit.nodeTestProof;
+          delete visit.verificationSourceHashes;
+          attempt.failureKind = policyReason.startsWith(TEST_FAILED)
+            ? "process_exit"
+            : "role_violation";
+          attempt.message = policyReason;
+          attempt.completionAccepted = false;
         }
       }
       const budgetAfter = sessionBudgetReason(this.state);
-      if (budgetAfter) { await this.budgetStop(budgetAfter); return null; }
+      if (budgetAfter) {
+        await this.budgetStop(budgetAfter);
+        return null;
+      }
       if (await this.contractStop()) return null;
-      const protectedWrites = (result.evidence.changedFiles??[]).filter(file => this.state.verificationContract?.hashes?.[file.replace(/\\/g,"/")] !== undefined);
+      const protectedWrites = (result.evidence.changedFiles ?? []).filter(
+        (file) =>
+          this.state.verificationContract?.hashes?.[
+            file.replace(/\\/g, "/")
+          ] !== undefined,
+      );
       if (protectedWrites.length) {
-        this.state.status="BLOCKED";this.state.statusReason=`고정 검증 파일의 쓰기가 관측됐습니다: ${protectedWrites.join(", ")}`;this.state.automaticRecovery=null;visit.status="paused";await this.save();return null;
+        this.state.status = "BLOCKED";
+        this.state.statusReason = `고정 검증 파일의 쓰기가 관측됐습니다: ${protectedWrites.join(", ")}`;
+        this.state.automaticRecovery = null;
+        visit.status = "paused";
+        await this.save();
+        return null;
       }
-      if(sourceGuard&&node.type==="test"&&policyReason){
-        const environment=result.evidence.commands.find(c=>c.environmentError)?.environmentError;
-        if(environment){
-          const reason=`검증 환경 제약: ${environment}. 제품 수정으로 반복하지 않습니다. 필요한 실행 권한·환경을 확인한 뒤 같은 방문에서 전체 검사를 다시 수행하세요.`;
-          attempt.status=attempt.failureKind=/EPERM|EACCES|permission denied|sandbox/i.test(environment)?"permission":/unreachable|disabled|ENETUNREACH|EAI_AGAIN/i.test(environment)?"network":"process_exit";
-          attempt.message=reason;attempt.completionAccepted=false;
-          if(attempt.verificationInvalidation)attempt.verificationInvalidation.reason=reason;
-          this.state.status="WAITING_USER";this.state.statusReason=reason;this.state.automaticRecovery=null;visit.status="paused";await this.save();return null;
+      if (sourceGuard && node.type === "test" && policyReason) {
+        const environment = result.evidence.commands.find(
+          (c) => c.environmentError,
+        )?.environmentError;
+        if (environment) {
+          const reason = `검증 환경 제약: ${environment}. 제품 수정으로 반복하지 않습니다. 필요한 실행 권한·환경을 확인한 뒤 같은 방문에서 전체 검사를 다시 수행하세요.`;
+          attempt.status = attempt.failureKind =
+            /EPERM|EACCES|permission denied|sandbox/i.test(environment)
+              ? "permission"
+              : /unreachable|disabled|ENETUNREACH|EAI_AGAIN/i.test(environment)
+                ? "network"
+                : "process_exit";
+          attempt.message = reason;
+          attempt.completionAccepted = false;
+          if (attempt.verificationInvalidation)
+            attempt.verificationInvalidation.reason = reason;
+          this.state.status = "WAITING_USER";
+          this.state.statusReason = reason;
+          this.state.automaticRecovery = null;
+          visit.status = "paused";
+          await this.save();
+          return null;
         }
-        if(result.diagnostics.terminalError&&["auth","permission","model_unavailable"].includes(result.diagnostics.terminalError.kind)){
-          this.state.status="WAITING_USER";this.state.statusReason=result.diagnostics.terminalError.message;visit.status="paused";await this.save();return null;
+        if (
+          result.diagnostics.terminalError &&
+          ["auth", "permission", "model_unavailable"].includes(
+            result.diagnostics.terminalError.kind,
+          )
+        ) {
+          this.state.status = "WAITING_USER";
+          this.state.statusReason = result.diagnostics.terminalError.message;
+          visit.status = "paused";
+          await this.save();
+          return null;
         }
-        await this.save();return this.verificationFailure(node,policyReason);
+        await this.save();
+        return this.verificationFailure(node, policyReason);
       }
-      const stageAfter=stageBudgetReason(this.state,node,visit);
-      if(stageAfter){await this.stageStop(stageAfter,visit);return null;}
+      const stageAfter = stageBudgetReason(this.state, node, visit);
+      if (stageAfter) {
+        await this.stageStop(stageAfter, visit);
+        return null;
+      }
       if (testInputs && !sourceGuard && result.outcome === "succeeded") {
         let changed: string[];
         try {
@@ -841,20 +1220,57 @@ export class GraphRuntime {
           attempt.fileMutation = true;
         }
       }
-      if(sourceGuard&&["review","approval"].includes(node.type)&&result.outcome==="succeeded"){
-        const expected=currentVerificationSources(this.state,visit);
-        const changes=expected?sourceDifference(expected,await testSources(this.state.targetProjectPath)):["missing test source snapshot"];
-        if(changes.length){attempt.verificationInvalidation={at:new Date().toISOString(),reason:"테스트 이후 소스 변경",files:changes};return this.verificationFailure(node,`테스트 이후 소스가 변경되어 승인 근거를 무효화했습니다: ${changes.join(", ")}`);}
+      if (
+        sourceGuard &&
+        ["review", "approval"].includes(node.type) &&
+        result.outcome === "succeeded"
+      ) {
+        const expected = currentVerificationSources(this.state, visit);
+        const changes = expected
+          ? sourceDifference(
+              expected,
+              await testSources(this.state.targetProjectPath),
+            )
+          : ["missing test source snapshot"];
+        if (changes.length) {
+          attempt.verificationInvalidation = {
+            at: new Date().toISOString(),
+            reason: "테스트 이후 소스 변경",
+            files: changes,
+          };
+          return this.verificationFailure(
+            node,
+            `테스트 이후 소스가 변경되어 승인 근거를 무효화했습니다: ${changes.join(", ")}`,
+          );
+        }
       }
-      let nodeProof:NodeTestProof|undefined, nodeProofError:string|undefined;
-      if(this.state.verificationContract?.manifest?.nodeTests&&["test","review","approval"].includes(node.type)&&result.outcome==="succeeded"){
+      let nodeProof: NodeTestProof | undefined,
+        nodeProofError: string | undefined;
+      if (
+        this.state.verificationContract?.manifest?.nodeTests &&
+        ["test", "review", "approval"].includes(node.type) &&
+        result.outcome === "succeeded"
+      ) {
         try {
-          nodeProof=await readNodeTestProof(this.state.targetProjectPath,this.state.verificationContract.manifest.nodeTests);
-          if(node.type!=="test"){
-            const prior=currentNodeTestProof(this.state,visit);
-            if(!prior||prior.runId!==nodeProof.runId||prior.reportDigest!==nodeProof.reportDigest)throw Error("자체 Node 증거가 현재 테스트 역할에서 승인된 실행과 다릅니다.");
+          nodeProof = await readNodeTestProof(
+            this.state.targetProjectPath,
+            this.state.verificationContract.manifest.nodeTests,
+          );
+          if (node.type !== "test") {
+            const prior = currentNodeTestProof(this.state, visit);
+            if (
+              !prior ||
+              prior.runId !== nodeProof.runId ||
+              prior.reportDigest !== nodeProof.reportDigest
+            )
+              throw Error(
+                "자체 Node 증거가 현재 테스트 역할에서 승인된 실행과 다릅니다.",
+              );
           }
-        }catch(error){nodeProof=undefined;nodeProofError=messageOf(error);}
+        } catch (error) {
+          nodeProof = undefined;
+          nodeProofError = messageOf(error);
+        }
       }
       const completion = validateCompletion(
         node,
@@ -867,27 +1283,66 @@ export class GraphRuntime {
         this.state.verificationContract,
         this.state.targetProjectPath,
         nodeProof,
-        [...new Set(visit.attempts.flatMap(a=>a.readFiles??[]))],
+        [...new Set(visit.attempts.flatMap((a) => a.readFiles ?? []))],
       );
-      if (completion.valid && ["implementation", "test", "review", "approval"].includes(node.type) && !["FAIL", "REJECTED", "BLOCKED"].includes(completion.verdict ?? "")) {
+      if (
+        completion.valid &&
+        ["implementation", "test", "review", "approval"].includes(node.type) &&
+        !["FAIL", "REJECTED", "BLOCKED"].includes(completion.verdict ?? "")
+      ) {
         const problem = await deliverableProblem(this.state);
         if (problem) attempt.completionAccepted = false;
         if (problem && node.type === "implementation") {
-          completion.valid = false; completion.failureKind = "incomplete_response"; completion.reason = problem;
+          completion.valid = false;
+          completion.failureKind = "incomplete_response";
+          completion.reason = problem;
         } else if (problem) {
-          visit.verifiedCommands = []; delete visit.nodeTestProof; delete visit.verificationSourceHashes;
+          visit.verifiedCommands = [];
+          delete visit.nodeTestProof;
+          delete visit.verificationSourceHashes;
           return this.verificationFailure(node, problem);
         }
       }
-      if(nodeProofError&&completion.valid&&["FAIL","REJECTED"].includes(completion.verdict??""))completion.reason=`자체 Node 검증: ${nodeProofError}`;
-      if(completion.valid&&completion.verdict==="PASS"&&node.type==="test"&&nodeProof)visit.nodeTestProof=nodeProof;
-      if(completion.valid&&completion.verdict==="PASS"&&node.type==="test"&&sourceGuard&&guardedInputs)visit.verificationSourceHashes=guardedInputs;
-      if (completion.valid && node.type === "planning" && this.state.graph.automation) {
-        const requested=this.outside(`${this.state.goal}\n${this.state.graph.nodes.map(n=>n.instructions).join("\n")}`);
-        const unrequested=[...new Set(completion.plans.flatMap(plan=>this.outside(plan.body,requested)))];
+      if (
+        nodeProofError &&
+        completion.valid &&
+        ["FAIL", "REJECTED"].includes(completion.verdict ?? "")
+      )
+        completion.reason = `자체 Node 검증: ${nodeProofError}`;
+      if (
+        completion.valid &&
+        completion.verdict === "PASS" &&
+        node.type === "test" &&
+        nodeProof
+      )
+        visit.nodeTestProof = nodeProof;
+      if (
+        completion.valid &&
+        completion.verdict === "PASS" &&
+        node.type === "test" &&
+        sourceGuard &&
+        guardedInputs
+      )
+        visit.verificationSourceHashes = guardedInputs;
+      if (
+        completion.valid &&
+        node.type === "planning" &&
+        this.state.graph.automation
+      ) {
+        const requested = this.outside(
+          `${this.state.goal}\n${this.state.graph.nodes.map((n) => n.instructions).join("\n")}`,
+        );
+        const unrequested = [
+          ...new Set(
+            completion.plans.flatMap((plan) =>
+              this.outside(plan.body, requested),
+            ),
+          ),
+        ];
         if (unrequested.length) {
-          completion.valid=false;completion.failureKind="incomplete_response";
-          completion.reason=`자율 계획에 목표가 요청하지 않은 외부 경로가 있습니다: ${unrequested.join(", ")}. Keep the plan inside the target; remove unrequested external paths and return the complete corrected plan without requesting operator access. Explicit external paths requested by the original goal retain approval gates.`;
+          completion.valid = false;
+          completion.failureKind = "incomplete_response";
+          completion.reason = `자율 계획에 목표가 요청하지 않은 외부 경로가 있습니다: ${unrequested.join(", ")}. Keep the plan inside the target; remove unrequested external paths and return the complete corrected plan without requesting operator access. Explicit external paths requested by the original goal retain approval gates.`;
         }
       }
       if (completion.environmentBlocked) {
@@ -990,10 +1445,16 @@ export class GraphRuntime {
     visit: NodeVisit,
     reason: string,
   ): Promise<void> {
-    const budget = sessionBudgetReason(this.state,true);
-    if (budget) { await this.budgetStop(budget); return; }
-    const stageReason=stageBudgetReason(this.state,node,visit,true);
-    if(stageReason){await this.stageStop(stageReason,visit);return;}
+    const budget = sessionBudgetReason(this.state, true);
+    if (budget) {
+      await this.budgetStop(budget);
+      return;
+    }
+    const stageReason = stageBudgetReason(this.state, node, visit, true);
+    if (stageReason) {
+      await this.stageStop(stageReason, visit);
+      return;
+    }
     const s = this.state.settings,
       pricing = this.pricing.get(node.id) ?? modelPricing();
     if (
@@ -1008,8 +1469,15 @@ export class GraphRuntime {
             s.automaticRecoveryBackoffMs.length - 1,
           )
         ]!;
-      if (this.state.executionBudget && Date.now()+delayMs >= Date.parse(this.state.executionBudget.deadlineAt)) {
-        await this.budgetStop("남은 전체 실행 시간 안에 자동 복구를 시작할 수 없습니다.");return;
+      if (
+        this.state.executionBudget &&
+        Date.now() + delayMs >=
+          Date.parse(this.state.executionBudget.deadlineAt)
+      ) {
+        await this.budgetStop(
+          "남은 전체 실행 시간 안에 자동 복구를 시작할 수 없습니다.",
+        );
+        return;
       }
       visit.automaticCycles++;
       visit.status = "paused";

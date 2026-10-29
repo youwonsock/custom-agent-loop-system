@@ -1,4 +1,9 @@
-import type { AgentGraphDocument, AgentNode, ExecutionBinding, GraphDiagnostic } from "./domain";
+import type {
+  AgentGraphDocument,
+  AgentNode,
+  ExecutionBinding,
+  GraphDiagnostic,
+} from "./domain";
 import { successPathDiagnostics } from "./graph_success";
 
 export function resolveBinding(

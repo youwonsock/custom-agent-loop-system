@@ -295,7 +295,12 @@ export default function GraphInspector({
                           nativeApprovalReview: false,
                           browserVerification: true,
                           verificationContract: true,
-                          authoredNodeTests: true, testSourceGuard: true, reserveFinalizationBudget: true, guardOwnedProcesses: true, targetScopeGuard:true, programIoGuard:true,
+                          authoredNodeTests: true,
+                          testSourceGuard: true,
+                          reserveFinalizationBudget: true,
+                          guardOwnedProcesses: true,
+                          targetScopeGuard: true,
+                          programIoGuard: true,
                         };
                       else delete g.automation;
                     })
@@ -305,24 +310,100 @@ export default function GraphInspector({
               </label>
               {draft.automation && (
                 <>
-                  <p className="muted">검증 계약: {draft.automation.verificationContract ? "보호 파일·필수 검사 고정" : "기존 그래프 정책"}</p>
+                  <p className="muted">
+                    검증 계약:{" "}
+                    {draft.automation.verificationContract
+                      ? "보호 파일·필수 검사 고정"
+                      : "기존 그래프 정책"}
+                  </p>
                   <label className="checkbox">
-                    <input type="checkbox" aria-label="자체 Node 테스트 계약 필수"
+                    <input
+                      type="checkbox"
+                      aria-label="자체 Node 테스트 계약 필수"
                       checked={Boolean(draft.automation.authoredNodeTests)}
-                      onChange={e=>change(g=>{g.automation!.authoredNodeTests=e.target.checked;if(e.target.checked)g.automation!.verificationContract=true;})}/>
+                      onChange={(e) =>
+                        change((g) => {
+                          g.automation!.authoredNodeTests = e.target.checked;
+                          if (e.target.checked)
+                            g.automation!.verificationContract = true;
+                        })
+                      }
+                    />
                     npm 테스트에 자체 영역·결함 탐지 계약 필수
                   </label>
                   <label className="checkbox">
-                    <input type="checkbox" aria-label="테스트 소스 수정 차단" checked={Boolean(draft.automation.testSourceGuard)} onChange={e=>change(g=>{g.automation!.testSourceGuard=e.target.checked;})}/>
+                    <input
+                      type="checkbox"
+                      aria-label="테스트 소스 수정 차단"
+                      checked={Boolean(draft.automation.testSourceGuard)}
+                      onChange={(e) =>
+                        change((g) => {
+                          g.automation!.testSourceGuard = e.target.checked;
+                        })
+                      }
+                    />
                     테스트는 소스 고정·실패 즉시 구현으로 반환
                   </label>
                   <label className="checkbox">
-                    <input type="checkbox" aria-label="검토 승인 예산 보존" checked={Boolean(draft.automation.reserveFinalizationBudget)} onChange={e=>change(g=>{g.automation!.reserveFinalizationBudget=e.target.checked;})}/>
+                    <input
+                      type="checkbox"
+                      aria-label="검토 승인 예산 보존"
+                      checked={Boolean(
+                        draft.automation.reserveFinalizationBudget,
+                      )}
+                      onChange={(e) =>
+                        change((g) => {
+                          g.automation!.reserveFinalizationBudget =
+                            e.target.checked;
+                        })
+                      }
+                    />
                     단계별 마감으로 후속 검토·승인 시간 보존
                   </label>
-                  <label className="checkbox"><input type="checkbox" aria-label="일괄 프로세스 종료 차단" checked={Boolean(draft.automation.guardOwnedProcesses)} onChange={e=>change(g=>{g.automation!.guardOwnedProcesses=e.target.checked;})}/>프로세스 이름에 의한 일괄 종료 차단</label>
-                  <label className="checkbox"><input type="checkbox" aria-label="Kilo 대상 밖 조회 차단" checked={Boolean(draft.automation.targetScopeGuard)} onChange={e=>change(g=>{g.automation!.targetScopeGuard=e.target.checked;if(!e.target.checked)g.automation!.programIoGuard=false;})}/>Kilo 모든 역할의 대상 밖 파일 조회 차단</label>
-                  <label className="checkbox"><input type="checkbox" aria-label="Kilo 프로그램 I/O 커널 격리" checked={Boolean(draft.automation.programIoGuard)} onChange={e=>change(g=>{g.automation!.programIoGuard=e.target.checked;if(e.target.checked)g.automation!.targetScopeGuard=true;})}/>Kilo 프로그램·자식 프로세스의 파일 I/O 격리 (미지원 환경은 실행 중단)</label>
+                  <label className="checkbox">
+                    <input
+                      type="checkbox"
+                      aria-label="일괄 프로세스 종료 차단"
+                      checked={Boolean(draft.automation.guardOwnedProcesses)}
+                      onChange={(e) =>
+                        change((g) => {
+                          g.automation!.guardOwnedProcesses = e.target.checked;
+                        })
+                      }
+                    />
+                    프로세스 이름에 의한 일괄 종료 차단
+                  </label>
+                  <label className="checkbox">
+                    <input
+                      type="checkbox"
+                      aria-label="Kilo 대상 밖 조회 차단"
+                      checked={Boolean(draft.automation.targetScopeGuard)}
+                      onChange={(e) =>
+                        change((g) => {
+                          g.automation!.targetScopeGuard = e.target.checked;
+                          if (!e.target.checked)
+                            g.automation!.programIoGuard = false;
+                        })
+                      }
+                    />
+                    Kilo 모든 역할의 대상 밖 파일 조회 차단
+                  </label>
+                  <label className="checkbox">
+                    <input
+                      type="checkbox"
+                      aria-label="Kilo 프로그램 I/O 커널 격리"
+                      checked={Boolean(draft.automation.programIoGuard)}
+                      onChange={(e) =>
+                        change((g) => {
+                          g.automation!.programIoGuard = e.target.checked;
+                          if (e.target.checked)
+                            g.automation!.targetScopeGuard = true;
+                        })
+                      }
+                    />
+                    Kilo 프로그램·자식 프로세스의 파일 I/O 격리 (미지원 환경은
+                    실행 중단)
+                  </label>
                   <label>
                     자동 수정 횟수
                     <input

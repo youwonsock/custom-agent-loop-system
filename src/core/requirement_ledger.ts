@@ -127,7 +127,13 @@ export function parseRequirementEvidence(output: string): Array<{
         requirementId: id,
         status,
         summary: summary.slice(0, 2_000),
-        ...(block.match(/^\s*CHECK_COMMAND:\s*(.+)$/im)?.[1]?.trim() ? { checkCommand: block.match(/^\s*CHECK_COMMAND:\s*(.+)$/im)![1]!.trim() } : {}),
+        ...(block.match(/^\s*CHECK_COMMAND:\s*(.+)$/im)?.[1]?.trim()
+          ? {
+              checkCommand: block
+                .match(/^\s*CHECK_COMMAND:\s*(.+)$/im)![1]!
+                .trim(),
+            }
+          : {}),
       });
     }
   }

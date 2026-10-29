@@ -18,9 +18,7 @@ export interface ServerOptions {
   defaultTarget?: string;
   monitor?: boolean;
 }
-export async function createServer(
-  options: ServerOptions,
-): Promise<{
+export async function createServer(options: ServerOptions): Promise<{
   app: FastifyInstance;
   store: StudioStore;
   coordinator: SessionCoordinator;
@@ -70,27 +68,36 @@ export async function createServer(
   });
   app.setErrorHandler((error, _request, reply) => {
     const e = error as AppError;
-    reply
-      .status(e.statusCode ?? 500)
-      .send({
-        error: messageOf(error),
-        code: e.code ?? "server_error",
-        ...(e.details ? { details: e.details } : {}),
-      });
+    reply.status(e.statusCode ?? 500).send({
+      error: messageOf(error),
+      code: e.code ?? "server_error",
+      ...(e.details ? { details: e.details } : {}),
+    });
   });
-  app.get<{ Querystring: { summary?: string } }>("/api/bootstrap", async request => ({
-    version: "4.0.0",
-    root: store.root,
-    defaultTarget: options.defaultTarget ?? process.cwd(),
-    graphs: await store.graphs(),
-    connections: await store.connections(),
-    catalogs: await store.catalogs(),
-    sessions: request.query.summary === "1" ? await store.sessionSummaries() : await store.sessions(),
-  }));
+  app.get<{ Querystring: { summary?: string } }>(
+    "/api/bootstrap",
+    async (request) => ({
+      version: "4.0.0",
+      root: store.root,
+      defaultTarget: options.defaultTarget ?? process.cwd(),
+      graphs: await store.graphs(),
+      connections: await store.connections(),
+      catalogs: await store.catalogs(),
+      sessions:
+        request.query.summary === "1"
+          ? await store.sessionSummaries()
+          : await store.sessions(),
+    }),
+  );
   app.get("/api/graphs", () => store.graphs());
   app.post("/api/graphs", async (request) => {
     const g = await store.createGraph(
-      request.body as { name?: string; template?: "autonomous"; empty?: boolean; document?: unknown },
+      request.body as {
+        name?: string;
+        template?: "autonomous";
+        empty?: boolean;
+        document?: unknown;
+      },
     );
     coordinator.emitStudio({ type: "graphs" });
     return g;
@@ -187,7 +194,9 @@ export async function createServer(
       request.query.path ?? options.defaultTarget ?? process.cwd(),
     ),
   );
-  app.get<{ Querystring: { summary?: string } }>("/api/sessions", request => request.query.summary === "1" ? store.sessionSummaries() : store.sessions());
+  app.get<{ Querystring: { summary?: string } }>("/api/sessions", (request) =>
+    request.query.summary === "1" ? store.sessionSummaries() : store.sessions(),
+  );
   app.post<{ Body: StartRequest }>("/api/sessions", async (request, reply) =>
     reply.code(202).send(await coordinator.start(request.body)),
   );
@@ -239,33 +248,49 @@ export async function createServer(
       await handle.close();
     }
   });
-  app.get<{ Querystring: { summary?: string } }>("/api/events", async (request, reply) => {
-    reply.hijack();
-    streams.add(reply.raw);
-    reply.raw.writeHead(200, {
-      "Content-Type": "text/event-stream",
-      "Cache-Control": "no-cache",
-      Connection: "keep-alive",
-      "X-Content-Type-Options": "nosniff",
-    });
-    reply.raw.write("event: ready\ndata: {}\n\n");
-    const listener = (event: StudioEvent) => {
-      if (reply.raw.destroyed || (request.query.summary === "1" && event.type === "log")) return;
-      const outgoing = request.query.summary === "1" && event.type === "session" && event.data
-        ? { ...event, data: sessionSummary(event.data as import("../shared/domain").SessionState) } : event;
-      reply.raw.write(`data: ${JSON.stringify(outgoing)}\n\n`);
-      if (reply.raw.writableLength > 4 * 1024 * 1024) reply.raw.destroy(); // reconnect fetches the latest snapshot; bound slow-client buffering
-    };
-    coordinator.on("studio", listener);
-    const timer = setInterval(() => {
-      if (!reply.raw.destroyed) reply.raw.write(": heartbeat\n\n");
-    }, 15_000);
-    reply.raw.on("close", () => {
-      clearInterval(timer);
-      coordinator.off("studio", listener);
-      streams.delete(reply.raw);
-    });
-  });
+  app.get<{ Querystring: { summary?: string } }>(
+    "/api/events",
+    async (request, reply) => {
+      reply.hijack();
+      streams.add(reply.raw);
+      reply.raw.writeHead(200, {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache",
+        Connection: "keep-alive",
+        "X-Content-Type-Options": "nosniff",
+      });
+      reply.raw.write("event: ready\ndata: {}\n\n");
+      const listener = (event: StudioEvent) => {
+        if (
+          reply.raw.destroyed ||
+          (request.query.summary === "1" && event.type === "log")
+        )
+          return;
+        const outgoing =
+          request.query.summary === "1" &&
+          event.type === "session" &&
+          event.data
+            ? {
+                ...event,
+                data: sessionSummary(
+                  event.data as import("../shared/domain").SessionState,
+                ),
+              }
+            : event;
+        reply.raw.write(`data: ${JSON.stringify(outgoing)}\n\n`);
+        if (reply.raw.writableLength > 4 * 1024 * 1024) reply.raw.destroy(); // reconnect fetches the latest snapshot; bound slow-client buffering
+      };
+      coordinator.on("studio", listener);
+      const timer = setInterval(() => {
+        if (!reply.raw.destroyed) reply.raw.write(": heartbeat\n\n");
+      }, 15_000);
+      reply.raw.on("close", () => {
+        clearInterval(timer);
+        coordinator.off("studio", listener);
+        streams.delete(reply.raw);
+      });
+    },
+  );
   const webRoot = path.resolve(__dirname, "../../web");
   if (await fs.stat(path.join(webRoot, "index.html")).catch(() => null)) {
     await app.register(staticFiles, { root: webRoot, index: "index.html" });

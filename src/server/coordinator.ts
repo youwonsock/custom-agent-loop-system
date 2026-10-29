@@ -1,5 +1,13 @@
-import { beginResume, interruptSession, stopSession } from "../core/session_transitions";
-import { isNewerSession, sessionSummary, SessionSummary } from "../shared/session_updates";
+import {
+  beginResume,
+  interruptSession,
+  stopSession,
+} from "../core/session_transitions";
+import {
+  isNewerSession,
+  sessionSummary,
+  SessionSummary,
+} from "../shared/session_updates";
 import { fork, ChildProcess } from "node:child_process";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
@@ -14,9 +22,16 @@ import {
 import { StudioStore } from "../core/store";
 import { graphDiagnostics, resolveBinding, safeId } from "../core/graph";
 import { AppError, messageOf } from "../core/errors";
-import { executionSettings, autonomousExecutionSettings } from "../core/settings";
+import {
+  executionSettings,
+  autonomousExecutionSettings,
+} from "../core/settings";
 import { CONTRACT_FILE, lockContract } from "../core/verification_contract";
-import { createSessionBudget, sessionBudgetReason, pauseForBudget } from "../core/session_budget";
+import {
+  createSessionBudget,
+  sessionBudgetReason,
+  pauseForBudget,
+} from "../core/session_budget";
 import { deriveRequirementLedger } from "../core/requirement_ledger";
 import {
   atomicWriteJsonFile,
@@ -103,7 +118,9 @@ export class SessionCoordinator extends EventEmitter {
             400,
             "그래프가 참조하는 실행 연결이 없습니다. 연결을 다시 지정하세요.",
           );
-        const settings = graph.automation ? autonomousExecutionSettings(input.settings) : executionSettings(input.settings),
+        const settings = graph.automation
+            ? autonomousExecutionSettings(input.settings)
+            : executionSettings(input.settings),
           now = new Date().toISOString();
         if (
           input.accessMode !== undefined &&
@@ -144,9 +161,26 @@ export class SessionCoordinator extends EventEmitter {
         state.executionBudget = createSessionBudget(settings, Date.parse(now));
         if (graph.automation?.verificationContract) {
           state.verificationContract = { version: 1, status: "pending" };
-          if (await fs.stat(path.join(target, CONTRACT_FILE)).then(()=>true, error=>{if(error.code==="ENOENT")return false;throw error;})) {
-            try { state.verificationContract = await lockContract(state, "supplied"); }
-            catch (error) { throw new AppError(400, `검증 계약을 시작 전에 확인하세요: ${messageOf(error)}`); }
+          if (
+            await fs.stat(path.join(target, CONTRACT_FILE)).then(
+              () => true,
+              (error) => {
+                if (error.code === "ENOENT") return false;
+                throw error;
+              },
+            )
+          ) {
+            try {
+              state.verificationContract = await lockContract(
+                state,
+                "supplied",
+              );
+            } catch (error) {
+              throw new AppError(
+                400,
+                `검증 계약을 시작 전에 확인하세요: ${messageOf(error)}`,
+              );
+            }
           }
         }
         await this.store.writeSession(state);
@@ -240,7 +274,9 @@ export class SessionCoordinator extends EventEmitter {
       return state;
     const budgetReason = sessionBudgetReason(state);
     if (budgetReason) {
-      const paused = await this.store.mutateSession(id, s => pauseForBudget(s, budgetReason));
+      const paused = await this.store.mutateSession(id, (s) =>
+        pauseForBudget(s, budgetReason),
+      );
       this.emitStudio({ type: "session", sessionId: id, data: paused });
       if (!automatic) throw new AppError(409, budgetReason);
       return paused;
@@ -267,7 +303,10 @@ export class SessionCoordinator extends EventEmitter {
         const deadline = Date.now() + 2_000;
         while (this.children.has(id) && Date.now() < deadline) await delay(25);
         if (this.children.has(id))
-          throw new AppError(409, "세션 워커가 종료되는 중입니다. 잠시 후 다시 시도하세요.");
+          throw new AppError(
+            409,
+            "세션 워커가 종료되는 중입니다. 잠시 후 다시 시도하세요.",
+          );
       }
       const lease = await readJsonFile<SessionLease>(
         path.join(this.store.sessionDir(id), "lease.json"),
@@ -384,26 +423,47 @@ export class SessionCoordinator extends EventEmitter {
   }
   private async reconcile(): Promise<void> {
     const summaries = await this.store.sessionSummaries();
-    const ids = new Set(summaries.map(s => s.id));
-    for (const id of this.published.keys()) if (!ids.has(id)) this.published.delete(id);
+    const ids = new Set(summaries.map((s) => s.id));
+    for (const id of this.published.keys())
+      if (!ids.has(id)) this.published.delete(id);
     for (const summary of summaries) {
       const previous = this.published.get(summary.id);
-      if (previous && !isNewerSession(summary, previous) && !["RUNNING", "RECOVERING", "WAITING_USER"].includes(summary.status)) continue;
+      if (
+        previous &&
+        !isNewerSession(summary, previous) &&
+        !["RUNNING", "RECOVERING", "WAITING_USER"].includes(summary.status)
+      )
+        continue;
       const s = await this.store.readSession(summary.id);
       this.emitStudio({ type: "session", sessionId: s.id, data: s });
       if (this.children.has(s.id)) continue;
       const budgetReason = sessionBudgetReason(s);
-      if (budgetReason && ["RUNNING", "RECOVERING", "WAITING_USER"].includes(s.status)) {
-        const owner = await readJsonFile<SessionLease>(path.join(this.store.sessionDir(s.id), "lease.json"));
+      if (
+        budgetReason &&
+        ["RUNNING", "RECOVERING", "WAITING_USER"].includes(s.status)
+      ) {
+        const owner = await readJsonFile<SessionLease>(
+          path.join(this.store.sessionDir(s.id), "lease.json"),
+        );
         if (owner && checkProcessLiveness(owner.ownerPid) !== "dead") continue;
-        const unresolvedChild = [owner?.childPid, ...s.visits.flatMap(v=>v.attempts.map(a=>a.pid))].some(pid=>pid && checkProcessLiveness(pid)!=="dead");
-        const paused = await this.store.mutateSession(s.id, state => {
-          if (!this.children.has(s.id) && state.updatedAt === s.updatedAt && ["RUNNING", "RECOVERING", "WAITING_USER"].includes(state.status)) {
+        const unresolvedChild = [
+          owner?.childPid,
+          ...s.visits.flatMap((v) => v.attempts.map((a) => a.pid)),
+        ].some((pid) => pid && checkProcessLiveness(pid) !== "dead");
+        const paused = await this.store.mutateSession(s.id, (state) => {
+          if (
+            !this.children.has(s.id) &&
+            state.updatedAt === s.updatedAt &&
+            ["RUNNING", "RECOVERING", "WAITING_USER"].includes(state.status)
+          ) {
             pauseForBudget(state, budgetReason);
-            if (unresolvedChild) { state.status="BLOCKED"; state.statusReason=`${budgetReason} 이전 자식 프로세스의 종료를 확인할 수 없어 차단했습니다.`; }
+            if (unresolvedChild) {
+              state.status = "BLOCKED";
+              state.statusReason = `${budgetReason} 이전 자식 프로세스의 종료를 확인할 수 없어 차단했습니다.`;
+            }
           }
         });
-        this.emitStudio({type:"session",sessionId:s.id,data:paused});
+        this.emitStudio({ type: "session", sessionId: s.id, data: paused });
         continue;
       }
       if (
@@ -435,7 +495,12 @@ export class SessionCoordinator extends EventEmitter {
               // A manual resume may have started a new worker since the
               // monitor read this snapshot/lease. Never pause its new state
               // using the previous owner's stale evidence.
-              if (this.children.has(s.id) || state.updatedAt !== s.updatedAt || state.status !== "RUNNING") return;
+              if (
+                this.children.has(s.id) ||
+                state.updatedAt !== s.updatedAt ||
+                state.status !== "RUNNING"
+              )
+                return;
               state.status = "PAUSED";
               state.statusReason =
                 "이전 워커의 소유권을 확인할 수 없습니다. 모델 사용 가능성이 있어 수동 재개가 필요합니다.";

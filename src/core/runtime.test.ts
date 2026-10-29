@@ -29,11 +29,32 @@ const result = (): SupervisorResult => ({
 test("malformed tool input gets bounded schema feedback and a fresh-session retry", () => {
   const r = result();
   r.exitCode = 1;
-  r.diagnostics.terminalError = cliDiagnostic('Stopped after 3 consecutive invalid-argument failures for the "write" tool.');
-  const failure = classifyFailure(r, { reason: "CLI failed", failureKind: null });
+  r.diagnostics.terminalError = cliDiagnostic(
+    'Stopped after 3 consecutive invalid-argument failures for the "write" tool.',
+  );
+  const failure = classifyFailure(r, {
+    reason: "CLI failed",
+    failureKind: null,
+  });
   assert.equal(failure.kind, "tool_arguments");
   assert.equal(failure.retryable, true);
-  const recovery = buildRecoveryMessage(failure.kind, failure.message, "Existing tests pass", [{ type: "tool_use", part: { tool: "write", state: { status: "error", error: 'filePath and content are required' } } }]);
+  const recovery = buildRecoveryMessage(
+    failure.kind,
+    failure.message,
+    "Existing tests pass",
+    [
+      {
+        type: "tool_use",
+        part: {
+          tool: "write",
+          state: {
+            status: "error",
+            error: "filePath and content are required",
+          },
+        },
+      },
+    ],
+  );
   assert.match(recovery, /filePath and content are required/);
   assert.match(recovery, /never submit \{\}/);
   assert.match(recovery, /write is unavailable/);
@@ -44,8 +65,14 @@ test("a provider capacity retry timeout keeps its timeout cause and provider exp
   r.failureKind = "idle_timeout";
   r.failureMessage = "No meaningful progress";
   r.timedOut = true;
-  r.diagnostics.plainError = cliDiagnostic({ statusCode: 503, message: "Providers are at capacity" });
-  const failure = classifyFailure(r, { reason: "No meaningful progress", failureKind: null });
+  r.diagnostics.plainError = cliDiagnostic({
+    statusCode: 503,
+    message: "Providers are at capacity",
+  });
+  const failure = classifyFailure(r, {
+    reason: "No meaningful progress",
+    failureKind: null,
+  });
   assert.equal(failure.kind, "idle_timeout");
   assert.match(failure.message, /Providers are at capacity/);
 });
@@ -116,12 +143,13 @@ test("plaintext errors classify unsuccessful CLI exits, but cannot override succ
   assert.match(failure.message, /authentication required/);
 });
 
-
 test("upstream route credential timeout remains bounded retryable while local auth does not", () => {
   const r = result();
   r.timedOut = true;
   r.failureKind = "idle_timeout";
-  r.diagnostics.plainError = cliDiagnostic("AI_APICallError: Upstream request failed: Invalid credential");
+  r.diagnostics.plainError = cliDiagnostic(
+    "AI_APICallError: Upstream request failed: Invalid credential",
+  );
   const failure = classifyFailure(r, { reason: "Idle", failureKind: null });
   assert.equal(failure.retryable, true);
   assert.match(failure.message, /Upstream request failed/);

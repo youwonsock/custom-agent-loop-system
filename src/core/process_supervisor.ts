@@ -97,8 +97,8 @@ export interface ProcessSupervisorOptions {
   sourcesGuarded?: boolean;
   scopeRoots?: string[];
   programIoPolicy?: ProgramIoPolicy;
-  pollPolicy?: () => Promise<string|null>;
-  eventPolicy?: (event:AnyObj,evidence:EventEvidence) => string|null;
+  pollPolicy?: () => Promise<string | null>;
+  eventPolicy?: (event: AnyObj, evidence: EventEvidence) => string | null;
 }
 
 export interface SupervisorResult {
@@ -138,8 +138,12 @@ export class ProcessSupervisor {
       stderr: new StreamingRedactor(sensitiveValues),
     };
     const recordRedactor = new StreamingRedactor(sensitiveValues);
-    const scopeTracker=options.scopeRoots?new NativeScopeTracker(options.cwd,options.scopeRoots):null;
-    const ioTracker=options.programIoPolicy?new ProgramIoTracker(options.programIoPolicy):null;
+    const scopeTracker = options.scopeRoots
+      ? new NativeScopeTracker(options.cwd, options.scopeRoots)
+      : null;
+    const ioTracker = options.programIoPolicy
+      ? new ProgramIoTracker(options.programIoPolicy)
+      : null;
     const maximumRawLogBytes = Math.max(
       MIN_RAW_LOG_BYTES,
       Math.min(MAX_RAW_LOG_BYTES, options.maxInMemoryOutputBytes * 16),
@@ -182,7 +186,11 @@ export class ProcessSupervisor {
       rawLog.end();
       const message = err instanceof Error ? err.message : String(err);
       return {
-        evidence: {...emptyEvidence(),...(scopeTracker?{scopeAudit:scopeTracker.audit}:{}),...(ioTracker?{programIoAudit:ioTracker.finish()}:{})},
+        evidence: {
+          ...emptyEvidence(),
+          ...(scopeTracker ? { scopeAudit: scopeTracker.audit } : {}),
+          ...(ioTracker ? { programIoAudit: ioTracker.finish() } : {}),
+        },
         diagnostics: emptyCliDiagnostics(),
         pid: -1,
         outcome: "spawn_error",
@@ -210,7 +218,7 @@ export class ProcessSupervisor {
     let eventBytes = 0;
     const assistantParts: string[] = [];
     const evidence = emptyEvidence();
-    if(scopeTracker)evidence.scopeAudit=scopeTracker.audit;
+    if (scopeTracker) evidence.scopeAudit = scopeTracker.audit;
     const mutations = new MutationTracker();
     const diagnosticCollector = new CliDiagnosticCollector();
     const toolFailures = new ToolFailureTracker();
@@ -301,7 +309,7 @@ export class ProcessSupervisor {
         if (remainder) processLine(remainder, stream);
       }
       scopeTracker?.finish();
-      if(ioTracker)evidence.programIoAudit=ioTracker.finish();
+      if (ioTracker) evidence.programIoAudit = ioTracker.finish();
       evidence.fileMutation ||= mutations.finish();
       if (mutations.changedFiles.length)
         evidence.changedFiles = mutations.changedFiles.map((file) =>
@@ -501,20 +509,36 @@ export class ProcessSupervisor {
       return true;
     };
 
-    const commands = new CommandTracker(options.cwd,options.sourcesGuarded);
+    const commands = new CommandTracker(options.cwd, options.sourcesGuarded);
     const inspections = new InspectionTracker(options.cwd);
     const processEvent = (event: AnyObj): void => {
-      if(ioTracker)event=ioTracker.normalize(event);
+      if (ioTracker) event = ioTracker.normalize(event);
       scopeTracker?.observe(event);
-      if(scopeTracker?.audit.outsideCalls)void terminate("process_exit","role_violation",`${SCOPE_VIOLATION} native filesystem access escaped the approved target boundary.`,false);
+      if (scopeTracker?.audit.outsideCalls)
+        void terminate(
+          "process_exit",
+          "role_violation",
+          `${SCOPE_VIOLATION} native filesystem access escaped the approved target boundary.`,
+          false,
+        );
       commands.observe(event);
       inspections.observe(event);
-      evidence.readFiles=inspections.files;
+      evidence.readFiles = inspections.files;
       evidence.commands = commands.receipts;
       mutations.observe(event);
       evidence.fileMutation ||= mutations.hasMutation;
-      const policyReason=options.eventPolicy?.(event,evidence);
-      if(policyReason)void terminate("process_exit",policyReason.includes("[AGENT_GRAPH_UNSCOPED_TERMINATION]")?"tool_arguments":policyReason.startsWith("[AGENT_GRAPH_TEST_FAILED]")?"process_exit":"role_violation",policyReason,false);
+      const policyReason = options.eventPolicy?.(event, evidence);
+      if (policyReason)
+        void terminate(
+          "process_exit",
+          policyReason.includes("[AGENT_GRAPH_UNSCOPED_TERMINATION]")
+            ? "tool_arguments"
+            : policyReason.startsWith("[AGENT_GRAPH_TEST_FAILED]")
+              ? "process_exit"
+              : "role_violation",
+          policyReason,
+          false,
+        );
       diagnosticCollector.observeEvent(event);
       const search =
         completedSearch(event) ??
@@ -557,11 +581,16 @@ export class ProcessSupervisor {
       }
       const identity = normalized.progressId;
       const nextActivity = normalized.activity;
-      if (identity && nextActivity && markMeaningfulProgress(identity, nextActivity)) {
+      if (
+        identity &&
+        nextActivity &&
+        markMeaningfulProgress(identity, nextActivity)
+      ) {
         diagnosticCollector.resetRetryFailures();
       }
       const toolFailure = toolFailures.observe(event);
-      if (toolFailure) void terminate("process_exit", "tool_arguments", toolFailure, false);
+      if (toolFailure)
+        void terminate("process_exit", "tool_arguments", toolFailure, false);
       notifyProgress();
     };
 
@@ -585,7 +614,8 @@ export class ProcessSupervisor {
         try {
           // PTY wrapping can separate a secret with physical newlines. Reapply
           // redaction after joining the record, before any event is retained.
-          const safeRecord = recordRedactor.push(candidate) + recordRedactor.flush();
+          const safeRecord =
+            recordRedactor.push(candidate) + recordRedactor.flush();
           processEvent(JSON.parse(safeRecord) as AnyObj);
           return;
         } catch {
@@ -597,7 +627,12 @@ export class ProcessSupervisor {
       diagnosticCollector.observeLine(trimmed);
       const retryFailure = diagnosticCollector.retryFailure;
       if (retryFailure)
-        void terminate("process_exit", retryFailure.kind, `Stopped after 3 repeated provider failures without useful progress: ${retryFailure.message}`, false);
+        void terminate(
+          "process_exit",
+          retryFailure.kind,
+          `Stopped after 3 repeated provider failures without useful progress: ${retryFailure.message}`,
+          false,
+        );
       if (/^timestamp=\S+ level=(?:INFO|WARN|ERROR)\b/.test(trimmed)) {
         const session = trimmed.match(/\bsession\.id=(ses_[A-Za-z0-9]+)/);
         if (session) cliSessionId = session[1]!;
@@ -685,9 +720,13 @@ export class ProcessSupervisor {
       controlTimer = setInterval(() => {
         if (controlPollRunning || terminating || resolved) return;
         controlPollRunning = true;
-        (options.pollControl?.()??Promise.resolve(null))
+        (options.pollControl?.() ?? Promise.resolve(null))
           .then(async (claimed) => {
-            if(!claimed&&!terminating&&!resolved){const reason=await options.pollPolicy?.();if(reason&&!terminating&&!resolved)void terminate("process_exit","role_violation",reason,false);}
+            if (!claimed && !terminating && !resolved) {
+              const reason = await options.pollPolicy?.();
+              if (reason && !terminating && !resolved)
+                void terminate("process_exit", "role_violation", reason, false);
+            }
             if (!claimed || terminating || resolved) return;
             controlRequest = claimed;
             const message =

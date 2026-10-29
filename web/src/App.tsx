@@ -79,7 +79,13 @@ export function App() {
         </nav>
         <div className="library-heading">
           <span>그래프 라이브러리</span>
-          <button aria-label="자율 제작 그래프" title="자율 제작·검증 그래프 만들기" onClick={() => void attempt(() => newGraph(false, true))}>↻</button>
+          <button
+            aria-label="자율 제작 그래프"
+            title="자율 제작·검증 그래프 만들기"
+            onClick={() => void attempt(() => newGraph(false, true))}
+          >
+            ↻
+          </button>
           <button
             aria-label="새 그래프"
             title="새 그래프"
@@ -208,9 +214,17 @@ export function App() {
           </div>
         )}
         <ViewBoundary key={view}>
-          <Suspense fallback={<div className="empty-state" role="status">화면을 불러오는 중…</div>}>
+          <Suspense
+            fallback={
+              <div className="empty-state" role="status">
+                화면을 불러오는 중…
+              </div>
+            }
+          >
             {view === "graphs" && <GraphsView controller={controller} />}
-            {view === "connections" && <ConnectionsView controller={controller} />}
+            {view === "connections" && (
+              <ConnectionsView controller={controller} />
+            )}
             {view === "runs" && <RunsView controller={controller} />}
           </Suspense>
         </ViewBoundary>

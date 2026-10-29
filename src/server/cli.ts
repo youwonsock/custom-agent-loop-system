@@ -7,7 +7,10 @@ import { StudioStore } from "../core/store";
 import { SessionCoordinator } from "./coordinator";
 import { readJsonFile } from "../core/resilience";
 import { runBrowserVerification } from "../core/browser_verification";
-import { runNodeTestVerification, summarizeNodeTestReport } from "../core/node_test_verification";
+import {
+  runNodeTestVerification,
+  summarizeNodeTestReport,
+} from "../core/node_test_verification";
 import { validateManifest } from "../core/verification_contract";
 import { inside } from "../core/verification_sources";
 import { queryModels } from "../core/catalog";
@@ -28,22 +31,50 @@ async function main(): Promise<void> {
     return;
   }
   if (command === "verify-node-tests") {
-    if(args.includes("--help")){process.stdout.write("Run the frozen nodeTests contract: authored scope cases, no-op controls, required assertion failures for protected production mutations. Output: verification/node-tests/report.json. Existing native sandbox and approvals remain binding.\n");return;}
-    const controller=new AbortController();
-    const abort=()=>controller.abort(Error("Node verification cancelled"));
-    process.once("SIGINT",abort);process.once("SIGTERM",abort);
+    if (args.includes("--help")) {
+      process.stdout.write(
+        "Run the frozen nodeTests contract: authored scope cases, no-op controls, required assertion failures for protected production mutations. Output: verification/node-tests/report.json. Existing native sandbox and approvals remain binding.\n",
+      );
+      return;
+    }
+    const controller = new AbortController();
+    const abort = () => controller.abort(Error("Node verification cancelled"));
+    process.once("SIGINT", abort);
+    process.once("SIGTERM", abort);
     try {
       const fs = await import("node:fs/promises");
-      const target=path.resolve(option("target",process.cwd())!);
-      const real=await fs.realpath(target),file=await inside(real,".agent-graph/verification.json");
-      if((await fs.stat(file)).size>1024*1024||(await fs.lstat(path.join(real,".agent-graph/verification.json"))).isSymbolicLink())throw Error("Node verification contract must be a bounded regular project file.");
-      const raw=JSON.parse(await fs.readFile(file,"utf8"));
-      const reqs=[...new Set<string>(raw.checks.flatMap((c:{requirements:string[]})=>c.requirements))];
-      const manifest=validateManifest(raw,reqs,false);
-      const report=await runNodeTestVerification({target,manifest,signal:controller.signal});
-      process.stdout.write(JSON.stringify(summarizeNodeTestReport(report),null,2)+"\n");
-      process.exitCode=report.allPassed?0:1;
-    } finally {process.off("SIGINT",abort);process.off("SIGTERM",abort);}
+      const target = path.resolve(option("target", process.cwd())!);
+      const real = await fs.realpath(target),
+        file = await inside(real, ".agent-graph/verification.json");
+      if (
+        (await fs.stat(file)).size > 1024 * 1024 ||
+        (
+          await fs.lstat(path.join(real, ".agent-graph/verification.json"))
+        ).isSymbolicLink()
+      )
+        throw Error(
+          "Node verification contract must be a bounded regular project file.",
+        );
+      const raw = JSON.parse(await fs.readFile(file, "utf8"));
+      const reqs = [
+        ...new Set<string>(
+          raw.checks.flatMap((c: { requirements: string[] }) => c.requirements),
+        ),
+      ];
+      const manifest = validateManifest(raw, reqs, false);
+      const report = await runNodeTestVerification({
+        target,
+        manifest,
+        signal: controller.signal,
+      });
+      process.stdout.write(
+        JSON.stringify(summarizeNodeTestReport(report), null, 2) + "\n",
+      );
+      process.exitCode = report.allPassed ? 0 : 1;
+    } finally {
+      process.off("SIGINT", abort);
+      process.off("SIGTERM", abort);
+    }
     return;
   }
   if (command === "verify-browser") {

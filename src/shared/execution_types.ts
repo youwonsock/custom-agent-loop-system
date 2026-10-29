@@ -34,4 +34,5 @@ export type FailureKind =
   | "unknown";
 
 export type NodeVerdict = "PASS" | "FAIL" | "BLOCKED" | "APPROVED" | "REJECTED";
-export type Activity = "initial_transport" | "model_generation" | "tool_execution";
+export type Activity =
+  "initial_transport" | "model_generation" | "tool_execution";

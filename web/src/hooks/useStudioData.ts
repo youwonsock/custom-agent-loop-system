@@ -1,4 +1,8 @@
-import { mergeSessions, reconcileSessionList, type SessionSummary } from "../../../src/shared/session_updates";
+import {
+  mergeSessions,
+  reconcileSessionList,
+  type SessionSummary,
+} from "../../../src/shared/session_updates";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   type AgentGraphDocument,
@@ -19,8 +23,10 @@ export function useStudioData() {
     [sessions, setSessions] = useState<SessionSummary[]>([]);
   const sessionsRef = useRef(sessions);
   sessionsRef.current = sessions;
-  const [target,setTarget] = useState(""), [goal,setGoal] = useState("");
-  const [notice,setNotice] = useState(""), [error,setError] = useState("");
+  const [target, setTarget] = useState(""),
+    [goal, setGoal] = useState("");
+  const [notice, setNotice] = useState(""),
+    [error, setError] = useState("");
   const [directory, setDirectory] = useState<{
       path: string;
       parent: string;
@@ -59,7 +65,7 @@ export function useStudioData() {
       const data = JSON.parse(event.data) as StudioEvent;
       if (data.type === "session" && data.data) {
         const state = data.data as SessionSummary;
-        setSessions(values => mergeSessions(values, [state]));
+        setSessions((values) => mergeSessions(values, [state]));
       } else if (data.type === "graphs") void refreshGraphs();
       else if (data.type === "connections")
         void api<LocalConnection[]>("/connections").then(setConnections);
@@ -67,7 +73,11 @@ export function useStudioData() {
     source.addEventListener("ready", () => {
       const atRequest = sessionsRef.current;
       void api<SessionSummary[]>("/sessions?summary=1")
-        .then(incoming => setSessions(values => reconcileSessionList(values, incoming, atRequest)))
+        .then((incoming) =>
+          setSessions((values) =>
+            reconcileSessionList(values, incoming, atRequest),
+          ),
+        )
         .catch(() => {});
     });
     return () => source.close();

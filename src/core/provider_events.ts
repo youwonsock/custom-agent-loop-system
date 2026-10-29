@@ -68,9 +68,7 @@ function toolEventStatus(event: AnyObj): string | null {
   return typeof state?.status === "string" ? state.status.toLowerCase() : null;
 }
 
-function activityForEvent(
-  event: AnyObj,
-): Activity | null {
+function activityForEvent(event: AnyObj): Activity | null {
   const type = typeof event.type === "string" ? event.type : "";
   if (type === "tool_use") {
     const status = toolEventStatus(event);
@@ -130,7 +128,10 @@ function progressIdentity(
   // any answer. Lifecycle notifications are transport, not useful progress.
   if (["step_start", "step_finish"].includes(type)) return null;
   if (type === "text" && !assistantText?.trim()) return null;
-  if (type === "tool_use" && ["failed", "error", "cancelled"].includes(toolEventStatus(event) ?? ""))
+  if (
+    type === "tool_use" &&
+    ["failed", "error", "cancelled"].includes(toolEventStatus(event) ?? "")
+  )
     return null;
   const recognized = [
     "text",

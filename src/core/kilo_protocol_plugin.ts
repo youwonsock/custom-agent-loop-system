@@ -5,9 +5,24 @@ import { kiloCheckHooks, KiloCheckProtocol } from "./kilo_protocol";
 export = {
   id: "agent-graph-check-protocol",
   server: async () => {
-    const protocol: KiloCheckProtocol = JSON.parse(process.env.AGENT_GRAPH_KILO_CHECKS ?? "null");
-    if (!protocol || typeof protocol.cwd !== "string" || !Array.isArray(protocol.commands) || !protocol.commands.every(c => typeof c === "string") || (protocol.scopeRoots!==undefined&&(!Array.isArray(protocol.scopeRoots)||!protocol.scopeRoots.length||!protocol.scopeRoots.every(p=>typeof p==="string"&&p.length>0))))
-      throw new Error("Agent Graph native check protocol is missing or invalid.");
+    const protocol: KiloCheckProtocol = JSON.parse(
+      process.env.AGENT_GRAPH_KILO_CHECKS ?? "null",
+    );
+    if (
+      !protocol ||
+      typeof protocol.cwd !== "string" ||
+      !Array.isArray(protocol.commands) ||
+      !protocol.commands.every((c) => typeof c === "string") ||
+      (protocol.scopeRoots !== undefined &&
+        (!Array.isArray(protocol.scopeRoots) ||
+          !protocol.scopeRoots.length ||
+          !protocol.scopeRoots.every(
+            (p) => typeof p === "string" && p.length > 0,
+          )))
+    )
+      throw new Error(
+        "Agent Graph native check protocol is missing or invalid.",
+      );
     return kiloCheckHooks(protocol);
   },
 };

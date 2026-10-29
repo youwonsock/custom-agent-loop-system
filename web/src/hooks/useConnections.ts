@@ -1,16 +1,18 @@
 import { useState } from "react";
-import { type LocalConnection, type ModelCatalog } from "../../../src/shared/domain";
+import {
+  type LocalConnection,
+  type ModelCatalog,
+} from "../../../src/shared/domain";
 import { api, id } from "../api";
 import type { StudioData } from "./useStudioData";
 
-export function useConnections(data: Pick<StudioData, "setCatalogs" | "target" | "setTarget" | "setNotice" | "setError">) {
-  const {
-    setCatalogs,
-    target,
-    setTarget,
-    setNotice,
-    setError,
-  } = data;
+export function useConnections(
+  data: Pick<
+    StudioData,
+    "setCatalogs" | "target" | "setTarget" | "setNotice" | "setError"
+  >,
+) {
+  const { setCatalogs, target, setTarget, setNotice, setError } = data;
   const [connectionForm, setConnectionForm] = useState<LocalConnection>({
       id: id(),
       label: "",
