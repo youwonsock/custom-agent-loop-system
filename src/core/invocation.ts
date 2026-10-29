@@ -46,7 +46,14 @@ export async function buildInvocation(
       (v): v is [string, string] => typeof v[1] === "string",
     ),
   );
-  env.PATH = [path.dirname(process.execPath), env.PATH ?? ""]
+  // Windows names are case-insensitive but this copy is a plain object: a parent
+  // "Path" would otherwise leave env.PATH unset and hand the child two spellings.
+  const pathKeys = Object.keys(env).filter((key) =>
+    process.platform === "win32" ? key.toUpperCase() === "PATH" : key === "PATH",
+  );
+  const inheritedPath = pathKeys.map((key) => env[key]).find(Boolean) ?? "";
+  for (const key of pathKeys) delete env[key];
+  env.PATH = [path.dirname(process.execPath), inheritedPath]
     .filter(Boolean)
     .join(path.delimiter);
   let args: string[];

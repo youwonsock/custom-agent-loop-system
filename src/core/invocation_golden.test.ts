@@ -17,11 +17,7 @@ const goldenDir = path.resolve(__dirname, "../../../test/golden/invocation", fam
 const update = process.env.UPDATE_GOLDEN === "1";
 const fixture = path.resolve(__dirname, "../../../test/fixture_cli.cjs");
 const plugin = pathToFileURL(path.join(__dirname, "kilo_protocol_plugin.js")).href;
-// Mirror buildInvocation: it copies process.env into a plain object, so on Windows a
-// parent environment spelled "Path" leaves PATH unset there. Reading process.env.PATH
-// (case-insensitive on Windows) would make the golden depend on the launching shell.
-const inherited: Record<string, string | undefined> = Object.fromEntries(Object.entries(process.env));
-const appPath = [path.dirname(process.execPath), inherited.PATH ?? ""].filter(Boolean).join(path.delimiter);
+const appPath = [path.dirname(process.execPath), process.env.PATH ?? ""].filter(Boolean).join(path.delimiter);
 const graph = createAutonomousGraph();
 const parsedEnv = new Set(["KILO_CONFIG_CONTENT", "OPENCODE_CONFIG_CONTENT", "AGENT_GRAPH_KILO_CHECKS"]);
 function normalizer(target: string, extra: string) {
@@ -40,12 +36,16 @@ function normalizer(target: string, extra: string) {
   return walk;
 }
 // Only what the app adds, changes or removes relative to the inherited environment.
+// Windows names are case-insensitive, so "Path" -> "PATH" is a change, not a removal.
+const envKey = (key: string) => process.platform === "win32" ? key.toUpperCase() : key;
+const byKey = (env: Record<string, string | undefined>) =>
+  new Map(Object.entries(env).filter((e): e is [string, string] => typeof e[1] === "string").map(([k, v]) => [envKey(k), v]));
 function envDiff(env: Record<string, string>): Record<string, unknown> {
-  const diff: Record<string, unknown> = {};
-  for (const key of Object.keys(env).sort())
-    if (process.env[key] !== env[key] || !Object.prototype.hasOwnProperty.call(process.env, key))
-      diff[key] = parsedEnv.has(key) ? JSON.parse(env[key]!) : env[key];
-  for (const key of Object.keys(process.env).sort()) if (!(key in env)) diff[key] = null;
+  const before = byKey(process.env), after = byKey(env), diff: Record<string, unknown> = {};
+  for (const key of [...after.keys()].sort())
+    if (before.get(key) !== after.get(key))
+      diff[key] = parsedEnv.has(key) ? JSON.parse(after.get(key)!) : after.get(key);
+  for (const key of [...before.keys()].sort()) if (!after.has(key)) diff[key] = null;
   return diff;
 }
 function matchGolden(name: string, actual: unknown): void {
