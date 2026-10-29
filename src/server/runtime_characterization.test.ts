@@ -13,7 +13,9 @@ import { delay } from "../core/resilience";
 // (status, reason, recovery, visit and attempt), not only the status, so the
 // planned execute() decomposition cannot silently change a halt's side effects.
 //
-// Exit inventory (src/core/runtime.ts, measured with npm run coverage on win32):
+// Exit inventory (src/core/runtime.ts, win32). Measured by injecting probes into the
+// built runtime and running the full suite: V8 coverage undercounts worker-process code
+// and reported the hash-diff branch as unreached although it runs.
 //   preflight   518-545  source snapshot, contract lock, runner, deliverables, source read  covered
 //   loop top    572-579  poll / contract / session budget / stage budget                    573, 579 uncovered
 //   loop top    590-596  phase deadline or attempt limit reached before a call             uncovered (time-only)

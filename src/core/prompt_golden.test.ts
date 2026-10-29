@@ -116,7 +116,9 @@ test("prompt goldens: access, research, operator message and recovery variants",
   scoped.additionalAllowedPaths = [extra];
   scoped.interruptMessage = "Stop after the current check";
   matchGolden("legacy-extra-roots-interrupt.txt", prompt(scoped, "interrupt"));
-  const research = session(createGraph(), "Research current React routing options on the web and build a demo");
+  // Must satisfy requiresResearch(), or these goldens only differ from legacy-* by the goal text.
+  const research = session(createGraph(), "Search the web for current React routing options and build a demo");
+  assert.match(prompt(research, "planning"), /Complete actual web research/);
   for (const type of ["planning", "review", "approval"] as const)
     matchGolden(`legacy-research-${type}.txt`, prompt(research, type));
   // Legacy test recovery chooses among four receipt states.

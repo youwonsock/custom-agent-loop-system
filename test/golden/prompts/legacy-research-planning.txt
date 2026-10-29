@@ -4,13 +4,13 @@ Session: session-golden. Visit: visit-planning. Each revisit is a new task execu
 
 === ORIGINAL USER GOAL (AUTHORITATIVE) ===
 
-Research current React routing options on the web and build a demo
+Search the web for current React routing options and build a demo
 
 The original goal is the acceptance contract. A plan is a subordinate strategy and may never omit, weaken or replace the goal.
 
 === FIXED REQUIREMENTS ===
 
-REQ-001: Research current React routing options on the web and build a demo
+REQ-001: Search the web for current React routing options and build a demo
 
 === MOST RECENT APPROVED PLAN ===
 
@@ -49,5 +49,7 @@ Return exactly 3 complete options. Use "## OPTION 1: Title" etc. Every option mu
 In EACH option include a concrete plan entry for EVERY ID below, replacing each placeholder:
 
 REQ-001: planned implementation and verification
+
+Complete actual web research. Include [RESEARCH_EVIDENCE], SOURCE: https://..., VERIFIED_FACT: ... or LIMITATION: ... . If your CLI cannot perform the required research, state RESEARCH_BLOCKED on its own line and explain the needed operator action.
 
 The final assistant line must be [PHASE_DONE] on its own line.

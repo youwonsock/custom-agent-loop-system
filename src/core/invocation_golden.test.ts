@@ -17,7 +17,11 @@ const goldenDir = path.resolve(__dirname, "../../../test/golden/invocation", fam
 const update = process.env.UPDATE_GOLDEN === "1";
 const fixture = path.resolve(__dirname, "../../../test/fixture_cli.cjs");
 const plugin = pathToFileURL(path.join(__dirname, "kilo_protocol_plugin.js")).href;
-const appPath = [path.dirname(process.execPath), process.env.PATH ?? ""].filter(Boolean).join(path.delimiter);
+// Mirror buildInvocation: it copies process.env into a plain object, so on Windows a
+// parent environment spelled "Path" leaves PATH unset there. Reading process.env.PATH
+// (case-insensitive on Windows) would make the golden depend on the launching shell.
+const inherited: Record<string, string | undefined> = Object.fromEntries(Object.entries(process.env));
+const appPath = [path.dirname(process.execPath), inherited.PATH ?? ""].filter(Boolean).join(path.delimiter);
 const graph = createAutonomousGraph();
 const parsedEnv = new Set(["KILO_CONFIG_CONTENT", "OPENCODE_CONFIG_CONTENT", "AGENT_GRAPH_KILO_CHECKS"]);
 function normalizer(target: string, extra: string) {
@@ -26,7 +30,7 @@ function normalizer(target: string, extra: string) {
   const forms = tokens.flatMap(([value, token]) => {
     const slashed = value.replace(/\\/g, "/");
     return [value, slashed, JSON.stringify(value).slice(1, -1), JSON.stringify(slashed).slice(1, -1)].map((v) => [v, token] as const);
-  });
+  }).sort((a, b) => b[0].length - a[0].length); // Longest first: the app PATH may be just the node directory, a prefix of <NODE>.
   const text = (s: string) => forms.reduce((out, [value, token]) => out.split(value).join(token), s);
   const walk = (value: unknown): unknown =>
     typeof value === "string" ? text(value)

@@ -4,13 +4,13 @@ Session: session-golden. Visit: visit-approval. Each revisit is a new task execu
 
 === ORIGINAL USER GOAL (AUTHORITATIVE) ===
 
-Research current React routing options on the web and build a demo
+Search the web for current React routing options and build a demo
 
 The original goal is the acceptance contract. A plan is a subordinate strategy and may never omit, weaken or replace the goal.
 
 === FIXED REQUIREMENTS ===
 
-REQ-001: Research current React routing options on the web and build a demo
+REQ-001: Search the web for current React routing options and build a demo
 
 === MOST RECENT APPROVED PLAN ===
 
@@ -53,5 +53,7 @@ EVIDENCE: concrete observed check or artifact
 [/REQUIREMENT_EVIDENCE]
 
 APPROVED requires concrete SATISFIED evidence for every REQ and current native PASS receipts from the test role. Reject skipped, failed or stale verification. A failure, new implementation, plan or interrupt invalidates earlier test approval; rerun tests before approving. Only the final approval role can complete the session. Finish with APPROVED or REJECTED.
+
+Complete actual web research. Include [RESEARCH_EVIDENCE], SOURCE: https://..., VERIFIED_FACT: ... or LIMITATION: ... . If your CLI cannot perform the required research, state RESEARCH_BLOCKED on its own line and explain the needed operator action.
 
 The final assistant line must be [PHASE_DONE] on its own line.
