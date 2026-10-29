@@ -147,4 +147,6 @@ export type RunComposerModel = Pick<
   | "issues"
   | "isolation"
   | "conflict"
+  | "connections"
+  | "setView"
 >;

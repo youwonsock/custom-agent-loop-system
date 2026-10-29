@@ -26,10 +26,37 @@ export default function RunComposer({
     issues,
     isolation,
     conflict,
+    connections,
+    setView,
   } = controller;
   return (
     <section className="run-composer">
       <div className="composer-main">
+        {connections.length === 0 && (
+          <div className="first-run" aria-label="처음 실행 안내">
+            <strong>처음 실행하기</strong>
+            <ol>
+              <li>
+                CLI 연결에서 설치·인증한 Codex·Claude Code·OpenCode·Kilo 실행
+                파일을 등록합니다.
+              </li>
+              <li>
+                대상 프로젝트로 모델을 조회합니다. 조회에 성공한 모델만 선택할
+                수 있습니다.
+              </li>
+              <li>
+                그래프 설정에서 공통 연결과 모델을 고른 뒤 목표를 입력하고
+                실행합니다.
+              </li>
+            </ol>
+            <button
+              className="button primary small"
+              onClick={() => setView("connections")}
+            >
+              연결 등록 화면 열기
+            </button>
+          </div>
+        )}
         <label>
           실행 목표
           <textarea
