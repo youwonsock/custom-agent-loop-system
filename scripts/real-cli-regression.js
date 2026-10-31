@@ -4,7 +4,8 @@
 //   node scripts/real-cli-regression.js claude [--model <text in the model ID>]
 //   node scripts/real-cli-regression.js kilo   [--model <text in the model ID>]
 // --scenario tiny-web runs the autonomous preset unchanged, including browser
-// verification and authored node tests. The default scenario turns those off.
+// verification. --scenario tiny-web-tests also asks for npm test, which brings in the
+// authored node test checks. The default scenario turns those off.
 // Results stay in artifacts/real-cli/. Pass criteria are in docs/STATUS.md (G4).
 const fs = require("node:fs");
 const os = require("node:os");
@@ -20,8 +21,27 @@ const { createAutonomousGraph } = require(dist("core/graph.js"));
 const { SessionCoordinator } = require(dist("server/coordinator.js"));
 const { browserVerificationCommand } = require(dist("core/browser_command.js"));
 
+const webGoal = [
+  "Build a small counter web app. server.mjs starts an HTTP server on process.env.PORT, prints its http://127.0.0.1:<port> URL and serves index.html.",
+  "The page has an h1 heading, a #count element that starts at 0 and a #add button that adds 1 to it.",
+  "The count survives a page reload by using localStorage.",
+];
+const ranCommand = (summary, text) =>
+  summary.visits.some((visit) =>
+    visit.attempts.some((attempt) =>
+      attempt.commands.some((c) => c.startsWith("0 ") && c.includes(text)),
+    ),
+  );
+const webScenario = {
+  dir: "tiny-web",
+  limitMs: 60 * 60 * 1000,
+  maxAttempts: 24,
+  automation: () => undefined,
+  claudeAllow: ["Bash(node:*)", "Bash(mkdir:*)"],
+};
 const SCENARIOS = {
   slugify: {
+    dir: "slugify",
     goal: [
       "Implement slugify(text) in slug.mjs as a named export that lowercases text, replaces each run of non-alphanumeric characters with one hyphen and trims leading and trailing hyphens.",
       "Document the function with one usage example in README.md.",
@@ -45,23 +65,19 @@ const SCENARIOS = {
     passed: () => true,
   },
   "tiny-web": {
+    ...webScenario,
+    goal: webGoal.join("\n"),
+    passed: (summary) => ranCommand(summary, "verify-browser"),
+  },
+  "tiny-web-tests": {
+    ...webScenario,
     goal: [
-      "Build a small counter web app. server.mjs starts an HTTP server on process.env.PORT, prints its http://127.0.0.1:<port> URL and serves index.html.",
-      "The page has an h1 heading, a #count element that starts at 0 and a #add button that adds 1 to it.",
-      "The count survives a page reload by using localStorage.",
+      ...webGoal,
+      "npm test runs the project's own node tests of the server's HTTP behaviour.",
     ].join("\n"),
-    limitMs: 60 * 60 * 1000,
-    maxAttempts: 24,
-    automation: () => undefined,
-    claudeAllow: ["Bash(node:*)", "Bash(mkdir:*)"],
     passed: (summary) =>
-      summary.visits.some((visit) =>
-        visit.attempts.some((attempt) =>
-          attempt.commands.some(
-            (c) => c.startsWith("0 ") && c.includes("verify-browser"),
-          ),
-        ),
-      ),
+      ranCommand(summary, "verify-browser") &&
+      ranCommand(summary, "verify-node-tests"),
   },
 };
 const SETTLED = [
@@ -177,7 +193,7 @@ async function main() {
     scenario = SCENARIOS[scenarioName];
   if (!config || !scenario)
     throw new Error(
-      "Usage: real-cli-regression.js claude|kilo [--scenario slugify|tiny-web] [--model text]",
+      "Usage: real-cli-regression.js claude|kilo [--scenario slugify|tiny-web|tiny-web-tests] [--model text]",
     );
   const stamp = new Date().toISOString().replace(/[:.]/g, "-"),
     output = path.join(
@@ -192,7 +208,7 @@ async function main() {
       "target",
     );
   fs.mkdirSync(output, { recursive: true });
-  fs.cpSync(path.join(repository, "test/real-cli", scenarioName), target, {
+  fs.cpSync(path.join(repository, "test/real-cli", scenario.dir), target, {
     recursive: true,
   });
   const store = new StudioStore(path.join(output, "root"));
