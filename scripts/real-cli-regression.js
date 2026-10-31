@@ -242,6 +242,9 @@ async function main() {
   document.automation = scenario.automation(config) ?? document.automation;
   const graph = await store.createGraph({ document });
   const manager = new SessionCoordinator(store);
+  // Resumes RECOVERING sessions, as the app's server does. Without it a run that
+  // scheduled an automatic recovery waits out the whole time limit.
+  manager.startMonitor();
   const started = Date.now();
   process.stdout.write(`${profile}: model ${model.id}, output ${output}\n`);
   let state = await manager.start({
