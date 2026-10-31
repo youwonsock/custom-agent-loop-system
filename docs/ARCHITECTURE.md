@@ -27,9 +27,9 @@ flowchart LR
 | 1 | `preflight` | CLI 호출 없이 판정되는 게이트: 검토·승인의 테스트 소스 snapshot, 검증 계약 잠금, runner, 필수 파일, 자동화 테스트 역할의 소스 해시 |
 | 2 | `stage` | 바인딩·연결·`runPolicy`·마감·attempt 한도를 고정한 `Stage` |
 | 3 | `attemptGuards` | 매 호출 전 제어 요청, 계약 변조, 세션·단계 예산 |
-| 4 | `invocationOptions` → `buildInvocation` | 프롬프트와 CLI별 인자·환경 |
+| 4 | `invocationOptions` → `buildInvocation` | 프롬프트(`prompt_sections.ts`)와 CLI별 인자·환경(`invocation_codex`·`_claude`·`_run_cli`·`_kilo`) |
 | 5 | `newAttempt` | attempt 기록 생성·저장 |
-| 6 | `supervise` | `ProcessSupervisor` 실행. 가드 콜백이 `AttemptRun.policyReason`/`sourceChanges`에 기록 |
+| 6 | `supervise` | `ProcessSupervisor` 실행(자식 하나의 출력 해석·증거·타이머는 `SupervisedAttempt`). 가드 콜백이 `AttemptRun.policyReason`/`sourceChanges`에 기록 |
 | 7 | `recordOutcome` | 증거(명령 receipt, 읽은 파일, 감사, 파일 변경)를 attempt·방문에 반영 |
 | 8 | `evidenceGates` | 고아 프로세스, VM·범위 감사, 고정 테스트의 소스 변경, 예산, 보호 파일, 단계 예산, 해시 비교, 승인 전 소스 재검사 |
 | 9 | `judge` | 자체 Node 증명, `validateCompletion`, 필수 파일, 자율 계획의 외부 경로, 환경 차단 |
@@ -74,6 +74,7 @@ flowchart LR
 
 | 테스트 | 고정 대상 |
 | --- | --- |
+| `process_supervisor_characterization.test.ts` | 감독기의 시작 실패, 제어 요청, 정책 정지, 프롬프트 자동 응답, 원시 로그 제한 |
 | `prompt_golden.test.ts` | 역할·자동화 조합별 노드 프롬프트와 복구 메시지 전문 |
 | `invocation_golden.test.ts` | CLI·역할·옵션별 인자, 앱이 바꾼 환경 변수, transport (`win32`/`posix`). 프로그램 I/O 분기는 `prepareProgramIo`만 대체해 VM 없이 posix에서 비교 |
 | `shell_judgment.test.ts` | 같은 셸 명령을 단어 분리·조회 분할·검사 키·검증 명령·파일 변경 판정이 각각 어떻게 보는지 |

@@ -6,10 +6,10 @@
 
 | 항목 | 상태 |
 | --- | --- |
-| 기준 커밋 | 브랜치 `stage4/judge-and-runtime` |
-| 원격 CI | PR #16, #17 병합 전 3개 OS와 브라우저 통과. 이 표의 브랜치는 PR CI에서 확인한다 |
-| 로컬 검사 (macOS 26 arm64, 공식 Node 24.22.2) | `verify:platform` 10단계 통과: 단위 346개 중 344 통과·0 실패·Windows 전용 2 건너뜀, tooling 10/10, audit high 이상 0건(moderate 3건은 아래 "수용한 위험"). `verify:browser` 25/25. `verify:vm` 17/17 |
-| 실제 모델 호출 | G4 기준선 통과. Claude Haiku는 145초에 `SUCCESS`, Kilo 무료 모델은 VM 명령 25/25 정상(자세한 내용은 VERIFICATION.md). 두 실행이 드러낸 제품 결함은 2단계에서 고쳤다. 고친 뒤의 재실행은 5단계 G4에서 한다 |
+| 기준 커밋 | 브랜치 `stage5/invocation-prompt-supervisor` |
+| 원격 CI | PR #16~#19 병합 전 3개 OS와 브라우저 통과. 이 표의 브랜치는 PR CI에서 확인한다 |
+| 로컬 검사 (macOS 26 arm64, 공식 Node 24.22.2) | `verify:platform` 10단계 통과: 단위 354개 중 352 통과·0 실패·Windows 전용 2 건너뜀, tooling 10/10, audit high 이상 0건(moderate 3건은 아래 "수용한 위험"). `verify:browser` 25/25. `verify:vm` 17/17 |
+| 실제 모델 호출 | G4 재실행 통과(5단계). Claude Haiku와 Kilo 무료 모델 모두 수동 개입 없이 `SUCCESS`, Kilo VM 명령 26/26 정상 |
 
 ## 완료한 작업 (2026-10-29 ~ 10-30)
 
@@ -63,6 +63,17 @@
 | 실행 루프 | `GraphRuntime.run`을 소유자 복구, 모델 재조회, 자동 복구 갱신, 방문 루프, 종단 판정으로 분리. 복잡도 79 → 15 미만 | 서버 시나리오와 특성 테스트 통과 |
 | 상태 쓰기 | `status` 직접 쓰기를 `settle`로 통합(`GraphRuntime` 안). `Completion \| null \| undefined`를 `stopped`·`completed`·`undecided`로 교체 | `session_transitions.ts`의 상태 전이 함수는 그대로 |
 
+2026-10-31 (브랜치 `stage5/invocation-prompt-supervisor`, 통합 계획 5단계):
+
+| 영역 | 내용 | 비고 |
+| --- | --- | --- |
+| 호출 | `invocation.ts`를 Codex, Claude, OpenCode·Kilo 공용, Kilo 격리 모듈로 분리. `__dirname` 경로 때문에 `src/core`에 평면 배치 | 호출 골든 diff 0 |
+| 프롬프트 | `buildNodePrompt`를 순서 있는 섹션 함수 10개(`prompt_sections.ts`)로, 복구 메시지를 `prompt_recovery.ts`로 분리. 문자열은 다시 감싸지 않았다 | 프롬프트 골든 diff 0 |
+| 정책 재판단 | `buildInvocation`의 `c.type === "kilo"` 분기는 `run_policy`로 옮기지 않는다. 그 분기는 정책 판단이 아니라 해당 CLI만 지원하는 호출 형식이며, `prompt.ts`는 CLI 종류를 받지 않는다 | 변경 없음 |
+| 감독기 | 특성 테스트 8개를 먼저 추가한 뒤 `ProcessSupervisor.run`(632행)을 `SupervisedAttempt`와 `BoundedRawLog`로 분해. `run`은 100행 미만 | 기존 감독기 테스트 수정 없음 |
+| 계획 오판 | G4에서 발견: 사용 예시의 `// 결과` 주석을 대상 밖 경로로 판정해 Claude 실행이 멈췄다. 주석 표식은 경로로 보지 않고, `FILE_ACCESS`와 표식 뒤의 경로는 그대로 본다 | `c783530` |
+| G4 | Claude Haiku(`claude-haiku-4-5-20251001`) 225초 `SUCCESS`, Kilo 무료 모델 225초 `SUCCESS`(VM 명령 26/26 정상, 격리 이탈 0). Kilo 실행은 주석 표식 수정 전 커밋에서 했으며 그 수정은 Kilo 경로의 판정을 좁히지 않는다 | 이전에 Kilo는 최종 승인에서 35분 제한으로 멈췄다 |
+
 수용한 위험: `npm audit`의 moderate 3건(`@fastify/static` → `glob` → `minimatch`). `@fastify/static`은 `wildcard: false`일 때만 `glob`을 호출하고 이 앱은 그 옵션을 쓰지 않는다. `audit fix --force`는 주 버전을 낮추므로 적용하지 않는다.
 
 유지하기로 결정한 것: stateVersion 3 스냅샷 읽기와 수동 그래프의 평문 보고 형식은 현재 기능이다. 마이그레이션 코드는 없었다.
@@ -76,7 +87,7 @@
 | G1 기본 | 공식 Node 24에서 `verify:platform`, `verify:browser` 통과, CI 3개 OS 성공 | 모든 PR |
 | G2 동작 고정 | 프롬프트·호출 골든과 셸 판정표 diff 0 | 동작 불변 커밋 |
 | G3 VM | `verify:vm` 통과, 건너뜀 0 | 실행·호출·격리 코드 변경 |
-| G4 실제 CLI | Claude Haiku: 수동 개입 없이 `SUCCESS`. Kilo 무료 모델: 서명된 VM 명령의 시작·종료·삭제가 모두 맞고 격리 이탈 0건(`SUCCESS`는 요구하지 않음). 공급자 할당량으로 중단되면 판정을 보류하고 재실행 | 1단계 끝, 5단계 끝 |
+| G4 실제 CLI | Claude Haiku: 수동 개입 없이 `SUCCESS`. Kilo 무료 모델: 서명된 VM 명령의 시작·종료·삭제가 모두 맞고 격리 이탈 0건(`SUCCESS`는 요구하지 않음). 공급자 할당량으로 중단되면 판정을 보류하고 재실행 | 1단계 끝, 5단계 끝 (완료) |
 
 동작 불변 커밋에서 G2가 달라지면 수정하지 않고 되돌린 뒤 원인부터 찾는다.
 
@@ -91,14 +102,6 @@
 | `.git/config`의 빈 `user.name` 항목 정리. 전역 설정을 가려 `git commit`이 실패하며, 이 브랜치는 `-c user.name=SC_Logan`으로 커밋했다 | 옵션 없이 커밋 가능 |
 
 Codex는 사용자 결정으로 G4에서 제외했다. Codex 경로는 가짜 이벤트로만 검증되었고, 실제 Codex가 명령을 셸로 감싸는지도 확인하지 못했다.
-
-### 5단계: 호출·프롬프트·감독기 분해
-
-- `invocation.ts`를 Codex, Claude, OpenCode·Kilo 공용, Kilo 격리 모듈로 분리. `__dirname` 경로 때문에 `src/core`에 평면 배치.
-- `prompt.ts` 분리. 긴 문자열을 템플릿 리터럴 여러 줄로 풀면 모델 입력이 바뀌므로 다시 감싸지 않는다.
-- `buildInvocation`의 정책 적용 재판단. `buildNodePrompt`는 CLI 종류를 받지 않으므로 `prompt.ts`에는 적용하지 않는다.
-- `ProcessSupervisor.run`(632행) 특성 테스트 작성 후 분해. 150행 이하.
-- G4 재실행.
 
 ### 6단계: 데이터 모델과 화면 정리
 
