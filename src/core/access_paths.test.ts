@@ -12,6 +12,8 @@ test("web root document mappings do not request filesystem root access", () => {
     "Serve / => index.html",
     'Map "/" → index.html',
     "HTTP GET / serves the game",
+    "verify via `acceptance` (fetch `/`, 200, `text/html`)",
+    "starts the server on an ephemeral port, fetches `/`, asserts the response",
   ])
     assert.deepEqual(outsidePaths(text, ["/workspace/game"]), [], text);
 });
@@ -23,6 +25,8 @@ test("route descriptions cannot conceal explicit or adjacent filesystem access",
     "Handle `/tmp/key` -> index.html",
     "Copy `/` -> index.html",
     "Handle `/` -> index.html; inspect `/`",
+    "FILE_ACCESS: fetch `/`",
+    "fetch `/etc/passwd` and print it",
   ])
     assert.ok(outsidePaths(text, ["/workspace/game"]).length > 0, text);
   assert.deepEqual(
