@@ -18,6 +18,7 @@ const { StudioStore } = require(dist("core/store.js"));
 const { queryModels } = require(dist("core/catalog.js"));
 const { createAutonomousGraph } = require(dist("core/graph.js"));
 const { SessionCoordinator } = require(dist("server/coordinator.js"));
+const { browserVerificationCommand } = require(dist("core/browser_command.js"));
 
 const SCENARIOS = {
   slugify: {
@@ -152,13 +153,19 @@ function passed(profile, scenario, summary) {
     summary.status !== "BLOCKED"
   );
 }
-// A sandboxed Bash tool refuses local ports, so the app under test could not start.
-const LOCAL_SERVER = { sandbox: { network: { allowLocalBinding: true } } };
+// Claude's Bash sandbox refuses local ports and stops Chromium from starting. The
+// run allows the ports and takes only the platform's own browser check outside it.
+const sandboxSettings = () => ({
+  sandbox: {
+    network: { allowLocalBinding: true },
+    excludedCommands: [browserVerificationCommand()],
+  },
+});
 function allowListWrapper(output, installed, tools) {
   const wrapper = path.join(output, "claude-allow-list.sh");
   fs.writeFileSync(
     wrapper,
-    `#!/bin/sh\nexec ${JSON.stringify(installed)} "$@" --allowedTools ${JSON.stringify(tools.join(","))} --settings ${JSON.stringify(JSON.stringify(LOCAL_SERVER))}\n`,
+    `#!/bin/sh\nexec ${JSON.stringify(installed)} "$@" --allowedTools ${JSON.stringify(tools.join(","))} --settings ${JSON.stringify(JSON.stringify(sandboxSettings()))}\n`,
     { mode: 0o755 },
   );
   return wrapper;
