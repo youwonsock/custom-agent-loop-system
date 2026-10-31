@@ -497,6 +497,10 @@ if (args[0] === "debug" && args[1] === "config") {
         "styles.css",
         "/* unexpected test-role production edit */",
       );
+    if (prompt.includes(`fixture:${type}-hidden-edit`) && calls[type] === 1)
+      fs.writeFileSync("hidden-edit.txt", "written by a read-only role");
+    if (prompt.includes(`fixture:${type}-symlink`) && calls[type] === 1)
+      fs.symlinkSync("missing-target", "hidden-link");
     if (productBlocked)
       text = evidence + "\nBLOCKED_KIND: product\nVERDICT: BLOCKED";
     emit({ type: "thread.started", thread_id: "fixture-session" });

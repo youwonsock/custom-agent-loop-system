@@ -260,3 +260,72 @@ test("without the test source guard, a hidden test-role product edit is found by
     },
   );
 });
+
+function lightAutonomous(graph: AgentGraphDocument, sourceGuard: boolean) {
+  graph.automation!.verificationContract = false;
+  graph.automation!.authoredNodeTests = false;
+  graph.automation!.browserVerification = false;
+  graph.automation!.testSourceGuard = sourceGuard;
+}
+const attemptsOf = (state: SessionState, node: string) =>
+  state.visits
+    .filter((v) => v.nodeId === node)
+    .flatMap((v) => v.attempts)
+    .map((a) => ({
+      mutation: a.fileMutation ?? false,
+      failure: a.failureKind ?? null,
+    }));
+
+for (const [role, sourceGuard] of [
+  ["planning", true],
+  ["planning", false],
+  ["review", false],
+  ["approval", false],
+] as const)
+  test(`${role} with the source guard ${sourceGuard ? "on" : "off"} is rejected for a file change no event shows`, async (t) => {
+    const s = await setup(t);
+    const graph = await s.store.createGraph({ template: "autonomous" });
+    lightAutonomous(graph, sourceGuard);
+    const state = await settle(
+      s,
+      await start(s, graph, `fixture:${role}-hidden-edit build the app`),
+    );
+    assert.deepEqual(attemptsOf(state, role)[0], {
+      mutation: true,
+      failure: "role_violation",
+    });
+  });
+
+test("a read-only role without a hidden change is not flagged", async (t) => {
+  const s = await setup(t);
+  const graph = await s.store.createGraph({ template: "autonomous" });
+  lightAutonomous(graph, false);
+  const state = await settle(s, await start(s, graph, "build the app"));
+  assert.equal(state.status, "SUCCESS", state.statusReason ?? "");
+  for (const role of ["planning", "review", "approval"])
+    assert.deepEqual(
+      attemptsOf(state, role).map((a) => a.mutation),
+      [false],
+    );
+});
+
+test(
+  "an unreadable source tree before review returns to verification instead of failing the run",
+  { skip: process.platform === "win32" ? "symlinks need a privilege" : false },
+  async (t) => {
+    const s = await setup(t);
+    const graph = await s.store.createGraph({ template: "autonomous" });
+    lightAutonomous(graph, true);
+    const state = await settle(
+      s,
+      await start(s, graph, "fixture:review-symlink build the app"),
+    );
+    assert.notEqual(state.status, "FAILED", state.statusReason ?? "");
+    const review = state.visits.find((v) => v.nodeId === "review")!;
+    assert.equal(review.verdict, "REJECTED");
+    assert.match(review.output, /소스 snapshot 읽기 실패/);
+    // The link is still there, so the next test visit stops and asks the user.
+    assert.equal(state.status, "WAITING_USER");
+    assert.match(state.statusReason ?? "", /소스 읽기가 차단/);
+  },
+);
