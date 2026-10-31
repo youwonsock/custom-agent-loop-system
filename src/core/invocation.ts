@@ -12,10 +12,8 @@ import {
   prepareProgramIo,
   IO_UNAVAILABLE,
 } from "./program_io";
+import { isReadOnly } from "../shared/node_roles";
 const execute = promisify(execFile);
-export function isReadOnly(type: AgentNode["type"]): boolean {
-  return ["planning", "review", "approval", "interrupt"].includes(type);
-}
 export async function buildInvocation(
   c: LocalConnection,
   b: ExecutionBinding,

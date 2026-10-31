@@ -5,6 +5,7 @@ import {
 } from "../shared/domain";
 import { RequirementItem } from "./requirement_ledger";
 import { projectCommandKey } from "./verification_evidence";
+import { isVerifierRole } from "../shared/node_roles";
 type Obj = Record<string, unknown>;
 const object = (v: unknown): v is Obj =>
   !!v && typeof v === "object" && !Array.isArray(v);
@@ -37,10 +38,7 @@ export function renderStructuredReport(
       node.type === "test"
         ? ["PASS", "FAIL", "BLOCKED"]
         : ["APPROVED", "REJECTED", "BLOCKED"];
-  if (
-    !allowed.includes(verdict) ||
-    !["test", "review", "approval"].includes(node.type)
-  )
+  if (!allowed.includes(verdict) || !isVerifierRole(node.type))
     throw Error("현재 역할의 JSON verdict가 잘못되었습니다.");
   if (contract?.status !== "locked")
     throw Error("구조화 보고에는 고정된 검증 계약이 필요합니다.");

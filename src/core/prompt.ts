@@ -13,6 +13,11 @@ import { parseRequirementEvidence } from "./requirement_ledger";
 import { nodeTestScript } from "./node_test_policy";
 import { nodeTestVerificationCommand } from "./node_test_command";
 import { currentNodeTestProof } from "./verification_evidence";
+import {
+  isAuditRole,
+  isResearchRole,
+  isVerifierRole,
+} from "../shared/node_roles";
 export function buildRecoveryMessage(
   kind: FailureKind,
   message: string,
@@ -77,7 +82,7 @@ export function buildNodePrompt(
 ): string {
   const structured =
     state.verificationContract?.status === "locked" &&
-    ["test", "review", "approval"].includes(node.type);
+    isVerifierRole(node.type);
   const nativeBrowserReview =
     node.type === "test" &&
     !!state.graph.automation?.nativeApprovalReview &&
@@ -154,9 +159,7 @@ export function buildNodePrompt(
           v.id !== visit.id &&
           v.status === "failed" &&
           state.graph.nodes.some(
-            (n) =>
-              n.id === v.nodeId &&
-              ["test", "review", "approval"].includes(n.type),
+            (n) => n.id === v.nodeId && isVerifierRole(n.type),
           ),
       )
       .at(-1);
@@ -282,7 +285,7 @@ export function buildNodePrompt(
         (s) =>
           `${s.id}: file=${s.file}; requirements=${s.requirements.join(",")}; required cases=${JSON.stringify(s.cases)}; required production-defect challenges=${s.challenges.map((c) => c.id).join(",")}`,
       ),
-      `Quality report: verification/node-tests/report.json; inspect its baseline, no-op controls, assertion kills and source hashes. ${["review", "approval"].includes(node.type) ? "READ-ONLY: independently read EACH authored scope file and the quality report with native read(filePath) or standalone cat/Get-Content; completed reads are mandatory evidence. Reject shallow/missing controller, storage or raw HTTP assertions even when external acceptance passed. Do not run checks or modify files." : "Execute every registered check separately; own Node verifier before the final browser command. All repairs of weak tests or product defects belong to implementation; test reports FAIL without edits."}`,
+      `Quality report: verification/node-tests/report.json; inspect its baseline, no-op controls, assertion kills and source hashes. ${isAuditRole(node.type) ? "READ-ONLY: independently read EACH authored scope file and the quality report with native read(filePath) or standalone cat/Get-Content; completed reads are mandatory evidence. Reject shallow/missing controller, storage or raw HTTP assertions even when external acceptance passed. Do not run checks or modify files." : "Execute every registered check separately; own Node verifier before the final browser command. All repairs of weak tests or product defects belong to implementation; test reports FAIL without edits."}`,
       `Current accepted test-role own-suite facts: ${JSON.stringify(currentNodeTestProof(state, visit) ?? null)}`,
       "For PASS/APPROVED the JSON report MUST also contain testScopes:[{id,status,evidence}] for EVERY scope. Explain the actual assertions, no-op controls and detected defects for that scope. Evidence from supplied tests cannot satisfy this judgment. Use PARTIAL/FAILED/BLOCKED and FAIL/REJECTED when coverage or execution is unproved.",
     );
@@ -300,7 +303,7 @@ export function buildNodePrompt(
     lines.push(
       "Read-only audit: you must not execute tests or start servers. Inspect files and current native test-role receipts, including their exit codes and matching source-bound operator evidence. If checks need rerunning, report REJECTED with the reason so the graph returns to the writable implementation/test path. Never run a test to replace or repair missing proof from a read-only role.",
     );
-  if (!structured && ["test", "review", "approval"].includes(node.type))
+  if (!structured && isVerifierRole(node.type))
     lines.push(
       "The complete final report must contain one correctly formatted block for EVERY ID below. Choose exactly one STATUS and replace the EVIDENCE placeholder with observed facts. Write REQ_ID exactly once per line. A bare PASS or APPROVED without these blocks is incomplete.",
       ...state.requirements.items.map(
@@ -324,10 +327,7 @@ export function buildNodePrompt(
     lines.push(
       "APPROVED requires concrete SATISFIED evidence for every REQ and current native PASS receipts from the test role. Reject skipped, failed or stale verification. A failure, new implementation, plan or interrupt invalidates earlier test approval; rerun tests before approving. Only the final approval role can complete the session. Finish with APPROVED or REJECTED.",
     );
-  if (
-    requiresResearch(state.goal) &&
-    ["planning", "review", "approval"].includes(node.type)
-  )
+  if (requiresResearch(state.goal) && isResearchRole(node.type))
     lines.push(
       "Complete actual web research. Include [RESEARCH_EVIDENCE], SOURCE: https://..., VERIFIED_FACT: ... or LIMITATION: ... . If your CLI cannot perform the required research, state RESEARCH_BLOCKED on its own line and explain the needed operator action.",
     );

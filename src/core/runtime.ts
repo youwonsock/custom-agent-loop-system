@@ -38,7 +38,7 @@ import {
 } from "./process_supervisor";
 import { AgentAttemptRunner } from "./agent_attempt_runner";
 import { queryModels } from "./catalog";
-import { buildInvocation, isReadOnly } from "./invocation";
+import { buildInvocation } from "./invocation";
 import { buildNodePrompt, buildRecoveryMessage } from "./prompt";
 import {
   parseRequirementEvidence,
@@ -82,6 +82,7 @@ import {
   failedRegisteredCheck,
   currentVerificationSources,
 } from "./test_source_guard";
+import { isAuditRole, isReadOnly, isVerifierRole } from "../shared/node_roles";
 
 export interface RuntimeHooks {
   onState?: (state: SessionState) => void;
@@ -780,7 +781,7 @@ export class GraphRuntime {
   > {
     const policy = runPolicy(this.state.graph),
       sourceGuard = policy.testSourceGuard;
-    if (sourceGuard && ["review", "approval"].includes(node.type)) {
+    if (sourceGuard && isAuditRole(node.type)) {
       const expected = currentVerificationSources(this.state, visit);
       if (!expected)
         return {
@@ -831,7 +832,7 @@ export class GraphRuntime {
           ),
         };
     }
-    if (["test", "review", "approval"].includes(node.type)) {
+    if (isVerifierRole(node.type)) {
       const problem = await deliverableProblem(this.state);
       if (problem) return { result: this.verificationFailure(node, problem) };
     }
@@ -1188,7 +1189,7 @@ export class GraphRuntime {
       visit.verifiedCommands = [];
       delete visit.nodeTestProof;
     }
-    if (["test", "review", "approval"].includes(node.type))
+    if (isVerifierRole(node.type))
       visit.verifiedCommands = mergeProjectReceipts(
         this.state.targetProjectPath,
         visit.verifiedCommands,
@@ -1378,7 +1379,7 @@ export class GraphRuntime {
     }
     if (
       sourceGuard &&
-      ["review", "approval"].includes(node.type) &&
+      isAuditRole(node.type) &&
       result.outcome === "succeeded"
     ) {
       const expected = currentVerificationSources(this.state, visit);
@@ -1415,7 +1416,7 @@ export class GraphRuntime {
       nodeProofError: string | undefined;
     if (
       this.state.verificationContract?.manifest?.nodeTests &&
-      ["test", "review", "approval"].includes(node.type) &&
+      isVerifierRole(node.type) &&
       result.outcome === "succeeded"
     ) {
       try {
@@ -1455,7 +1456,7 @@ export class GraphRuntime {
     run.completion = completion;
     if (
       completion.valid &&
-      ["implementation", "test", "review", "approval"].includes(node.type) &&
+      (node.type === "implementation" || isVerifierRole(node.type)) &&
       !["FAIL", "REJECTED", "BLOCKED"].includes(completion.verdict ?? "")
     ) {
       const problem = await deliverableProblem(this.state);
