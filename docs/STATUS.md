@@ -6,11 +6,10 @@
 
 | 항목 | 상태 |
 | --- | --- |
-| 기준 커밋 | `89b1650` (이 문서 이전의 `main`) |
-| 원격 CI | [run 40976927859](https://github.com/youwonsock/custom-agent-loop-system/actions/runs/40976927859): Windows·Ubuntu·macOS 코어와 Linux 브라우저 시나리오 모두 성공 |
-| 로컬 검사 (Windows 11, `verify:platform`) | 단위 338개 중 324 통과·0 실패·macOS 전용 14 건너뜀, tooling 10/10, smoke, pack:check 86파일, pack:smoke, audit 0건 |
-| 로컬에서 실행하지 않은 검사 | 브라우저 E2E(Chromium 미설치, CI에서 통과), macOS VM 테스트, posix invocation 골든 생성 |
-| 실제 모델 호출 | 이번 작업에서는 수행하지 않음. 모두 가짜 CLI 기준 |
+| 기준 커밋 | `57905e8` (브랜치 `harden/verification-gaps`, 아직 원격에 올리지 않음) |
+| 원격 CI | `main`(`a0a7714`)의 [run 41166598964](https://github.com/youwonsock/custom-agent-loop-system/actions/runs/41166598964)는 성공. 이 브랜치는 CI 미실행이라 Ubuntu 골든 일치와 Windows 영향은 미확인 |
+| 로컬 검사 (macOS 26 arm64, 공식 Node 24.22.2) | `verify:platform` 10단계 통과: 단위 340개 중 338 통과·0 실패·Windows 전용 2 건너뜀, tooling 10/10, pack:check 86파일, audit high 이상 0건(moderate 3건은 아래 2단계). `verify:browser` 25/25. `verify:vm` 16/16 |
+| 실제 모델 호출 | G4 기준선 통과. Claude Haiku는 145초에 `SUCCESS`, Kilo 무료 모델은 VM 명령 25/25 정상(자세한 내용은 VERIFICATION.md). 두 실행 모두 게이트에서 제품 결함을 하나씩 드러냈다(2단계) |
 
 ## 완료한 작업 (2026-10-29 ~ 10-30)
 
@@ -27,6 +26,15 @@
 | 정리 | 미사용 코드(`path_utils`, `assertSafeSessionId`, `mergeReceipts`)와 은퇴한 ignore·패키지 항목 제거. 머신 경로가 든 개발 기록을 npm 패키지에서 제외 | `fb722bb` |
 | 문서 | `ARCHITECTURE.md` 신설, README·실행 조건·자율 실행·검증 기록 갱신 | `49417cb` |
 
+2026-10-31 (브랜치 `harden/verification-gaps`, 통합 계획 0·1단계):
+
+| 영역 | 내용 | 커밋 |
+| --- | --- | --- |
+| 결함 수정 | `shellMutation`이 `bash -lc 'rm x'` 등 셸 래퍼, `eval`, `{ }`, `<( )`, `xargs`, `find -delete`, `git clean`의 쓰기를 보지 못하던 결함. 셸 판정표를 먼저 고정하고 `mutation` 열의 해당 행만 변경 | `4581ccc`, `8a31c7f` |
+| 안전망 | posix 호출 골든, VM 없는 프로그램 I/O 분기 골든(호출 골든 줄 커버리지 71.91% → 97.94%), 프롬프트 골든 누락 사례(줄 커버리지 100%) | `f68512c`, `f332f70` |
+| VM 게이트 | 런타임 상태 판별(`ready`/`missing`/`stale`)과 `verify:vm`, Seatbelt 테스트 전제 조건. 오래된 런타임이면 실행 화면 안내도 표시된다 | `4fe97ba` |
+| 실제 회귀 | 고정 시나리오 `test/real-cli/slugify`와 `scripts/real-cli-regression.js` | `319e080`, `57905e8` |
+
 유지하기로 결정한 것: stateVersion 3 스냅샷 읽기와 수동 그래프의 평문 보고 형식은 현재 기능이다. 마이그레이션 코드는 없었다.
 
 ## 남은 과제 (통합 계획)
@@ -42,23 +50,24 @@
 
 동작 불변 커밋에서 G2가 달라지면 수정하지 않고 되돌린 뒤 원인부터 찾는다.
 
-### 0·1단계: 환경과 안전망
+### 0·1단계: 환경과 안전망 (남은 부분)
+
+코드 작업은 끝났다. 남은 것은 환경과 원격 확인이다.
 
 | 작업 | 완료 기준 |
 | --- | --- |
-| 공식 빌드 Node 24 설치. Homebrew Node는 `libuv`를 외부에 두어 Seatbelt 테스트와 맞지 않는다 | `node -v`가 v24 |
-| `~/.npm-cache` 소유권 복구 (`sudo`는 사용자 작업) | 기본 캐시로 `npm ci` 성공 |
-| 셸 판정표 테스트 후 `shellMutation` 수정. 다른 모듈은 `canonicalCommand`로 셸 래퍼를 풀지만 이 함수만 풀지 않아 `bash -lc 'rm x'`를 변경으로 보지 못한다 | 표의 해당 행만 변경. 인터프리터 코드 실행(`node -e` 등)은 범위 밖 |
-| posix 골든 커밋 | macOS·Ubuntu CI 통과. 다르면 계열 분리 |
-| 가짜 정책으로 VM 분기 골든 추가. `prepareProgramIo`만 대체하므로 모든 OS CI에서 실행된다 | 호출 골든 줄 커버리지 95% 이상 |
-| 프롬프트 골든 누락 사례 추가 | 미검증 구간 해소 |
-| VM 런타임 상태 판별(`ready`/`missing`/`stale`)과 `verify:vm` | 오래된 런타임은 일반 테스트에서 사유와 함께 건너뛰고, `verify:vm`에서는 실패 |
-| Seatbelt 테스트 전제 조건 | Homebrew Node는 사유 표시 후 건너뜀, CI에서 건너뛰면 실패 |
-| 실제 CLI 시나리오 작성과 G4 기준선 실행 | 기록 저장. Codex는 사용자 결정으로 G4에서 제외했으므로 Codex 경로는 가짜 이벤트로만 검증된다 |
+| 이 브랜치의 CI 실행 | Ubuntu에서 posix 골든 일치(다르면 `darwin`/`linux`로 계열 분리), Windows를 포함한 3개 OS 모두 통과 |
+| 공식 빌드 Node 24 설치. Homebrew Node는 `libuv`를 외부에 두어 Seatbelt 테스트 8개를 건너뛴다 | `node -v`가 v24 |
+| `~/.npm-cache` 소유권 복구 (`sudo`는 사용자 작업). 지금은 임시 캐시로 설치했다 | 기본 캐시로 `npm ci` 성공 |
+| `.git/config`의 빈 `user.name` 항목 정리. 전역 설정을 가려 `git commit`이 실패하며, 이 브랜치는 `-c user.name=SC_Logan`으로 커밋했다 | 옵션 없이 커밋 가능 |
+
+Codex는 사용자 결정으로 G4에서 제외했다. Codex 경로는 가짜 이벤트로만 검증되었고, 실제 Codex가 명령을 셸로 감싸는지도 확인하지 못했다.
 
 ### 2단계: 작은 보정
 
-- 오래된 런타임 안내 문구를 실행 화면에 표시.
+- **자율 계획의 외부 경로 오판**: 계획에 인용된 정규식(`/[^a-z0-9]+/g`, `/slugify\(/`)을 대상 밖 절대 경로로 판정해 Claude·Kilo 실행 모두 계획을 재작성하게 했다. 모델 호출을 낭비하므로 이 단계에서 가장 먼저 고친다.
+- **읽기 증거의 묶음 명령**: 최종 승인 모델이 `cat a; echo x; cat b`로 읽으면 증거로 인정되지 않는다. 안내를 받고도 같은 방식을 반복해 Kilo 실행이 승인에서 끝나지 못했다. `echo` 구분자가 있는 읽기 묶음을 인정할지, 안내 문구를 고칠지 결정한다.
+- 대상 프로젝트가 앱 설치 폴더 안에 있으면 VM 마운트가 실패해 `BLOCKED`로 멈춘다. 모델 호출 전에 안전하게 멈추지만 오류가 `errno 30`뿐이므로 원인을 알려 준다.
 - `npm audit`의 moderate 3건(`@fastify/static` → `glob` → `minimatch`)은 앱이 `wildcard: false`를 쓰지 않아 `glob` 호출 경로가 아니므로 사유를 기록하고 수용.
 - 보존 태그 재생성: 일부 복사본에는 아래 태그가 없다. `9f39ebf`는 원격 `refs/pull/7/head`에 남아 있으나 `87f2b2c`는 원격 참조가 없다.
 - README의 `.app` 빌드와 검증용 Node 안내, 이 문서의 수치 갱신.
