@@ -13,6 +13,7 @@ import {
   IO_UNAVAILABLE,
 } from "./program_io";
 import { isReadOnly } from "../shared/node_roles";
+import { isWithin } from "./access_paths";
 const execute = promisify(execFile);
 export async function buildInvocation(
   c: LocalConnection,
@@ -105,10 +106,7 @@ export async function buildInvocation(
       path.join(programIo.directory, "provider-home");
     fs.mkdirSync(env.HOME, { recursive: true, mode: 0o700 });
     env.HOME = fs.realpathSync(env.HOME);
-    if (
-      env.HOME === programIo.cwd ||
-      env.HOME.startsWith(programIo.cwd + path.sep)
-    )
+    if (isWithin(programIo.cwd, env.HOME))
       throw Error(
         `${IO_UNAVAILABLE} Provider control home must be outside the untrusted project.`,
       );

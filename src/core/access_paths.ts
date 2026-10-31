@@ -6,6 +6,21 @@ const REGEX_LITERAL =
 const REGEX_SYNTAX = /\\.|[[\]()^$+*?|{}]/;
 const REGEX_ARGUMENT = /\.(?:match(?:All)?|replace(?:All)?|split|search)\(\s*$/;
 
+/** True when file is root itself or anywhere below it. */
+export function isWithin(
+  root: string,
+  file: string,
+  api: typeof path.posix = path,
+): boolean {
+  const relative = api.relative(root, file);
+  return (
+    relative === "" ||
+    (relative !== ".." &&
+      !relative.startsWith(".." + api.sep) &&
+      !api.isAbsolute(relative))
+  );
+}
+
 /** Advisory prompt scan. Native CLI permissions remain the enforcement boundary. */
 export function outsidePaths(text: string, roots: string[]): string[] {
   const found: string[] = [];
@@ -87,17 +102,11 @@ export function outsidePaths(text: string, roots: string[]): string[] {
         continue;
       const api = /^[A-Za-z]:[\\/]/.test(value) ? path.win32 : path.posix;
       if (
-        !roots.some((root) => {
-          if (/^[A-Za-z]:[\\/]/.test(root) !== (api === path.win32))
-            return false;
-          const relative = api.relative(api.resolve(root), api.resolve(value));
-          return (
-            relative === "" ||
-            (relative !== ".." &&
-              !relative.startsWith(`..${api.sep}`) &&
-              !api.isAbsolute(relative))
-          );
-        })
+        !roots.some(
+          (root) =>
+            /^[A-Za-z]:[\\/]/.test(root) === (api === path.win32) &&
+            isWithin(root, value, api),
+        )
       )
         found.push(value);
     }

@@ -10,6 +10,7 @@ import {
 } from "./verification_evidence";
 import { diagnosticMessage } from "./cli_diagnostics";
 import { sha } from "./values";
+import { isWithin } from "./access_paths";
 
 const MAX_BYTES = 2 * 1024 * 1024;
 type Snapshot = {
@@ -43,10 +44,7 @@ function captureFile(command: string, root: string): string | null {
   if (words?.length !== 1) return null;
   const file = path.resolve(root, words[0]!),
     relative = path.relative(path.join(root, "verification"), file);
-  return relative &&
-    !relative.startsWith(".." + path.sep) &&
-    relative !== ".." &&
-    !path.isAbsolute(relative)
+  return relative && isWithin(path.join(root, "verification"), file)
     ? file
     : null;
 }

@@ -3,6 +3,7 @@ import * as path from "node:path";
 import { inspectionSegments } from "./inspection_syntax";
 import { canonicalCommand, literalShellWords } from "./verification_evidence";
 import { obj, Obj } from "./values";
+import { isWithin } from "./access_paths";
 /** Keep completed native reads outside the bounded recent-event ring. */
 export class InspectionTracker {
   private readonly seen = new Set<string>();
@@ -19,13 +20,9 @@ export class InspectionTracker {
       this.seen.size >= 1000
     )
       return;
-    const relative = path.relative(this.cwd, path.resolve(this.cwd, file));
-    if (
-      relative &&
-      !path.isAbsolute(relative) &&
-      relative !== ".." &&
-      !relative.startsWith(".." + path.sep)
-    )
+    const resolved = path.resolve(this.cwd, file),
+      relative = path.relative(this.cwd, resolved);
+    if (relative && isWithin(this.cwd, resolved))
       this.seen.add(relative.split(path.sep).join("/"));
   }
   private command(text: unknown): void {

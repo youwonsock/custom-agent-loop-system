@@ -3,6 +3,7 @@ import * as path from "node:path";
 import * as os from "node:os";
 import { spawnSync } from "node:child_process";
 import { sha } from "./values";
+import { isWithin } from "./access_paths";
 
 const unavailable = (message: string): Error =>
   Error(`[AGENT_GRAPH_IO_UNAVAILABLE] ${message}`);
@@ -95,7 +96,7 @@ export function nestedProjectProblem(
   cwd: string,
   installRoot: string,
 ): string | null {
-  return cwd === installRoot || cwd.startsWith(installRoot + path.sep)
+  return isWithin(installRoot, cwd)
     ? `대상 프로젝트(${cwd})가 앱 설치 폴더(${installRoot}) 안에 있습니다. VM은 설치 폴더를 읽기 전용으로 올리므로 그 안의 프로젝트를 마운트할 수 없습니다. 설치 폴더 밖의 프로젝트를 선택하세요.`
     : null;
 }
@@ -157,9 +158,8 @@ export function prepareVmPolicy(
     if (/[,\0\r\n]/.test(p))
       throw unavailable("A mount path contains unsafe separators.");
   if (
-    cwd === "/opt/agent-runtime" ||
-    cwd.startsWith("/opt/agent-runtime/") ||
-    "/opt/agent-runtime".startsWith(cwd + path.sep)
+    isWithin("/opt/agent-runtime", cwd) ||
+    isWithin(cwd, "/opt/agent-runtime")
   )
     throw unavailable(
       "The project collides with the isolated runtime namespace.",
@@ -179,19 +179,13 @@ export function prepareVmPolicy(
 export function projectDirectory(root: string, name: string): string {
   const destination = path.resolve(root, name),
     relative = path.relative(root, destination);
-  if (
-    relative === ".." ||
-    relative.startsWith(".." + path.sep) ||
-    path.isAbsolute(relative)
-  )
+  if (!isWithin(root, destination))
     throw unavailable("Invalid project scratch path.");
   let current = root;
   for (const segment of relative.split(path.sep).filter(Boolean)) {
     current = path.join(current, segment);
     if (!fs.existsSync(current)) fs.mkdirSync(current, { mode: 0o700 });
-    const real = fs.realpathSync(current),
-      r = path.relative(root, real);
-    if (r === ".." || r.startsWith(".." + path.sep) || path.isAbsolute(r))
+    if (!isWithin(root, fs.realpathSync(current)))
       throw unavailable("Project output symlink leaves the target.");
   }
   return fs.realpathSync(destination);

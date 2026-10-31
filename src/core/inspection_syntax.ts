@@ -1,5 +1,6 @@
 import * as path from "node:path";
 import { canonicalCommand, literalShellWords } from "./verification_evidence";
+import { isWithin } from "./access_paths";
 
 export interface InspectionSegment {
   text: string;
@@ -125,13 +126,8 @@ export function normalizeInspectionCommand(
     let local = false;
     const args = words.map((word, i) => {
       if (!i || !path.isAbsolute(word)) return word;
+      if (!isWithin(cwd, word)) return word;
       const relative = path.relative(cwd, word);
-      if (
-        relative === ".." ||
-        relative.startsWith("../") ||
-        path.isAbsolute(relative)
-      )
-        return word;
       local = true;
       return relative || ".";
     });

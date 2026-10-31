@@ -17,6 +17,7 @@ import {
 } from "./program_io_vm";
 import { obj, Obj } from "./values";
 import { sha } from "./values";
+import { isWithin } from "./access_paths";
 
 export const IO_UNAVAILABLE = "[AGENT_GRAPH_IO_UNAVAILABLE]";
 export const IO_VIOLATION = "[AGENT_GRAPH_IO_VIOLATION]";
@@ -325,7 +326,7 @@ export function prepareProgramIo(options: {
     );
   fs.mkdirSync(requested, { recursive: true, mode: 0o700 });
   const directory = fs.realpathSync(requested);
-  if (directory === cwd || directory.startsWith(cwd + path.sep))
+  if (isWithin(cwd, directory))
     throw Error(
       `${IO_UNAVAILABLE} The broker/audit directory must be outside untrusted project writes.`,
     );
@@ -334,9 +335,7 @@ export function prepareProgramIo(options: {
     runtimeReadRoots = discoverIoRuntimeRoots();
   if (
     cwd === path.parse(cwd).root ||
-    runtimeReadRoots.some(
-      (root) => root === cwd || root.startsWith(cwd + path.sep),
-    )
+    runtimeReadRoots.some((root) => isWithin(cwd, root))
   )
     throw Error(
       `${IO_UNAVAILABLE} The project must be disjoint from the trusted runtime installation.`,
