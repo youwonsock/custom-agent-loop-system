@@ -15,6 +15,8 @@ export interface EventEvidence {
   changedFiles?: string[];
   /** Files the CLI's own permission check refused to let a write tool change. */
   deniedWrites?: string[];
+  /** Background processes the CLI left running, ended after it exited. */
+  reapedProcesses?: number[];
   completedSearches: number;
   maxTokens: number;
   assistantTextBytes: number;
