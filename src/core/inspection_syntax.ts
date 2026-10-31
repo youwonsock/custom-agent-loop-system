@@ -1,6 +1,7 @@
 import * as path from "node:path";
 import { canonicalCommand, literalShellWords } from "./verification_evidence";
 import { isWithin } from "./access_paths";
+import { STOP_SCAN, scanShell } from "./shell_scan";
 
 export interface InspectionSegment {
   text: string;
@@ -14,43 +15,45 @@ function stderrAt(text: string, index: number): string | undefined {
 export function inspectionSegments(text: string): InspectionSegment[] | null {
   if (/[\r\n]/.test(text)) return null;
   const parts: InspectionSegment[] = [];
-  let quote = "",
-    current = "";
-  for (let i = 0; i < text.length; i++) {
-    const c = text[i]!;
-    if (c === "\\" && quote !== "'") {
-      if (i + 1 >= text.length) return null;
-      current += c + text[++i];
-      continue;
-    }
-    if (quote) {
+  let current = "",
+    refused = false;
+  const open = scanShell(text, {
+    escape(next) {
+      if (next === undefined) refused = true;
+      else current += "\\" + next;
+    },
+    quoteMark(c) {
       current += c;
-      if (c === quote) quote = "";
-      continue;
-    }
-    if (c === "'" || c === '"') {
-      quote = c;
+    },
+    char(c, at, quote) {
+      if (quote) {
+        current += c;
+        return 0;
+      }
+      const stderr = stderrAt(text, at);
+      if (stderr) {
+        current += stderr;
+        return stderr.length - 1;
+      }
+      if (c === "&" || c === "|" || c === ";") {
+        const next = c !== ";" && text[at + 1] === c ? c + c : c;
+        if (
+          (c === "&" && next !== "&&") ||
+          !current.trim() ||
+          parts.length >= 32
+        ) {
+          refused = true;
+          return STOP_SCAN;
+        }
+        parts.push({ text: current.trim(), next });
+        current = "";
+        return next.length - 1;
+      }
       current += c;
-      continue;
-    }
-    const stderr = stderrAt(text, i);
-    if (stderr) {
-      current += stderr;
-      i += stderr.length - 1;
-      continue;
-    }
-    if (c === "&" || c === "|" || c === ";") {
-      const next = c !== ";" && text[i + 1] === c ? c + c : c;
-      if (c === "&" && next !== "&&") return null;
-      if (!current.trim() || parts.length >= 32) return null;
-      parts.push({ text: current.trim(), next });
-      current = "";
-      i += next.length - 1;
-      continue;
-    }
-    current += c;
-  }
-  if (quote || !current.trim()) return null;
+      return 0;
+    },
+  });
+  if (refused || open || !current.trim()) return null;
   parts.push({ text: current.trim(), next: "" });
   return parts;
 }
@@ -58,33 +61,24 @@ export function stripInspectionStderr(
   text: string,
   removed?: string[],
 ): string {
-  let output = "",
-    quote = "";
-  for (let i = 0; i < text.length; i++) {
-    const c = text[i]!;
-    if (c === "\\" && quote !== "'") {
+  let output = "";
+  scanShell(text, {
+    escape(next) {
+      output += "\\" + (next ?? "");
+    },
+    quoteMark(c) {
       output += c;
-      if (i + 1 < text.length) output += text[++i];
-      continue;
-    }
-    if (quote) {
+    },
+    char(c, at, quote) {
+      const stderr = quote ? undefined : stderrAt(text, at);
+      if (stderr) {
+        removed?.push(stderr);
+        return stderr.length - 1;
+      }
       output += c;
-      if (c === quote) quote = "";
-      continue;
-    }
-    if (c === "'" || c === '"') {
-      quote = c;
-      output += c;
-      continue;
-    }
-    const stderr = stderrAt(text, i);
-    if (stderr) {
-      removed?.push(stderr);
-      i += stderr.length - 1;
-      continue;
-    }
-    output += c;
-  }
+      return 0;
+    },
+  });
   return output;
 }
 const shellQuote = (word: string) =>
