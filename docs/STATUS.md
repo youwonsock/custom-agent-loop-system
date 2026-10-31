@@ -7,8 +7,8 @@
 | 항목 | 상태 |
 | --- | --- |
 | 기준 커밋 | 브랜치 `stage3/shared-rules` |
-| 원격 CI | PR #16 병합 전 3개 OS와 브라우저 통과. 이 표의 브랜치는 PR CI에서 확인한다 |
-| 로컬 검사 (macOS 26 arm64, 공식 Node 24.22.2) | `verify:platform` 10단계 통과: 단위 344개 중 342 통과·0 실패·Windows 전용 2 건너뜀, tooling 10/10, audit high 이상 0건(moderate 3건은 아래 "수용한 위험"). `verify:browser` 25/25. `verify:vm` 17/17 |
+| 원격 CI | PR #16, #17 병합 전 3개 OS와 브라우저 통과. 이 표의 브랜치는 PR CI에서 확인한다 |
+| 로컬 검사 (macOS 26 arm64, 공식 Node 24.22.2) | `verify:platform` 10단계 통과: 단위 346개 중 344 통과·0 실패·Windows 전용 2 건너뜀, tooling 10/10, audit high 이상 0건(moderate 3건은 아래 "수용한 위험"). `verify:browser` 25/25. `verify:vm` 17/17 |
 | 실제 모델 호출 | G4 기준선 통과. Claude Haiku는 145초에 `SUCCESS`, Kilo 무료 모델은 VM 명령 25/25 정상(자세한 내용은 VERIFICATION.md). 두 실행이 드러낸 제품 결함은 2단계에서 고쳤다. 고친 뒤의 재실행은 5단계 G4에서 한다 |
 
 ## 완료한 작업 (2026-10-29 ~ 10-30)
@@ -52,7 +52,7 @@
 | 성공 판정 | `commandSucceeded` 하나로 통합. PASS 경로의 환경 오류 예외 2곳은 앞선 게이트에서 이미 걸러지므로 동작 변화 없이 제거 | `0008744`, `0f45daf` |
 | 경로 포함 | `isWithin` 하나로 통합. `verification_sources`만 의도한 변경으로, Windows에서 대소문자만 다른 경로를 같은 폴더로 인정한다. 심볼릭 링크 검사는 유지하고 테스트를 추가했다 | `6ebd8bb`, `de35b8c` |
 | 셸 파서 | 인용·이스케이프 처리를 `shell_scan.ts`로 통합. 판단 규칙은 파서별 유지. 판정표 diff 0, 무작위 명령 40만 개에서 이전 파서와 결과 동일 | `592b358` |
-| 격리 오류 | 프로세스 내부 판정을 `IoUnavailable` 타입으로 변경. 메시지의 문자열 표식은 프로세스 경계를 위해 유지 | 이 단계 마지막 커밋 |
+| 격리 오류 | 프로세스 내부 판정을 `IoUnavailable` 타입으로 변경. 메시지의 문자열 표식은 프로세스 경계를 위해 유지 | `6ba3c95` |
 
 수용한 위험: `npm audit`의 moderate 3건(`@fastify/static` → `glob` → `minimatch`). `@fastify/static`은 `wildcard: false`일 때만 `glob`을 호출하고 이 앱은 그 옵션을 쓰지 않는다. `audit fix --force`는 주 버전을 낮추므로 적용하지 않는다.
 
