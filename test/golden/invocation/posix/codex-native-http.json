@@ -1,0 +1,148 @@
+{
+  "planning": {
+    "binary": "<NODE>",
+    "args": [
+      "<FIXTURE>",
+      "exec",
+      "--json",
+      "--model",
+      "golden-model",
+      "--skip-git-repo-check",
+      "--sandbox",
+      "read-only",
+      "-c",
+      "allow_login_shell=false",
+      "-c",
+      "shell_environment_policy.set.PATH=\"<PATH>\"",
+      "GOLDEN PROMPT"
+    ],
+    "env": {
+      "PATH": "<PATH>"
+    },
+    "transport": null
+  },
+  "implementation": {
+    "binary": "<NODE>",
+    "args": [
+      "<FIXTURE>",
+      "exec",
+      "--approve-for-me",
+      "--json",
+      "--model",
+      "golden-model",
+      "--skip-git-repo-check",
+      "-c",
+      "allow_login_shell=false",
+      "-c",
+      "shell_environment_policy.set.PATH=\"<PATH>\"",
+      "-c",
+      "sandbox_workspace_write.network_access=true",
+      "-c",
+      "features.network_proxy.enabled=true",
+      "-c",
+      "features.network_proxy.domains={\"localhost\"=\"allow\",\"127.0.0.1\"=\"allow\",\"::1\"=\"allow\"}",
+      "-c",
+      "features.network_proxy.allow_local_binding=true",
+      "GOLDEN PROMPT\nNative local-test networking is enabled through a proxy restricted to localhost/127.0.0.1/::1. Keep commands sandboxed. If a required registered Chromium verifier is blocked specifically by macOS Mach/bootstrap browser-launch permissions, use native automatic approval review for that EXACT foreground verifier command and explain the local headless browser requirement. This is automatic CLI review, not a human approval request. Never use danger-full-access startup flags, change global settings or approve arbitrary commands. If that review is denied, stop with BLOCKED_KIND: external and VERDICT: BLOCKED; do not bypass or rephrase the denied action."
+    ],
+    "env": {
+      "PATH": "<PATH>"
+    },
+    "transport": null
+  },
+  "test": {
+    "binary": "<NODE>",
+    "args": [
+      "<FIXTURE>",
+      "exec",
+      "--approve-for-me",
+      "--json",
+      "--model",
+      "golden-model",
+      "--skip-git-repo-check",
+      "-c",
+      "allow_login_shell=false",
+      "-c",
+      "shell_environment_policy.set.PATH=\"<PATH>\"",
+      "-c",
+      "sandbox_workspace_write.network_access=true",
+      "-c",
+      "features.network_proxy.enabled=true",
+      "-c",
+      "features.network_proxy.domains={\"localhost\"=\"allow\",\"127.0.0.1\"=\"allow\",\"::1\"=\"allow\"}",
+      "-c",
+      "features.network_proxy.allow_local_binding=true",
+      "GOLDEN PROMPT\nNative local-test networking is enabled through a proxy restricted to localhost/127.0.0.1/::1. Keep commands sandboxed. If a required registered Chromium verifier is blocked specifically by macOS Mach/bootstrap browser-launch permissions, use native automatic approval review for that EXACT foreground verifier command and explain the local headless browser requirement. This is automatic CLI review, not a human approval request. Never use danger-full-access startup flags, change global settings or approve arbitrary commands. If that review is denied, stop with BLOCKED_KIND: external and VERDICT: BLOCKED; do not bypass or rephrase the denied action."
+    ],
+    "env": {
+      "PATH": "<PATH>"
+    },
+    "transport": null
+  },
+  "review": {
+    "binary": "<NODE>",
+    "args": [
+      "<FIXTURE>",
+      "exec",
+      "--json",
+      "--model",
+      "golden-model",
+      "--skip-git-repo-check",
+      "--sandbox",
+      "read-only",
+      "-c",
+      "allow_login_shell=false",
+      "-c",
+      "shell_environment_policy.set.PATH=\"<PATH>\"",
+      "GOLDEN PROMPT"
+    ],
+    "env": {
+      "PATH": "<PATH>"
+    },
+    "transport": null
+  },
+  "approval": {
+    "binary": "<NODE>",
+    "args": [
+      "<FIXTURE>",
+      "exec",
+      "--json",
+      "--model",
+      "golden-model",
+      "--skip-git-repo-check",
+      "--sandbox",
+      "read-only",
+      "-c",
+      "allow_login_shell=false",
+      "-c",
+      "shell_environment_policy.set.PATH=\"<PATH>\"",
+      "GOLDEN PROMPT"
+    ],
+    "env": {
+      "PATH": "<PATH>"
+    },
+    "transport": null
+  },
+  "interrupt": {
+    "binary": "<NODE>",
+    "args": [
+      "<FIXTURE>",
+      "exec",
+      "--json",
+      "--model",
+      "golden-model",
+      "--skip-git-repo-check",
+      "--sandbox",
+      "read-only",
+      "-c",
+      "allow_login_shell=false",
+      "-c",
+      "shell_environment_policy.set.PATH=\"<PATH>\"",
+      "GOLDEN PROMPT"
+    ],
+    "env": {
+      "PATH": "<PATH>"
+    },
+    "transport": null
+  }
+}

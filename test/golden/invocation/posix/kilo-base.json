@@ -1,0 +1,162 @@
+{
+  "planning": {
+    "binary": "<NODE>",
+    "args": [
+      "<FIXTURE>",
+      "--print-logs",
+      "--log-level",
+      "INFO",
+      "run",
+      "--format",
+      "json",
+      "--model",
+      "golden-model",
+      "--dir",
+      "<TARGET>",
+      "GOLDEN PROMPT\n\nNative tool protocol: use the exact schema supplied by this CLI. Never send an empty tool input. After a schema error, correct the missing fields before trying again; do not repeat the same invalid call. Use only permitted read-only tools: read(filePath), glob(pattern), grep(pattern) to inspect target files and prior actual test evidence. exec, exec_command, execute, bash, write and edit are unavailable in this read-only role; never call them or request shell/write permissions. For planning, use the supplied browser command/schema contract without reading the platform implementation."
+    ],
+    "env": {
+      "KILO_CONFIG_CONTENT": {
+        "permission": {
+          "edit": "deny",
+          "bash": "deny"
+        }
+      },
+      "PATH": "<PATH>"
+    },
+    "transport": null
+  },
+  "implementation": {
+    "binary": "<NODE>",
+    "args": [
+      "<FIXTURE>",
+      "--print-logs",
+      "--log-level",
+      "INFO",
+      "run",
+      "--format",
+      "json",
+      "--model",
+      "golden-model",
+      "--dir",
+      "<TARGET>",
+      "GOLDEN PROMPT\n\nNative tool protocol: use the exact schema supplied by this CLI. Never send an empty tool input. After a schema error, correct the missing fields before trying again; do not repeat the same invalid call. Use bash with command (string) and description (string) for shell commands, never exec or exec_command. The write tool requires both filePath (absolute path) and content (string). Keep each write small; never send {}. Preserve existing tests and use bash to run them before deciding whether additional coverage is necessary. "
+    ],
+    "env": {
+      "KILO_CONFIG_CONTENT": {
+        "permission": {
+          "edit": "allow"
+        }
+      },
+      "PATH": "<PATH>"
+    },
+    "transport": null
+  },
+  "test": {
+    "binary": "<NODE>",
+    "args": [
+      "<FIXTURE>",
+      "--print-logs",
+      "--log-level",
+      "INFO",
+      "run",
+      "--format",
+      "json",
+      "--model",
+      "golden-model",
+      "--dir",
+      "<TARGET>",
+      "GOLDEN PROMPT\n\nNative tool protocol: use the exact schema supplied by this CLI. Never send an empty tool input. After a schema error, correct the missing fields before trying again; do not repeat the same invalid call. Use bash with command (string) and description (string) for shell commands, never exec or exec_command. The write tool requires both filePath (absolute path) and content (string). Keep each write small; never send {}. Preserve existing tests and use bash to run them before deciding whether additional coverage is necessary. "
+    ],
+    "env": {
+      "KILO_CONFIG_CONTENT": {
+        "permission": {
+          "edit": "allow"
+        }
+      },
+      "PATH": "<PATH>"
+    },
+    "transport": null
+  },
+  "review": {
+    "binary": "<NODE>",
+    "args": [
+      "<FIXTURE>",
+      "--print-logs",
+      "--log-level",
+      "INFO",
+      "run",
+      "--format",
+      "json",
+      "--model",
+      "golden-model",
+      "--dir",
+      "<TARGET>",
+      "GOLDEN PROMPT\n\nNative tool protocol: use the exact schema supplied by this CLI. Never send an empty tool input. After a schema error, correct the missing fields before trying again; do not repeat the same invalid call. Use only permitted read-only tools: read(filePath), glob(pattern), grep(pattern) to inspect target files and prior actual test evidence. exec, exec_command, execute, bash, write and edit are unavailable in this read-only role; never call them or request shell/write permissions. For planning, use the supplied browser command/schema contract without reading the platform implementation."
+    ],
+    "env": {
+      "KILO_CONFIG_CONTENT": {
+        "permission": {
+          "edit": "deny",
+          "bash": "deny"
+        }
+      },
+      "PATH": "<PATH>"
+    },
+    "transport": null
+  },
+  "approval": {
+    "binary": "<NODE>",
+    "args": [
+      "<FIXTURE>",
+      "--print-logs",
+      "--log-level",
+      "INFO",
+      "run",
+      "--format",
+      "json",
+      "--model",
+      "golden-model",
+      "--dir",
+      "<TARGET>",
+      "GOLDEN PROMPT\n\nNative tool protocol: use the exact schema supplied by this CLI. Never send an empty tool input. After a schema error, correct the missing fields before trying again; do not repeat the same invalid call. Use only permitted read-only tools: read(filePath), glob(pattern), grep(pattern) to inspect target files and prior actual test evidence. exec, exec_command, execute, bash, write and edit are unavailable in this read-only role; never call them or request shell/write permissions. For planning, use the supplied browser command/schema contract without reading the platform implementation."
+    ],
+    "env": {
+      "KILO_CONFIG_CONTENT": {
+        "permission": {
+          "edit": "deny",
+          "bash": "deny"
+        }
+      },
+      "PATH": "<PATH>"
+    },
+    "transport": null
+  },
+  "interrupt": {
+    "binary": "<NODE>",
+    "args": [
+      "<FIXTURE>",
+      "--print-logs",
+      "--log-level",
+      "INFO",
+      "run",
+      "--format",
+      "json",
+      "--model",
+      "golden-model",
+      "--dir",
+      "<TARGET>",
+      "GOLDEN PROMPT\n\nNative tool protocol: use the exact schema supplied by this CLI. Never send an empty tool input. After a schema error, correct the missing fields before trying again; do not repeat the same invalid call. Use only permitted read-only tools: read(filePath), glob(pattern), grep(pattern) to inspect target files and prior actual test evidence. exec, exec_command, execute, bash, write and edit are unavailable in this read-only role; never call them or request shell/write permissions. For planning, use the supplied browser command/schema contract without reading the platform implementation."
+    ],
+    "env": {
+      "KILO_CONFIG_CONTENT": {
+        "permission": {
+          "edit": "deny",
+          "bash": "deny"
+        }
+      },
+      "PATH": "<PATH>"
+    },
+    "transport": null
+  }
+}
