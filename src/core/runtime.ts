@@ -70,7 +70,7 @@ import { sessionBudgetReason, pauseForBudget } from "./session_budget";
 import { stageDeadline, stageBudgetReason } from "./stage_budget";
 import { unscopedTerminationEvent } from "./process_command_policy";
 import { SCOPE_VIOLATION } from "./native_scope";
-import { IO_UNAVAILABLE, IO_VIOLATION } from "./program_io";
+import { IO_VIOLATION } from "./program_io";
 import { nodeTestScript } from "./node_test_policy";
 import { RunPolicy, runPolicy } from "./run_policy";
 import {
@@ -83,6 +83,7 @@ import {
   currentVerificationSources,
 } from "./test_source_guard";
 import { isAuditRole, isReadOnly, isVerifierRole } from "../shared/node_roles";
+import { IoUnavailable } from "./program_io_errors";
 
 export interface RuntimeHooks {
   onState?: (state: SessionState) => void;
@@ -706,7 +707,7 @@ export class GraphRuntime {
           this.invocationOptions(stage, id, recoveryMessage, nextResume),
         );
       } catch (error) {
-        if (!messageOf(error).includes(IO_UNAVAILABLE)) throw error;
+        if (!(error instanceof IoUnavailable)) throw error;
         return this.halt(visit, "BLOCKED", messageOf(error), {
           pauseVisit: true,
           clearRecovery: false,

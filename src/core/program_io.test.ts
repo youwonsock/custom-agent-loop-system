@@ -13,7 +13,6 @@ import {
   ProgramIoTracker,
   ProgramIoPolicy,
   programIoEvidenceProblem,
-  IO_UNAVAILABLE,
 } from "./program_io";
 import { kiloCheckHooks } from "./kilo_protocol";
 import { InspectionTracker } from "./inspection_evidence";
@@ -24,6 +23,7 @@ import { ProcessSupervisor } from "./process_supervisor";
 import { buildInvocation } from "./invocation";
 import { preExecutionDenied } from "./event_evidence";
 import { ToolFailureTracker } from "./tool_failures";
+import { IO_UNAVAILABLE } from "./program_io_errors";
 import { nestedProjectProblem, vmRuntimeStatus } from "./program_io_vm";
 
 const mac = process.platform === "darwin",

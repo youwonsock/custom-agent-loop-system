@@ -7,13 +7,10 @@ import * as os from "node:os";
 import * as fs from "node:fs";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import {
-  ProgramIoPolicy,
-  prepareProgramIo,
-  IO_UNAVAILABLE,
-} from "./program_io";
+import { ProgramIoPolicy, prepareProgramIo } from "./program_io";
 import { isReadOnly } from "../shared/node_roles";
 import { isWithin } from "./access_paths";
+import { IoUnavailable } from "./program_io_errors";
 const execute = promisify(execFile);
 export async function buildInvocation(
   c: LocalConnection,
@@ -70,12 +67,12 @@ export async function buildInvocation(
   let programIo: ProgramIoPolicy | undefined;
   if (c.type === "kilo" && opts.programIoGuard) {
     if (!opts.scopeRoots?.length)
-      throw Error(
-        `${IO_UNAVAILABLE} Program isolation requires the native target boundary guard.`,
+      throw new IoUnavailable(
+        `Program isolation requires the native target boundary guard.`,
       );
     if (opts.allowedPaths.length)
-      throw Error(
-        `${IO_UNAVAILABLE} Strict program isolation requires a single target project.`,
+      throw new IoUnavailable(
+        `Strict program isolation requires a single target project.`,
       );
     for (const name of [
       "kilo.json",
@@ -84,8 +81,8 @@ export async function buildInvocation(
       "opencode.jsonc",
     ])
       if (fs.existsSync(path.join("/Library/Application Support/kilo", name)))
-        throw Error(
-          `${IO_UNAVAILABLE} Managed native tool configuration requires a supported isolated integration.`,
+        throw new IoUnavailable(
+          `Managed native tool configuration requires a supported isolated integration.`,
         );
     programIo = prepareProgramIo({
       cwd: opts.cwd,
@@ -107,8 +104,8 @@ export async function buildInvocation(
     fs.mkdirSync(env.HOME, { recursive: true, mode: 0o700 });
     env.HOME = fs.realpathSync(env.HOME);
     if (isWithin(programIo.cwd, env.HOME))
-      throw Error(
-        `${IO_UNAVAILABLE} Provider control home must be outside the untrusted project.`,
+      throw new IoUnavailable(
+        `Provider control home must be outside the untrusted project.`,
       );
     env.XDG_CONFIG_HOME = path.join(env.HOME, ".config");
     env.XDG_CACHE_HOME = path.join(env.HOME, ".cache");
@@ -192,8 +189,8 @@ export async function buildInvocation(
         );
         if (stdout.trim() !== "codex-cli 0.162.1") throw Error();
       } catch {
-        throw Error(
-          `${IO_UNAVAILABLE} The scoped local HTTP adapter requires verified codex-cli 0.162.1; no model invocation was started. Revalidate the proxy before using another CLI version.`,
+        throw new IoUnavailable(
+          `The scoped local HTTP adapter requires verified codex-cli 0.162.1; no model invocation was started. Revalidate the proxy before using another CLI version.`,
         );
       }
       // Invocation-local command networking: local test servers only. The

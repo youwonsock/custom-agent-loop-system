@@ -6,7 +6,6 @@ import {
   ioSign,
   ioVerify,
   programEnvironment,
-  IO_UNAVAILABLE,
 } from "./program_io";
 import {
   imageDigest,
@@ -16,6 +15,7 @@ import {
   containerHostEnvironment,
 } from "./program_io_vm";
 import { sha } from "./values";
+import { IoUnavailable } from "./program_io_errors";
 
 /** Trusted host broker. Model text executes only in the selected confined child. */
 async function main(): Promise<void> {
@@ -30,7 +30,7 @@ async function main(): Promise<void> {
     sha(policy.profile) !== policy.profileDigest ||
     process.platform !== "darwin"
   )
-    throw Error(`${IO_UNAVAILABLE} Missing/expired trusted program policy.`);
+    throw new IoUnavailable(`Missing/expired trusted program policy.`);
   const payload = JSON.parse(
     Buffer.from(process.argv[2] ?? "", "base64url").toString(),
   );
@@ -40,7 +40,7 @@ async function main(): Promise<void> {
     typeof payload.command !== "string" ||
     !ioVerify(payload, process.argv[3], policy)
   )
-    throw Error(`${IO_UNAVAILABLE} Invalid command authorization.`);
+    throw new IoUnavailable(`Invalid command authorization.`);
   const record = (data: Record<string, unknown>) => {
     const full = {
       ...data,
@@ -81,15 +81,15 @@ async function main(): Promise<void> {
         }
         if (dead && owner.policyId === policy.id) {
           if (policy.vm && !removeVm(policy.vm, owner.containerName))
-            throw Error(`${IO_UNAVAILABLE} Orphan VM cleanup failed.`);
+            throw new IoUnavailable(`Orphan VM cleanup failed.`);
           fs.rmSync(lock, { recursive: true });
           continue;
         }
       } catch (error) {
-        if (String(error).includes(IO_UNAVAILABLE)) throw error;
+        if (error instanceof IoUnavailable) throw error;
       }
       if (Date.now() > policy.expiresAt)
-        throw Error(`${IO_UNAVAILABLE} Command initialization lock expired.`);
+        throw new IoUnavailable(`Command initialization lock expired.`);
       await new Promise((resolve) => setTimeout(resolve, 100));
     }
   }
@@ -106,7 +106,7 @@ async function main(): Promise<void> {
       imageDigest(policy.vm.binary, policy.vm.image, policy.vm.controlHome) !==
         policy.vm.imageDigest
     )
-      throw Error(`${IO_UNAVAILABLE} Runtime image identity changed.`);
+      throw new IoUnavailable(`Runtime image identity changed.`);
     const args = policy.vm
       ? vmCommandArguments(
           policy.vm,

@@ -6,7 +6,7 @@
 
 | 항목 | 상태 |
 | --- | --- |
-| 기준 커밋 | `3368c0d` (브랜치 `stage2/small-corrections`) |
+| 기준 커밋 | 브랜치 `stage3/shared-rules` |
 | 원격 CI | PR #16 병합 전 3개 OS와 브라우저 통과. 이 표의 브랜치는 PR CI에서 확인한다 |
 | 로컬 검사 (macOS 26 arm64, 공식 Node 24.22.2) | `verify:platform` 10단계 통과: 단위 344개 중 342 통과·0 실패·Windows 전용 2 건너뜀, tooling 10/10, audit high 이상 0건(moderate 3건은 아래 "수용한 위험"). `verify:browser` 25/25. `verify:vm` 17/17 |
 | 실제 모델 호출 | G4 기준선 통과. Claude Haiku는 145초에 `SUCCESS`, Kilo 무료 모델은 VM 명령 25/25 정상(자세한 내용은 VERIFICATION.md). 두 실행이 드러낸 제품 결함은 2단계에서 고쳤다. 고친 뒤의 재실행은 5단계 G4에서 한다 |
@@ -43,6 +43,17 @@
 | 읽기 증거 | `&&`·`;` 읽기 묶음과 `echo`·`printf` 구분자를 인정. 종료 코드는 마지막 `;` 뒤만 증명하므로 그 앞의 읽기는 실제로 읽을 수 있는 일반 파일일 때만 인정한다. 파이프·리디렉션·다른 명령이 섞이면 인정하지 않는다 | `8f160c4` |
 | VM 오류 | 대상 프로젝트가 앱 설치 폴더 안에 있으면 `errno 30` 대신 원인을 알린다. 모델 호출 전에 멈추는 것은 같다 | `3368c0d` |
 
+2026-10-31 (브랜치 `stage3/shared-rules`, 통합 계획 3단계):
+
+| 영역 | 내용 | 커밋 |
+| --- | --- | --- |
+| 역할 | 역할 집합을 `shared/node_roles.ts`로 이동. `completion`의 `invocation` 의존 제거 | `d41672d` |
+| 도우미 | `obj`·`isObj`·`sha`를 `values.ts`로 통합. `node_test_worker`는 배열도 순회하고 Kilo 플러그인 코드는 CLI 프로세스 안에서 실행되므로 자체 사본을 유지한다 | `5ca7f4e` |
+| 성공 판정 | `commandSucceeded` 하나로 통합. PASS 경로의 환경 오류 예외 2곳은 앞선 게이트에서 이미 걸러지므로 동작 변화 없이 제거 | `0008744`, `0f45daf` |
+| 경로 포함 | `isWithin` 하나로 통합. `verification_sources`만 의도한 변경으로, Windows에서 대소문자만 다른 경로를 같은 폴더로 인정한다. 심볼릭 링크 검사는 유지하고 테스트를 추가했다 | `6ebd8bb`, `de35b8c` |
+| 셸 파서 | 인용·이스케이프 처리를 `shell_scan.ts`로 통합. 판단 규칙은 파서별 유지. 판정표 diff 0, 무작위 명령 40만 개에서 이전 파서와 결과 동일 | `592b358` |
+| 격리 오류 | 프로세스 내부 판정을 `IoUnavailable` 타입으로 변경. 메시지의 문자열 표식은 프로세스 경계를 위해 유지 | 이 단계 마지막 커밋 |
+
 수용한 위험: `npm audit`의 moderate 3건(`@fastify/static` → `glob` → `minimatch`). `@fastify/static`은 `wildcard: false`일 때만 `glob`을 호출하고 이 앱은 그 옵션을 쓰지 않는다. `audit fix --force`는 주 버전을 낮추므로 적용하지 않는다.
 
 유지하기로 결정한 것: stateVersion 3 스냅샷 읽기와 수동 그래프의 평문 보고 형식은 현재 기능이다. 마이그레이션 코드는 없었다.
@@ -71,17 +82,6 @@
 | `.git/config`의 빈 `user.name` 항목 정리. 전역 설정을 가려 `git commit`이 실패하며, 이 브랜치는 `-c user.name=SC_Logan`으로 커밋했다 | 옵션 없이 커밋 가능 |
 
 Codex는 사용자 결정으로 G4에서 제외했다. Codex 경로는 가짜 이벤트로만 검증되었고, 실제 Codex가 명령을 셸로 감싸는지도 확인하지 못했다.
-
-### 3단계: 규칙 공통화
-
-| 작업 | 유형 | 주의점 |
-| --- | --- | --- |
-| 역할 집합과 `isReadOnly`를 공용 모듈로 이동(약 19곳) | 불변 | `completion`의 `invocation` 의존 제거 |
-| `obj`/`object`, `sha` 도우미 통합 | 불변 | `node_test_worker`의 배열 허용 변형은 호출부 확인 후 판단 |
-| 명령 성공 판정을 함수 하나로 통합(현재 7곳) | 불변 후 변경 | 조건 차이를 인자로 보존해 모은 뒤, 차이 제거는 항목별 별도 커밋 |
-| 경로 포함 판정 통합(`path.relative` 방식과 접두사 방식) | 불변 후 변경 | 심볼릭 링크 검사 유지, Windows CI 필수 |
-| 공통 토크나이저로 셸 파서 3개 통합 | 불변 | 판단 규칙은 파서별 유지, 판정표 diff 0 |
-| 프로세스 내부 `IO_UNAVAILABLE`을 타입 오류로 변경 | 불변 | 프로세스 경계의 문자열 표식은 유지 |
 
 ### 4단계: 판정·실행 엔진 분해
 

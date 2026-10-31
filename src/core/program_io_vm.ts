@@ -4,9 +4,9 @@ import * as os from "node:os";
 import { spawnSync } from "node:child_process";
 import { sha } from "./values";
 import { isWithin } from "./access_paths";
+import { IoUnavailable } from "./program_io_errors";
 
-const unavailable = (message: string): Error =>
-  Error(`[AGENT_GRAPH_IO_UNAVAILABLE] ${message}`);
+const unavailable = (message: string) => new IoUnavailable(message);
 export interface VmRuntime {
   binary: string;
   image: string;
