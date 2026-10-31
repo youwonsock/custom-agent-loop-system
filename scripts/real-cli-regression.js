@@ -5,6 +5,7 @@
 //   node scripts/real-cli-regression.js kilo   [--model <text in the model ID>]
 // Results stay in artifacts/real-cli/. Pass criteria are in docs/STATUS.md (G4).
 const fs = require("node:fs");
+const os = require("node:os");
 const path = require("node:path");
 const crypto = require("node:crypto");
 const { execFileSync } = require("node:child_process");
@@ -119,7 +120,12 @@ async function main() {
     throw new Error("Usage: real-cli-regression.js claude|kilo [--model text]");
   const stamp = new Date().toISOString().replace(/[:.]/g, "-"),
     output = path.join(repository, "artifacts/real-cli", `${profile}-${stamp}`),
-    target = path.join(output, "target");
+    // Outside the repository: the VM mounts this checkout read-only, so a target
+    // nested inside it cannot be mounted and the run stops before any model call.
+    target = path.join(
+      fs.mkdtempSync(path.join(os.tmpdir(), "agent-graph-real-cli-")),
+      "target",
+    );
   fs.mkdirSync(output, { recursive: true });
   fs.cpSync(path.join(repository, "test/real-cli/slugify"), target, {
     recursive: true,
@@ -196,6 +202,7 @@ async function main() {
     model: model.id,
     pricing: model.pricing ?? null,
     session: state.id,
+    target,
     seconds: Math.round((Date.now() - started) / 1000),
     pass: false,
     ...summarize(state),
