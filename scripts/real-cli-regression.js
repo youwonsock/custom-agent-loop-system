@@ -152,11 +152,13 @@ function passed(profile, scenario, summary) {
     summary.status !== "BLOCKED"
   );
 }
+// A sandboxed Bash tool refuses local ports, so the app under test could not start.
+const LOCAL_SERVER = { sandbox: { network: { allowLocalBinding: true } } };
 function allowListWrapper(output, installed, tools) {
   const wrapper = path.join(output, "claude-allow-list.sh");
   fs.writeFileSync(
     wrapper,
-    `#!/bin/sh\nexec ${JSON.stringify(installed)} "$@" --allowedTools ${JSON.stringify(tools.join(","))}\n`,
+    `#!/bin/sh\nexec ${JSON.stringify(installed)} "$@" --allowedTools ${JSON.stringify(tools.join(","))} --settings ${JSON.stringify(JSON.stringify(LOCAL_SERVER))}\n`,
     { mode: 0o755 },
   );
   return wrapper;

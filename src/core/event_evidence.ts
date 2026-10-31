@@ -242,12 +242,10 @@ export class MutationTracker {
       this.tool(e.tool_use_id, "", null, "denied", true);
     } else if (type === "result" && Array.isArray(e.permission_denials)) {
       for (const denied of e.permission_denials) {
-        const { tool_use_id, tool_name, tool_input } = obj(denied);
+        const { tool_use_id, tool_input } = obj(denied);
         this.tool(tool_use_id, "", null, "denied", true);
-        if (mutatingTool(String(tool_name ?? ""), tool_input))
-          this.deniedWrites.push(
-            String(obj(tool_input).file_path ?? tool_name),
-          );
+        const file = obj(tool_input).file_path;
+        if (typeof file === "string") this.deniedWrites.push(file);
       }
     }
   }
