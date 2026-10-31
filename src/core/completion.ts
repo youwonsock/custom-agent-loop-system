@@ -361,8 +361,7 @@ export function validateCompletion(
       automation?.browserVerification &&
       !commands.some(
         (c) =>
-          commandSucceeded(c, { ignoreEnvironment: true }) &&
-          isBrowserVerificationCommand(c.command, cwd),
+          commandSucceeded(c) && isBrowserVerificationCommand(c.command, cwd),
       )
     )
       return fail(
@@ -385,9 +384,7 @@ export function validateCompletion(
     });
     if (
       !commands.some(
-        (c) =>
-          commandSucceeded(c, { ignoreEnvironment: true }) &&
-          isVerificationCommand(c.command, cwd),
+        (c) => commandSucceeded(c) && isVerificationCommand(c.command, cwd),
       ) ||
       unverified.length
     )
