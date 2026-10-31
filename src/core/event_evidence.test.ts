@@ -309,3 +309,20 @@ test("command wrappers preserve write detection while stream-only tee remains no
   });
   assert.equal(tracker.finish(), true);
 });
+
+test("permission denials name only refused file tools", () => {
+  const tracker = new MutationTracker();
+  tracker.observe({
+    type: "result",
+    permission_denials: [
+      {
+        tool_name: "Write",
+        tool_use_id: "a",
+        tool_input: { file_path: "server.mjs" },
+      },
+      { tool_name: "Bash", tool_use_id: "c", tool_input: { command: "rm x" } },
+    ],
+  });
+  assert.deepEqual(tracker.deniedWrites, ["server.mjs"]);
+  assert.equal(tracker.finish(), false);
+});

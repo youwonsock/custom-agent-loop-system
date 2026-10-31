@@ -44,6 +44,7 @@ import { ToolFailureTracker } from "./tool_failures";
 import { InspectionTracker } from "./inspection_evidence";
 import { NativeScopeTracker, SCOPE_VIOLATION } from "./native_scope";
 import { ProgramIoPolicy, ProgramIoTracker } from "./program_io";
+import { DescendantWatch } from "./descendant_watch";
 import { terminateProcessTreeBounded } from "./process_lifecycle";
 import type { Activity } from "../shared/execution_types";
 // Preserve imports used by existing integrations.
@@ -99,6 +100,8 @@ export interface ProcessSupervisorOptions {
   programIoPolicy?: ProgramIoPolicy;
   pollPolicy?: () => Promise<string | null>;
   eventPolicy?: (event: AnyObj, evidence: EventEvidence) => string | null;
+  /** End background processes the CLI leaves behind when it exits. */
+  reapDescendants?: boolean;
 }
 
 export interface SupervisorResult {
@@ -210,7 +213,11 @@ export class ProcessSupervisor {
         autoInjected: [],
       };
     }
-    return new SupervisedAttempt(
+    const descendants = options.reapDescendants
+      ? new DescendantWatch(child.pid)
+      : null;
+    descendants?.start();
+    const result = await new SupervisedAttempt(
       options,
       child,
       rawLog,
@@ -218,6 +225,9 @@ export class ProcessSupervisor {
       ioTracker,
       startedAt,
     ).result();
+    const reaped = await descendants?.reap(options.killTimeoutMs);
+    if (reaped?.length) result.evidence.reapedProcesses = reaped;
+    return result;
   }
 }
 /** One running child: its output parsing, evidence, timers and how it ended. */
@@ -431,6 +441,8 @@ class SupervisedAttempt {
       evidence.changedFiles = this.mutations.changedFiles.map((file) =>
         path.relative(options.cwd, path.resolve(options.cwd, file)),
       );
+    if (this.mutations.deniedWrites.length)
+      evidence.deniedWrites = [...new Set(this.mutations.deniedWrites)];
     const terminal = this.diagnosticCollector.diagnostics.terminalError;
     if (
       terminal &&

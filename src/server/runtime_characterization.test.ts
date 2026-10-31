@@ -329,3 +329,17 @@ test(
     assert.match(state.statusReason ?? "", /소스 읽기가 차단/);
   },
 );
+
+test("a write refused by the CLI waits for the user and says so instead of asking for the format again", async (t) => {
+  const s = await setup(t);
+  const graph = await implementationFirst(s);
+  const state = await settle(
+    s,
+    await start(s, graph, "fixture:denied-write build the app"),
+  );
+  assert.equal(state.status, "WAITING_USER");
+  assert.match(state.statusReason ?? "", /쓰기 권한을 거부.*artifact\.txt/);
+  const [attempt, ...rest] = state.visits.at(-1)!.attempts;
+  assert.equal(attempt!.failureKind, "permission");
+  assert.deepEqual(rest, []);
+});

@@ -504,6 +504,19 @@ if (args[0] === "debug" && args[1] === "config") {
     if (productBlocked)
       text = evidence + "\nBLOCKED_KIND: product\nVERDICT: BLOCKED";
     emit({ type: "thread.started", thread_id: "fixture-session" });
+    if (type === "implementation" && prompt.includes("fixture:denied-write")) {
+      emit({
+        type: "result",
+        permission_denials: [
+          {
+            tool_name: "Write",
+            tool_use_id: "denied-write",
+            tool_input: { file_path: "artifact.txt" },
+          },
+        ],
+      });
+      return;
+    }
     if (
       ["review", "approval"].includes(type) &&
       prompt.includes(`fixture:${type}-check-fail-once`) &&
