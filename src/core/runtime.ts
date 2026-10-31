@@ -9,11 +9,8 @@ import * as path from "node:path";
 import {
   AgentNode,
   AttemptRecord,
-  ExecutionBinding,
-  LocalConnection,
   ModelPricing,
   NodeVisit,
-  NodeTestProof,
   SessionState,
   SessionStatus,
 } from "../shared/domain";
@@ -23,7 +20,6 @@ import {
   checkProcessLiveness,
   collectRecoveredChildPids,
   delay,
-  AttemptFailure,
 } from "./resilience";
 import {
   claimNextControlRequest,
@@ -46,15 +42,10 @@ import {
   parseRequirementEvidence,
   retainRequirementEvidence,
 } from "./requirement_ledger";
-import { validateCompletion, Completion } from "./completion";
+import { Completion } from "./completion";
 import { AppError, messageOf } from "./errors";
 import { outsidePaths } from "./access_paths";
-import {
-  currentTestProof,
-  currentNodeTestProof,
-  mergeProjectReceipts,
-} from "./verification_evidence";
-import { readNodeTestProof } from "./node_test_verification";
+import { mergeProjectReceipts } from "./verification_evidence";
 import { modelPricing } from "./model_pricing";
 import { productionHashes } from "./verification_sources";
 import { successBlockers } from "./success_gate";
@@ -71,10 +62,8 @@ import {
 import { sessionBudgetReason, pauseForBudget } from "./session_budget";
 import { stageDeadline, stageBudgetReason } from "./stage_budget";
 import { unscopedTerminationEvent } from "./process_command_policy";
-import { SCOPE_VIOLATION } from "./native_scope";
-import { IO_VIOLATION } from "./program_io";
 import { nodeTestScript } from "./node_test_policy";
-import { RunPolicy, runPolicy } from "./run_policy";
+import { runPolicy } from "./run_policy";
 import {
   TEST_POLICY,
   TEST_FAILED,
@@ -86,151 +75,39 @@ import {
 } from "./test_source_guard";
 import { isAuditRole, isReadOnly, isVerifierRole } from "../shared/node_roles";
 import { IoUnavailable } from "./program_io_errors";
+import {
+  AttemptRun,
+  Completed,
+  Invocation,
+  InvocationOptions,
+  Stage,
+  STOPPED,
+  Stopped,
+  completed,
+  cycleAttempts,
+  failedPreparation,
+} from "./runtime_steps";
+import {
+  GateHost,
+  attemptFailure,
+  evidenceGates,
+  judge,
+  recoverOrPause,
+} from "./runtime_gates";
 
 export interface RuntimeHooks {
   onState?: (state: SessionState) => void;
   onLog?: (visitId: string, attemptId: string, text: string) => void;
 }
-type Invocation = Awaited<ReturnType<typeof buildInvocation>>;
-type InvocationOptions = Parameters<typeof buildInvocation>[3];
-/** Fixed for one execute() call: the node, its CLI binding and this cycle's limits. */
-interface Stage {
-  node: AgentNode;
-  visit: NodeVisit;
-  binding: ExecutionBinding;
-  connection: LocalConnection;
-  policy: RunPolicy;
-  /** Source hashes taken before an automated test role runs. */
-  sourceInputs: Record<string, string> | null;
-  deadline: number;
-  normalLimit: number;
-  completionLimit: number;
-}
-/** One supervised CLI attempt and what its guard callbacks and gates found. */
-interface AttemptRun {
-  attempt: AttemptRecord;
-  result: SupervisorResult;
-  policyReason: string | null;
-  sourceChanges: string[];
-  captures: Awaited<ReturnType<typeof prepareVerificationCaptures>>;
-  /** Frozen-test source hashes re-read after the CLI exited. */
-  guardedInputs?: Record<string, string>;
-  /** Set once the completion was parsed. */
-  completion?: Completion;
-}
-/** The session already stopped at this visit; nothing is left to judge. */
-interface Stopped {
-  step: "stopped";
-}
-/** The stage reached a result the visit should record. */
-interface Completed {
-  step: "completed";
-  completion: Completion;
-}
-/** Nothing decided yet; the next step of the attempt looks. */
-interface Undecided {
-  step: "undecided";
-}
-const STOPPED: Stopped = { step: "stopped" };
-const UNDECIDED: Undecided = { step: "undecided" };
-const completed = (completion: Completion): Completed => ({
-  step: "completed",
-  completion,
-});
-const cycleAttempts = (visit: NodeVisit) =>
-  visit.attempts.filter(
-    (a) => Date.parse(a.startedAt) >= Date.parse(visit.cycleStartedAt),
-  );
-const contextMessage = ({ node, connection }: Stage, message: string) =>
-  `[${node.name} · ${connection.label}] ${message}`;
-/** A test stage that fails before any CLI call because its checks cannot run. */
-const failedPreparation = (
-  reason: string,
-  explanation: string,
-): Completion => ({
-  valid: true,
-  reason,
-  failureKind: null,
-  output: `${explanation}\nVERDICT: FAIL\n[PHASE_DONE]`,
-  verdict: "FAIL",
-  plans: [],
-  researchBlocked: false,
-  environmentBlocked: null,
-});
-export function classifyFailure(
-  result: SupervisorResult,
-  completion: Pick<Completion, "reason" | "failureKind">,
-): AttemptFailure {
-  const preserved =
-    result.failureKind &&
-    !["process_exit", "incomplete_response"].includes(result.failureKind);
-  const diagnostic =
-    result.diagnostics.terminalError ??
-    (result.exitCode !== 0 || result.timedOut
-      ? result.diagnostics.plainError
-      : null);
-  const kind =
-    result.outcome === "orphaned_process"
-      ? "orphaned_process"
-      : result.cancelled
-        ? "cancelled"
-        : preserved
-          ? result.failureKind!
-          : result.timedOut
-            ? "phase_timeout"
-            : diagnostic
-              ? diagnostic.kind
-              : result.exitCode !== 0 || result.outcome !== "succeeded"
-                ? "process_exit"
-                : (completion.failureKind ?? "incomplete_response");
-  const detail =
-    !preserved && diagnostic
-      ? diagnostic.message
-      : (completion.reason ?? result.failureMessage);
-  let message =
-    kind === "auth"
-      ? `CLI 인증이 필요합니다. 해당 CLI에서 로그인한 뒤 재개하세요.${diagnostic ? ` (${diagnostic.message})` : ""}`
-      : kind === "model_unavailable"
-        ? `CLI에서 선택한 모델을 실행할 수 없습니다. 모델 권한과 설정을 확인하세요.${diagnostic ? ` (${diagnostic.message})` : ""}`
-        : (detail ?? `CLI 실패 (${result.exitCode})`);
-  if (
-    preserved &&
-    result.timedOut &&
-    diagnostic &&
-    diagnostic.kind !== "process_exit"
-  )
-    message += `\nLast observed CLI error: ${diagnostic.message}`;
-  return {
-    kind,
-    message,
-    retryable:
-      ![
-        "auth",
-        "model_unavailable",
-        "permission",
-        "role_violation",
-        "orphaned_process",
-        "cancelled",
-      ].includes(kind) &&
-      !["auth", "permission", "model_unavailable"].includes(
-        diagnostic?.kind ?? "",
-      ),
-    occurredAt: new Date().toISOString(),
-    attemptId: null,
-    role: null,
-    phase: null,
-    exitCode: result.exitCode,
-    cliSessionId: result.cliSessionId,
-  };
-}
 export { outsidePaths } from "./access_paths";
-export class GraphRuntime {
-  private state!: SessionState;
+export { classifyFailure } from "./runtime_gates";
+export class GraphRuntime implements GateHost {
+  state!: SessionState;
   private owner!: SessionOwnership;
   private abort = new AbortController();
   private stopRequested = false;
   private activePid: number | null = null;
-  private readonly pricing = new Map<string, ModelPricing>();
+  readonly pricing = new Map<string, ModelPricing>();
   constructor(
     private readonly store: StudioStore,
     private readonly sessionId: string,
@@ -239,14 +116,14 @@ export class GraphRuntime {
   cancelPreflight(): void {
     this.abort.abort(new Error("세션 제어 요청"));
   }
-  private async save(): Promise<void> {
+  async save(): Promise<void> {
     await this.store.writeSession(this.state);
     this.hooks.onState?.(structuredClone(this.state));
   }
-  private controls() {
+  controls() {
     return getControlQueuePaths(this.store.sessionDir(this.sessionId));
   }
-  private async finishControl(request: ClaimedControlRequest): Promise<void> {
+  async finishControl(request: ClaimedControlRequest): Promise<void> {
     if (request.request.type === "STOP") {
       stopSession(this.state);
       this.stopRequested = true;
@@ -272,27 +149,24 @@ export class GraphRuntime {
     }
     return false;
   }
-  private async budgetStop(reason: string): Promise<void> {
+  async budgetStop(reason: string): Promise<void> {
     pauseForBudget(this.state, reason);
     this.stopRequested = true;
     await this.save();
   }
   /** The one place this class sets a session status. */
-  private async settle(
-    status: SessionStatus,
-    reason: string | null,
-  ): Promise<void> {
+  async settle(status: SessionStatus, reason: string | null): Promise<void> {
     this.state.status = status;
     this.state.statusReason = reason;
     await this.save();
   }
-  private async stageStop(reason: string, visit: NodeVisit): Promise<void> {
+  async stageStop(reason: string, visit: NodeVisit): Promise<void> {
     this.state.automaticRecovery = null;
     visit.status = "paused";
     this.stopRequested = true;
     await this.settle("PAUSED", reason);
   }
-  private verificationFailure(node: AgentNode, reason: string): Completion {
+  verificationFailure(node: AgentNode, reason: string): Completion {
     const verdict = node.type === "test" ? "FAIL" : "REJECTED";
     return {
       valid: true,
@@ -305,7 +179,7 @@ export class GraphRuntime {
       environmentBlocked: null,
     };
   }
-  private async contractStop(): Promise<boolean> {
+  async contractStop(): Promise<boolean> {
     const reason = await contractViolation(this.state);
     if (!reason) return false;
     this.state.automaticRecovery = null;
@@ -317,7 +191,7 @@ export class GraphRuntime {
     await this.settle("BLOCKED", reason);
     return true;
   }
-  private outside(text: string, intentRoots: string[] = []): string[] {
+  outside(text: string, intentRoots: string[] = []): string[] {
     return outsidePaths(text, [
       this.state.targetProjectPath,
       ...this.state.additionalAllowedPaths,
@@ -716,7 +590,7 @@ export class GraphRuntime {
    * the halt paths differ in whether they cancel scheduled recovery and
    * whether the visit can be resumed in place.
    */
-  private async halt(
+  async halt(
     visit: NodeVisit,
     status: SessionStatus,
     reason: string,
@@ -755,7 +629,8 @@ export class GraphRuntime {
         Date.now() >= stage.deadline ||
         (completionRecovery && extra >= stage.completionLimit)
       ) {
-        await this.exhausted(
+        await recoverOrPause(
+          this,
           node,
           visit,
           "단계 복구 예산 또는 attempt 한도를 소진했습니다.",
@@ -789,11 +664,11 @@ export class GraphRuntime {
       await this.save();
       const run = await this.supervise(stage, attempt, invocation);
       await this.recordOutcome(stage, run);
-      const gated = await this.evidenceGates(stage, run);
+      const gated = await evidenceGates(this, stage, run);
       if (gated.step !== "undecided") return gated;
-      const judged = await this.judge(stage, run);
+      const judged = await judge(this, stage, run);
       if (judged.step !== "undecided") return judged;
-      const failure = await this.failure(stage, run);
+      const failure = await attemptFailure(this, stage, run);
       if (!failure) return STOPPED;
       const { result } = run;
       recoveryMessage = buildRecoveryMessage(
@@ -832,7 +707,7 @@ export class GraphRuntime {
       ) {
         nextResume = undefined;
       } else {
-        await this.exhausted(node, visit, failure.message);
+        await recoverOrPause(this, node, visit, failure.message);
         return STOPPED;
       }
     }
@@ -1270,9 +1145,7 @@ export class GraphRuntime {
    * Evidence checks between the CLI exit and completion parsing. `undefined`
    * continues; null means the session stopped; a Completion ends the stage.
    */
-  private async sourceChanges(
-    expected: Record<string, string>,
-  ): Promise<string[]> {
+  async sourceChanges(expected: Record<string, string>): Promise<string[]> {
     try {
       return sourceDifference(
         expected,
@@ -1280,451 +1153,6 @@ export class GraphRuntime {
       );
     } catch (error) {
       return [`소스 snapshot 읽기 실패: ${messageOf(error)}`];
-    }
-  }
-  private async evidenceGates(
-    stage: Stage,
-    run: AttemptRun,
-  ): Promise<Stopped | Completed | Undecided> {
-    const { node, visit, policy, sourceInputs } = stage,
-      { attempt, result } = run,
-      sourceGuard = policy.testSourceGuard;
-    if (result.outcome === "orphaned_process") {
-      attempt.failureKind = "orphaned_process";
-      attempt.message = contextMessage(
-        stage,
-        result.failureMessage ?? "CLI 프로세스 종료를 확인할 수 없습니다.",
-      );
-      await this.halt(visit, "BLOCKED", attempt.message, {
-        pauseVisit: true,
-        clearRecovery: false,
-      });
-      if (result.controlRequest)
-        await completeControlRequest(
-          this.controls(),
-          result.controlRequest,
-          "failed",
-          "자식 프로세스 종료를 확인하지 못해 실행을 차단했습니다.",
-        );
-      return STOPPED;
-    }
-    if (result.controlRequest) {
-      await this.finishControl(result.controlRequest);
-      return STOPPED;
-    }
-    if (
-      attempt.programIoAudit &&
-      (attempt.programIoAudit.invalidReceipts ||
-        attempt.programIoAudit.unresolvedCommands ||
-        attempt.programIoAudit.unwrappedCommands)
-    ) {
-      const reason = `${IO_VIOLATION} Kernel-isolated command evidence is incomplete or invalid.`;
-      attempt.status = "process_exit";
-      attempt.failureKind = "role_violation";
-      attempt.message = reason;
-      attempt.completionAccepted = false;
-      return this.halt(visit, "BLOCKED", reason, {
-        pauseVisit: true,
-        clearRecovery: true,
-      });
-    }
-    if (
-      attempt.scopeAudit &&
-      (attempt.scopeAudit.outsideCalls || attempt.scopeAudit.unresolvedCalls)
-    ) {
-      attempt.completionAccepted = false;
-      attempt.failureKind = "role_violation";
-      attempt.message = `${SCOPE_VIOLATION} 대상 밖 native 조회 또는 미확정 실행이 관측돼 실행을 차단했습니다.`;
-      return this.halt(visit, "BLOCKED", attempt.message, {
-        pauseVisit: true,
-        clearRecovery: true,
-      });
-    }
-    if (sourceGuard && node.type === "test" && sourceInputs) {
-      try {
-        run.guardedInputs = await testSources(this.state.targetProjectPath);
-        run.sourceChanges = [
-          ...new Set([
-            ...run.sourceChanges,
-            ...sourceDifference(sourceInputs, run.guardedInputs),
-          ]),
-        ];
-      } catch (error) {
-        run.sourceChanges.push(`소스 snapshot 읽기 실패: ${messageOf(error)}`);
-      }
-      const nativeSources = (result.evidence.changedFiles ?? []).filter(
-        (f) =>
-          !/^(?:verification|artifacts|test-results|playwright-report|coverage)(?:\/|$)/.test(
-            f.replace(/\\/g, "/"),
-          ),
-      );
-      run.sourceChanges = [
-        ...new Set([...run.sourceChanges, ...nativeSources]),
-      ];
-      result.evidence.fileMutation = run.sourceChanges.length > 0;
-      attempt.fileMutation = result.evidence.fileMutation;
-      if (run.sourceChanges.length || run.policyReason) {
-        run.policyReason ??= `${TEST_POLICY} 테스트 역할의 제품·테스트 소스 변경을 반려했습니다: ${run.sourceChanges.join(", ")}. 구현과 전체 검증을 다시 수행해야 합니다.`;
-        attempt.verificationInvalidation = {
-          at: new Date().toISOString(),
-          reason: run.policyReason,
-          files: run.sourceChanges,
-        };
-        visit.verifiedCommands = [];
-        delete visit.nodeTestProof;
-        delete visit.verificationSourceHashes;
-        attempt.failureKind = run.policyReason.startsWith(TEST_FAILED)
-          ? "process_exit"
-          : "role_violation";
-        attempt.message = run.policyReason;
-        attempt.completionAccepted = false;
-      }
-    }
-    const budgetAfter = sessionBudgetReason(this.state);
-    if (budgetAfter) {
-      await this.budgetStop(budgetAfter);
-      return STOPPED;
-    }
-    if (await this.contractStop()) return STOPPED;
-    const protectedWrites = (result.evidence.changedFiles ?? []).filter(
-      (file) =>
-        this.state.verificationContract?.hashes?.[file.replace(/\\/g, "/")] !==
-        undefined,
-    );
-    if (protectedWrites.length)
-      return this.halt(
-        visit,
-        "BLOCKED",
-        `고정 검증 파일의 쓰기가 관측됐습니다: ${protectedWrites.join(", ")}`,
-        { pauseVisit: true, clearRecovery: true },
-      );
-    if (sourceGuard && node.type === "test" && run.policyReason) {
-      const environment = result.evidence.commands.find(
-        (c) => c.environmentError,
-      )?.environmentError;
-      if (environment) {
-        const reason = `검증 환경 제약: ${environment}. 제품 수정으로 반복하지 않습니다. 필요한 실행 권한·환경을 확인한 뒤 같은 방문에서 전체 검사를 다시 수행하세요.`;
-        attempt.status = attempt.failureKind =
-          /EPERM|EACCES|permission denied|sandbox/i.test(environment)
-            ? "permission"
-            : /unreachable|disabled|ENETUNREACH|EAI_AGAIN/i.test(environment)
-              ? "network"
-              : "process_exit";
-        attempt.message = reason;
-        attempt.completionAccepted = false;
-        if (attempt.verificationInvalidation)
-          attempt.verificationInvalidation.reason = reason;
-        return this.halt(visit, "WAITING_USER", reason, {
-          pauseVisit: true,
-          clearRecovery: true,
-        });
-      }
-      if (
-        result.diagnostics.terminalError &&
-        ["auth", "permission", "model_unavailable"].includes(
-          result.diagnostics.terminalError.kind,
-        )
-      )
-        return this.halt(
-          visit,
-          "WAITING_USER",
-          result.diagnostics.terminalError.message,
-          { pauseVisit: true, clearRecovery: false },
-        );
-      await this.save();
-      return completed(this.verificationFailure(node, run.policyReason));
-    }
-    const stageAfter = stageBudgetReason(this.state, node, visit);
-    if (stageAfter) {
-      await this.stageStop(stageAfter, visit);
-      return STOPPED;
-    }
-    const readOnly = isReadOnly(node.type);
-    if (
-      sourceInputs &&
-      (!sourceGuard || readOnly) &&
-      result.outcome === "succeeded"
-    ) {
-      let changed: string[];
-      try {
-        const after = readOnly
-          ? await testSources(this.state.targetProjectPath)
-          : await productionHashes(this.state.targetProjectPath);
-        changed = [
-          ...new Set([...Object.keys(sourceInputs), ...Object.keys(after)]),
-        ].filter((file) => sourceInputs[file] !== after[file]);
-      } catch (error) {
-        changed = [`소스 검사 차단: ${messageOf(error)}`];
-      }
-      if (changed.length) {
-        result.evidence.changedFiles = [
-          ...new Set([...(result.evidence.changedFiles ?? []), ...changed]),
-        ];
-        result.evidence.fileMutation = true;
-        attempt.fileMutation = true;
-      }
-    }
-    if (
-      sourceGuard &&
-      isAuditRole(node.type) &&
-      result.outcome === "succeeded"
-    ) {
-      const expected = currentVerificationSources(this.state, visit);
-      const changes = expected
-        ? await this.sourceChanges(expected)
-        : ["missing test source snapshot"];
-      if (changes.length) {
-        attempt.verificationInvalidation = {
-          at: new Date().toISOString(),
-          reason: "테스트 이후 소스 변경",
-          files: changes,
-        };
-        return completed(
-          this.verificationFailure(
-            node,
-            `테스트 이후 소스가 변경되어 승인 근거를 무효화했습니다: ${changes.join(", ")}`,
-          ),
-        );
-      }
-    }
-    return UNDECIDED;
-  }
-  /**
-   * Parse and validate the role's completion. Undecided means the attempt
-   * failed, with run.completion set for the failure step.
-   */
-  private async judge(
-    { node, visit, policy }: Stage,
-    run: AttemptRun,
-  ): Promise<Stopped | Completed | Undecided> {
-    const { attempt, result } = run;
-    let nodeProof: NodeTestProof | undefined,
-      nodeProofError: string | undefined;
-    if (
-      this.state.verificationContract?.manifest?.nodeTests &&
-      isVerifierRole(node.type) &&
-      result.outcome === "succeeded"
-    ) {
-      try {
-        nodeProof = await readNodeTestProof(
-          this.state.targetProjectPath,
-          this.state.verificationContract.manifest.nodeTests,
-        );
-        if (node.type !== "test") {
-          const prior = currentNodeTestProof(this.state, visit);
-          if (
-            !prior ||
-            prior.runId !== nodeProof.runId ||
-            prior.reportDigest !== nodeProof.reportDigest
-          )
-            throw Error(
-              "자체 Node 증거가 현재 테스트 역할에서 승인된 실행과 다릅니다.",
-            );
-        }
-      } catch (error) {
-        nodeProof = undefined;
-        nodeProofError = messageOf(error);
-      }
-    }
-    const completion = validateCompletion(node, result, {
-      goal: this.state.goal,
-      requirements: this.state.requirements.items,
-      commands: visit.verifiedCommands ?? result.evidence.commands,
-      priorTestProof: currentTestProof(this.state, visit),
-      automation: this.state.graph.automation,
-      contract: this.state.verificationContract,
-      cwd: this.state.targetProjectPath,
-      nodeTestProof: nodeProof,
-      inspectedFiles: [
-        ...new Set(visit.attempts.flatMap((a) => a.readFiles ?? [])),
-      ],
-    });
-    run.completion = completion;
-    if (
-      completion.valid &&
-      (node.type === "implementation" || isVerifierRole(node.type)) &&
-      !["FAIL", "REJECTED", "BLOCKED"].includes(completion.verdict ?? "")
-    ) {
-      const problem = await deliverableProblem(this.state);
-      if (problem) attempt.completionAccepted = false;
-      if (problem && node.type === "implementation") {
-        completion.valid = false;
-        completion.failureKind = "incomplete_response";
-        completion.reason = problem;
-      } else if (problem) {
-        visit.verifiedCommands = [];
-        delete visit.nodeTestProof;
-        delete visit.verificationSourceHashes;
-        return completed(this.verificationFailure(node, problem));
-      }
-    }
-    if (
-      nodeProofError &&
-      completion.valid &&
-      ["FAIL", "REJECTED"].includes(completion.verdict ?? "")
-    )
-      completion.reason = `자체 Node 검증: ${nodeProofError}`;
-    if (
-      completion.valid &&
-      completion.verdict === "PASS" &&
-      node.type === "test" &&
-      nodeProof
-    )
-      visit.nodeTestProof = nodeProof;
-    if (
-      completion.valid &&
-      completion.verdict === "PASS" &&
-      node.type === "test" &&
-      policy.testSourceGuard &&
-      run.guardedInputs
-    )
-      visit.verificationSourceHashes = run.guardedInputs;
-    if (completion.valid && node.type === "planning" && policy.automated) {
-      const requested = this.outside(
-        `${this.state.goal}\n${this.state.graph.nodes.map((n) => n.instructions).join("\n")}`,
-      );
-      const unrequested = [
-        ...new Set(
-          completion.plans.flatMap((plan) =>
-            this.outside(plan.body, requested),
-          ),
-        ),
-      ];
-      if (unrequested.length) {
-        completion.valid = false;
-        completion.failureKind = "incomplete_response";
-        completion.reason = `자율 계획에 목표가 요청하지 않은 외부 경로가 있습니다: ${unrequested.join(", ")}. Keep the plan inside the target; remove unrequested external paths and return the complete corrected plan without requesting operator access. Explicit external paths requested by the original goal retain approval gates.`;
-      }
-    }
-    if (completion.environmentBlocked) {
-      visit.output = completion.output;
-      visit.verdict = "BLOCKED";
-      attempt.message = completion.environmentBlocked;
-      attempt.completionAccepted = false;
-      return this.halt(visit, "WAITING_USER", completion.environmentBlocked, {
-        pauseVisit: true,
-        clearRecovery: true,
-      });
-    }
-    if (completion.valid) {
-      attempt.completionAccepted = !completion.researchBlocked;
-      await this.save();
-      return completed(completion);
-    }
-    return UNDECIDED;
-  }
-  /** Classify a failed attempt; null once a non-retryable failure stopped the session. */
-  private async failure(
-    stage: Stage,
-    { attempt, result, completion }: AttemptRun,
-  ): Promise<AttemptFailure | null> {
-    const { node, visit } = stage;
-    attempt.completionAccepted = false;
-    const failure = classifyFailure(result, completion!);
-    // A retry meets the same refusal, and the missing-format reason would hide it.
-    const denied = result.evidence.deniedWrites ?? [];
-    if (
-      denied.length &&
-      !isReadOnly(node.type) &&
-      failure.kind === "incomplete_response"
-    ) {
-      failure.kind = "permission";
-      failure.retryable = false;
-      failure.message = `CLI가 파일 쓰기 권한을 거부했습니다: ${denied.join(", ")}. CLI의 권한 설정과 프로젝트 신뢰 여부를 확인한 뒤 재개하세요.`;
-    }
-    failure.message = contextMessage(stage, failure.message);
-    failure.attemptId = attempt.id;
-    failure.role = node.roleName;
-    failure.phase = node.type;
-    attempt.status = failure.kind;
-    attempt.failureKind = failure.kind;
-    attempt.message = failure.message;
-    visit.output = completion!.output;
-    await this.save();
-    if (!failure.retryable) {
-      await this.halt(visit, "WAITING_USER", failure.message, {
-        pauseVisit: true,
-        clearRecovery: false,
-      });
-      return null;
-    }
-    const providerFailure =
-      result.diagnostics.terminalError ?? result.diagnostics.plainError;
-    if (
-      (failure.kind === "quota_exhausted" ||
-        providerFailure?.kind === "quota_exhausted") &&
-      attempt.pricing?.status !== "free"
-    ) {
-      await this.halt(
-        visit,
-        "PAUSED",
-        `${failure.message} ${attempt.pricing?.status === "paid" ? "유료" : "가격 미확인"} 모델의 공급자 사용 한도에 도달해 추가 호출 없이 정지했습니다.`,
-        { pauseVisit: true, clearRecovery: false },
-      );
-      return null;
-    }
-    return failure;
-  }
-  private async exhausted(
-    node: AgentNode,
-    visit: NodeVisit,
-    reason: string,
-  ): Promise<void> {
-    const budget = sessionBudgetReason(this.state, true);
-    if (budget) {
-      await this.budgetStop(budget);
-      return;
-    }
-    const stageReason = stageBudgetReason(this.state, node, visit, true);
-    if (stageReason) {
-      await this.stageStop(stageReason, visit);
-      return;
-    }
-    const s = this.state.settings,
-      pricing = this.pricing.get(node.id) ?? modelPricing();
-    if (
-      pricing.status === "free" &&
-      node.type !== "interrupt" &&
-      visit.automaticCycles < s.maxAutomaticRecoveryCycles
-    ) {
-      const delayMs =
-        s.automaticRecoveryBackoffMs[
-          Math.min(
-            visit.automaticCycles,
-            s.automaticRecoveryBackoffMs.length - 1,
-          )
-        ]!;
-      if (
-        this.state.executionBudget &&
-        Date.now() + delayMs >=
-          Date.parse(this.state.executionBudget.deadlineAt)
-      ) {
-        await this.budgetStop(
-          "남은 전체 실행 시간 안에 자동 복구를 시작할 수 없습니다.",
-        );
-        return;
-      }
-      visit.automaticCycles++;
-      visit.status = "paused";
-      this.state.automaticRecovery = {
-        count: visit.automaticCycles,
-        resumeAt: new Date(Date.now() + delayMs).toISOString(),
-      };
-      visit.cycleStartedAt = new Date().toISOString();
-      visit.cycleDeadlineAt = new Date(
-        Date.now() + delayMs + s.phaseRecoveryBudgetMs,
-      ).toISOString();
-      await this.settle(
-        "RECOVERING",
-        `${reason} 무료로 확인된 모델이므로 자동 복구 ${visit.automaticCycles}/${s.maxAutomaticRecoveryCycles}회를 예약했습니다. 재개 전에 무료 여부를 다시 확인합니다.`,
-      );
-    } else {
-      visit.status = "paused";
-      this.state.automaticRecovery = null;
-      await this.settle(
-        "PAUSED",
-        `${reason} ${pricing.status === "free" ? "무료 모델의 자동 복구 한도 또는 중단 처리 제한에 도달했습니다." : `${pricing.status === "paid" ? "유료" : "가격 미확인"} 모델이므로 추가 자동 복구를 중지했습니다.`} 확인 후 수동 재개하세요.`,
-      );
     }
   }
 }
