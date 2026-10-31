@@ -82,6 +82,6 @@ flowchart LR
 | `app_workflow`·`app_recovery`·`app_autonomy`·`app_contracts.test.ts` | 서버·워커·가짜 CLI를 사용한 시나리오 (기본 흐름·승인 / 재시도·복구·수명 / 자율 실행·범위 / 검증 계약·예산). 공통 서버 준비는 `app_harness.test.ts` |
 | `run_policy.test.ts`, `isolation.test.ts` | 플래그·CLI 조합 결정과 격리 안내 |
 
-VM 격리 동작은 `npm run verify:vm`이 macOS에서 확인한다. CI는 VM 런타임을 준비하지 않으므로 해당 테스트 4개를 건너뛴다. 실제 CLI 회귀는 모델 사용량이 들어 `scripts/real-cli-regression.js`로 따로 실행한다.
+VM 격리 동작은 `npm run verify:vm`이 macOS에서 확인한다. GitHub macOS 러너는 가상화를 지원하지 않아(`kern.hv_support` 0) 해당 테스트 4개를 건너뛴다. 대신 실행·호출·격리 코드를 바꾼 PR은 본문에 `verify:vm 17/17 @ <head 커밋>` 줄이 있어야 VM gate 검사를 통과한다(`scripts/check-vm-gate.js`). 실제 CLI 회귀는 모델 사용량이 들어 `scripts/real-cli-regression.js`로 따로 실행한다.
 
 V8 커버리지는 워커 프로세스 코드를 적게 집계한다. 경로 도달 여부는 빌드 산출물에 probe를 넣어 확인한다.
