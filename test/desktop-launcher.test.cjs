@@ -4,9 +4,81 @@ const fs = require("node:fs/promises");
 const os = require("node:os");
 const path = require("node:path");
 const http = require("node:http");
-const { spawn } = require("node:child_process");
+const { spawn, spawnSync } = require("node:child_process");
 const { once } = require("node:events");
 const project = path.resolve(__dirname, "..");
+const launcherBinary = path.join(
+  project,
+  "Agent Graph Studio.app/Contents/MacOS/AgentGraphStudio",
+);
+
+async function executable(file, body) {
+  await fs.mkdir(path.dirname(file), { recursive: true });
+  await fs.writeFile(file, `#!/bin/sh\n${body}\n`, { mode: 0o755 });
+  return file;
+}
+
+function chosenNode(shell, pathEntries) {
+  const started = Date.now();
+  const result = spawnSync(launcherBinary, ["--print-node"], {
+    encoding: "utf8",
+    timeout: 15_000,
+    env: { SHELL: shell, PATH: pathEntries.join(":") },
+  });
+  assert.equal(result.status, 0, result.stderr);
+  return { node: result.stdout.trim(), elapsed: Date.now() - started };
+}
+
+test("the app prefers the login shell Node and uses Homebrew only as a fallback", async (t) => {
+  const root = await fs.realpath(
+    await fs.mkdtemp(path.join(os.tmpdir(), "graph-launcher-node-")),
+  );
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const version = "echo 24.22.2";
+  const official = await executable(path.join(root, "official/node"), version);
+  const other = await executable(path.join(root, "other/node"), version);
+  const old = await executable(path.join(root, "old/node"), "echo 22.0.0");
+  const cellar = await executable(
+    path.join(root, "Cellar/node/25.2.1/bin/node"),
+    "echo 25.2.1",
+  );
+  const brewNode = path.join(root, "brew/node");
+  await fs.mkdir(path.dirname(brewNode));
+  await fs.symlink(cellar, brewNode);
+  const shellFor = (name, node) =>
+    executable(path.join(root, name), `echo profile noise; echo ${node}`);
+  const entries = (...files) => files.map((file) => path.dirname(file));
+
+  assert.equal(
+    chosenNode(await shellFor("shell-official", official), [
+      ...entries(brewNode, other),
+    ]).node,
+    official,
+  );
+  assert.equal(
+    chosenNode(await shellFor("shell-brew", brewNode), entries(brewNode, other))
+      .node,
+    other,
+    "a Homebrew Node is passed over while another supported Node exists",
+  );
+  assert.equal(
+    chosenNode(await shellFor("shell-old", old), entries(other)).node,
+    other,
+    "a login shell Node below the required version is passed over",
+  );
+  const silent = await executable(path.join(root, "shell-alias"), "echo alias");
+  assert.equal(chosenNode(silent, entries(other)).node, other);
+  const hanging = await executable(
+    path.join(root, "shell-hang"),
+    "exec /bin/sleep 30",
+  );
+  const late = chosenNode(hanging, entries(other));
+  assert.equal(late.node, other);
+  assert.ok(
+    late.elapsed >= 2_500 && late.elapsed < 10_000,
+    `waited ${late.elapsed} ms for the shell`,
+  );
+});
 
 function launch(root, port, source = project) {
   const child = spawn(
