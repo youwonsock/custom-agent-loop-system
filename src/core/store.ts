@@ -12,11 +12,8 @@ import {
   SessionAction,
   SessionState,
 } from "../shared/domain";
-import {
-  atomicWriteJsonFile,
-  readJsonFile,
-  withShortFileLock,
-} from "./resilience";
+import { atomicWriteJsonFile, readJsonFile } from "./resilience";
+import { withShortFileLock } from "./file_lock";
 import {
   createGraph,
   createAutonomousGraph,

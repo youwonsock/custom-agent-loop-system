@@ -3,17 +3,17 @@ import assert from "node:assert/strict";
 import * as os from "node:os";
 import * as path from "node:path";
 import * as fsp from "node:fs/promises";
+import { SessionOwnership } from "./session_ownership";
 import {
-  SessionOwnership,
   claimNextControlRequest,
-  collectRecoveredChildPids,
   completeControlRequest,
   enqueueControlRequest,
   ensureControlQueue,
   getControlQueuePaths,
   readControlAck,
-  withShortFileLock,
-} from "./resilience";
+} from "./control_queue";
+import { collectRecoveredChildPids } from "./resilience";
+import { withShortFileLock } from "./file_lock";
 
 async function withTempDir(run: (dir: string) => Promise<void>): Promise<void> {
   const dir = await fsp.mkdtemp(path.join(os.tmpdir(), "agent-loop-test-"));

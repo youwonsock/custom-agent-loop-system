@@ -34,6 +34,11 @@ export function graphDiagnostics(
       "중단 처리 지점은 interrupt 유형이어야 합니다.",
       g.entrypoints.interrupt,
     );
+  if (g.automation?.authoredNodeTests && !g.automation.verificationContract)
+    add(
+      "authored_node_tests",
+      "자체 Node 테스트 계약에는 검증 계약이 필요합니다.",
+    );
   for (const n of g.nodes) {
     if (!n.name.trim() || !n.roleName.trim())
       add("node_name", "노드와 역할 이름을 입력하세요.", n.id);

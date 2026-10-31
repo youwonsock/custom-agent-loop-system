@@ -7,6 +7,7 @@ import {
   Terminal,
 } from "../shared/domain";
 import { AppError } from "./errors";
+import { autonomousDefaults, defaultNode } from "../shared/graph_defaults";
 export { graphDiagnostics, resolveBinding } from "../shared/graph_validation";
 
 export const safeId = (value: unknown): value is string =>
@@ -32,6 +33,35 @@ const cleanBinding = (b: ExecutionBinding): ExecutionBinding => ({
   ...(b.variant ? { variant: b.variant } : {}),
 });
 /** Draft validation deliberately allows missing edges and unresolved references. */
+/** Optional switches; a graph may omit any of them. Saved in this order. */
+const AUTOMATION_FLAGS = [
+  "browserVerification",
+  "verificationContract",
+  "authoredNodeTests",
+  "testSourceGuard",
+  "reserveFinalizationBudget",
+  "guardOwnedProcesses",
+  "targetScopeGuard",
+  "programIoGuard",
+] as const;
+function checkAutomation(a: NonNullable<AgentGraphDocument["automation"]>) {
+  if (
+    !Number.isInteger(a.maxRepairCycles) ||
+    a.maxRepairCycles < 1 ||
+    a.maxRepairCycles > 20
+  )
+    throw new AppError(400, "자동 수정 횟수는 1~20이어야 합니다.");
+  if (typeof a.nativeApprovalReview !== "boolean")
+    throw new AppError(400, "네이티브 승인 검토 설정이 필요합니다.");
+  for (const flag of AUTOMATION_FLAGS)
+    if (a[flag] !== undefined && typeof a[flag] !== "boolean")
+      throw new AppError(
+        400,
+        `자동화 설정 ${flag}은(는) true 또는 false여야 합니다.`,
+      );
+  if (a.programIoGuard === true && a.targetScopeGuard !== true)
+    throw new AppError(400, "프로그램 격리에는 대상 범위 보호가 필요합니다.");
+}
 export function validateGraphDocument(input: unknown): AgentGraphDocument {
   const g = input as AgentGraphDocument;
   if (!g || g.version !== 2)
@@ -51,35 +81,7 @@ export function validateGraphDocument(input: unknown): AgentGraphDocument {
     g.edges.length > 500
   )
     throw new AppError(400, "그래프 문서 형식이 잘못되었습니다.");
-  if (
-    g.automation &&
-    (!Number.isInteger(g.automation.maxRepairCycles) ||
-      g.automation.maxRepairCycles < 1 ||
-      g.automation.maxRepairCycles > 20 ||
-      typeof g.automation.nativeApprovalReview !== "boolean" ||
-      (g.automation.browserVerification !== undefined &&
-        typeof g.automation.browserVerification !== "boolean") ||
-      (g.automation.verificationContract !== undefined &&
-        typeof g.automation.verificationContract !== "boolean") ||
-      (g.automation.authoredNodeTests !== undefined &&
-        typeof g.automation.authoredNodeTests !== "boolean") ||
-      (g.automation.testSourceGuard !== undefined &&
-        typeof g.automation.testSourceGuard !== "boolean") ||
-      (g.automation.reserveFinalizationBudget !== undefined &&
-        typeof g.automation.reserveFinalizationBudget !== "boolean") ||
-      (g.automation.guardOwnedProcesses !== undefined &&
-        typeof g.automation.guardOwnedProcesses !== "boolean") ||
-      (g.automation.targetScopeGuard !== undefined &&
-        typeof g.automation.targetScopeGuard !== "boolean") ||
-      (g.automation.programIoGuard !== undefined &&
-        typeof g.automation.programIoGuard !== "boolean") ||
-      (g.automation.programIoGuard === true &&
-        g.automation.targetScopeGuard !== true))
-  )
-    throw new AppError(
-      400,
-      "자동 수정 횟수는 1~20이며 네이티브 승인 검토 설정이 필요합니다.",
-    );
+  if (g.automation) checkAutomation(g.automation);
   const nodeIds = new Set<string>(),
     edgeIds = new Set<string>();
   for (const n of g.nodes) {
@@ -183,33 +185,13 @@ export function validateGraphDocument(input: unknown): AgentGraphDocument {
           automation: {
             maxRepairCycles: g.automation.maxRepairCycles,
             nativeApprovalReview: g.automation.nativeApprovalReview,
-            ...(g.automation.browserVerification !== undefined
-              ? { browserVerification: g.automation.browserVerification }
-              : {}),
-            ...(g.automation.verificationContract !== undefined
-              ? { verificationContract: g.automation.verificationContract }
-              : {}),
-            ...(g.automation.authoredNodeTests !== undefined
-              ? { authoredNodeTests: g.automation.authoredNodeTests }
-              : {}),
-            ...(g.automation.testSourceGuard !== undefined
-              ? { testSourceGuard: g.automation.testSourceGuard }
-              : {}),
-            ...(g.automation.reserveFinalizationBudget !== undefined
-              ? {
-                  reserveFinalizationBudget:
-                    g.automation.reserveFinalizationBudget,
-                }
-              : {}),
-            ...(g.automation.guardOwnedProcesses !== undefined
-              ? { guardOwnedProcesses: g.automation.guardOwnedProcesses }
-              : {}),
-            ...(g.automation.targetScopeGuard !== undefined
-              ? { targetScopeGuard: g.automation.targetScopeGuard }
-              : {}),
-            ...(g.automation.programIoGuard !== undefined
-              ? { programIoGuard: g.automation.programIoGuard }
-              : {}),
+            ...Object.fromEntries(
+              AUTOMATION_FLAGS.flatMap((flag) =>
+                g.automation![flag] === undefined
+                  ? []
+                  : [[flag, g.automation![flag]]],
+              ),
+            ),
           },
         }
       : {}),
@@ -235,34 +217,31 @@ export function createGraph(
 ): AgentGraphDocument {
   const nodes: AgentNode[] = empty
     ? []
-    : NODE_TYPES.map((type, index) => ({
-        id: type,
-        name: {
-          planning: "계획 수립",
-          implementation: "구현",
-          test: "테스트",
-          review: "QA 검토",
-          approval: "최종 승인",
-          interrupt: "중단 분석",
-        }[type],
-        roleName: {
-          planning: "Planner",
-          implementation: "Builder",
-          test: "Tester",
-          review: "QA Lead",
-          approval: "Reviewer",
-          interrupt: "Interrupter",
-        }[type],
-        type,
-        instructions: "",
-        position: {
-          x: 40 + (index % 3) * 340,
-          y: 80 + Math.floor(index / 3) * 260,
-        },
-        ...(type === "planning"
-          ? { planning: { requiresApproval: true, optionsCount: 3 } }
-          : {}),
-      }));
+    : NODE_TYPES.map((type, index) =>
+        defaultNode({
+          id: type,
+          type,
+          name: {
+            planning: "계획 수립",
+            implementation: "구현",
+            test: "테스트",
+            review: "QA 검토",
+            approval: "최종 승인",
+            interrupt: "중단 분석",
+          }[type],
+          roleName: {
+            planning: "Planner",
+            implementation: "Builder",
+            test: "Tester",
+            review: "QA Lead",
+            approval: "Reviewer",
+            interrupt: "Interrupter",
+          }[type],
+          index,
+          left: 40,
+          columnWidth: 340,
+        }),
+      );
   const destinations: Record<string, [string, string]> = {
     planning: ["implementation", "interrupt"],
     implementation: ["test", "interrupt"],
@@ -304,18 +283,7 @@ export function createAutonomousGraph(
   name = "자율 제작·검증 루프",
 ): AgentGraphDocument {
   const graph = createGraph(name);
-  graph.automation = {
-    maxRepairCycles: 5,
-    nativeApprovalReview: true,
-    browserVerification: true,
-    verificationContract: true,
-    authoredNodeTests: true,
-    testSourceGuard: true,
-    reserveFinalizationBudget: true,
-    guardOwnedProcesses: true,
-    targetScopeGuard: true,
-    programIoGuard: true,
-  };
+  graph.automation = autonomousDefaults(true);
   graph.nodes.find((n) => n.type === "planning")!.planning = {
     requiresApproval: false,
     optionsCount: 1,

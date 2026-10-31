@@ -3,7 +3,7 @@ import { GraphRuntime } from "../core/runtime";
 import {
   enqueueControlRequest,
   getControlQueuePaths,
-} from "../core/resilience";
+} from "../core/control_queue";
 const [root, sessionId, mode] = process.argv.slice(2);
 if (!root || !sessionId) throw new Error("worker 인자가 필요합니다.");
 const store = new StudioStore(root);

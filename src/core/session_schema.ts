@@ -61,6 +61,44 @@ const binding = (v: unknown): boolean =>
   (v.variant === undefined || text(v.variant));
 const plan = (v: unknown): boolean =>
   isObj(v) && count(v.id) && count(v.revision) && text(v.body) && text(v.title);
+const scopeCall = (v: unknown): boolean =>
+  isObj(v) && text(v.tool) && text(v.path);
+export const validScopeAudit = (v: unknown): boolean =>
+  isObj(v) &&
+  v.version === 1 &&
+  text(v.cwd) &&
+  array(v.roots, text) &&
+  count(v.inspectedCalls) &&
+  count(v.blockedCalls) &&
+  count(v.outsideCalls) &&
+  count(v.unresolvedCalls) &&
+  array(v.blocked, scopeCall) &&
+  array(v.violations, scopeCall);
+const programIoCommand = (v: unknown): boolean =>
+  isObj(v) &&
+  text(v.id) &&
+  text(v.command) &&
+  Number.isSafeInteger(v.exitCode) &&
+  Number.isSafeInteger(v.pid) &&
+  typeof v.processGroupStopped === "boolean" &&
+  (v.containerRemoved === undefined ||
+    typeof v.containerRemoved === "boolean") &&
+  (v.containerName === undefined || text(v.containerName));
+export const validProgramIoAudit = (v: unknown): boolean =>
+  isObj(v) &&
+  v.version === 1 &&
+  member(v.backend, ["macos-seatbelt", "apple-container-vm"]) &&
+  text(v.policyId) &&
+  text(v.profileDigest) &&
+  text(v.cwd) &&
+  typeof v.preflightPassed === "boolean" &&
+  count(v.nativeCommands) &&
+  count(v.completedCommands) &&
+  count(v.unwrappedCommands) &&
+  count(v.unresolvedCommands) &&
+  count(v.invalidReceipts) &&
+  array(v.runtimeReadRoots, text) &&
+  array(v.commands, programIoCommand);
 function attempt(v: unknown): boolean {
   return (
     isObj(v) &&
@@ -107,6 +145,8 @@ function attempt(v: unknown): boolean {
         text(v.verificationInvalidation.at) &&
         text(v.verificationInvalidation.reason) &&
         array(v.verificationInvalidation.files, text))) &&
+    (v.scopeAudit === undefined || validScopeAudit(v.scopeAudit)) &&
+    (v.programIoAudit === undefined || validProgramIoAudit(v.programIoAudit)) &&
     (v.pricing === undefined ||
       (isObj(v.pricing) &&
         member(v.pricing.status, ["free", "paid", "unknown"]) &&

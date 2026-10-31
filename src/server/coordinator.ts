@@ -36,13 +36,12 @@ import { deriveRequirementLedger } from "../core/requirement_ledger";
 import {
   atomicWriteJsonFile,
   checkProcessLiveness,
-  getControlQueuePaths,
-  readControlAck,
   readJsonFile,
   SessionLease,
-  withShortFileLock,
   delay,
 } from "../core/resilience";
+import { getControlQueuePaths, readControlAck } from "../core/control_queue";
+import { withShortFileLock } from "../core/file_lock";
 import { terminateProcessTreeBounded } from "../core/process_lifecycle";
 
 export interface StartRequest {

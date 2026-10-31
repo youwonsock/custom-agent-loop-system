@@ -1,12 +1,12 @@
 # 작업 현황과 남은 과제
 
-2026-10-31 기준. 실행 구조는 [ARCHITECTURE.md](ARCHITECTURE.md), 검사 결과의 전체 기록은 [VERIFICATION.md](VERIFICATION.md)를 기준으로 한다. 이 문서는 다음 작업자가 무엇을 끝냈고 무엇을 이어야 하는지 확인하는 용도이며, 과제를 끝내면 이 문서에서 옮기거나 지운다. npm 패키지에는 포함하지 않는다.
+2026-10-31 기준. 실행 구조는 [ARCHITECTURE.md](ARCHITECTURE.md), 검사 결과의 기록은 [VERIFICATION.md](VERIFICATION.md)를 기준으로 한다. 이 문서는 다음 작업자가 무엇을 끝냈고 무엇을 이어야 하는지 확인하는 용도이며, 과제를 끝내면 이 문서에서 옮기거나 지운다. npm 패키지에는 포함하지 않는다.
 
 ## 현재 상태
 
 | 항목 | 상태 |
 | --- | --- |
-| 기준 커밋 | 브랜치 `stage5/invocation-prompt-supervisor` |
+| 기준 커밋 | 브랜치 `stage6/data-model-and-ui` |
 | 원격 CI | PR #16~#19 병합 전 3개 OS와 브라우저 통과. 이 표의 브랜치는 PR CI에서 확인한다 |
 | 로컬 검사 (macOS 26 arm64, 공식 Node 24.22.2) | `verify:platform` 10단계 통과: 단위 354개 중 352 통과·0 실패·Windows 전용 2 건너뜀, tooling 10/10, audit high 이상 0건(moderate 3건은 아래 "수용한 위험"). `verify:browser` 25/25. `verify:vm` 17/17 |
 | 실제 모델 호출 | G4 재실행 통과(5단계). Claude Haiku와 Kilo 무료 모델 모두 수동 개입 없이 `SUCCESS`, Kilo VM 명령 26/26 정상 |
@@ -74,6 +74,17 @@
 | 계획 오판 | G4에서 발견: 사용 예시의 `// 결과` 주석을 대상 밖 경로로 판정해 Claude 실행이 멈췄다. 주석 표식은 경로로 보지 않고, `FILE_ACCESS`와 표식 뒤의 경로는 그대로 본다 | `c783530` |
 | G4 | Claude Haiku(`claude-haiku-4-5-20251001`) 225초 `SUCCESS`, Kilo 무료 모델 225초 `SUCCESS`(VM 명령 26/26 정상, 격리 이탈 0). Kilo 실행은 주석 표식 수정 전 커밋에서 했으며 그 수정은 Kilo 경로의 판정을 좁히지 않는다 | 이전에 Kilo는 최종 승인에서 35분 제한으로 멈췄다 |
 
+2026-10-31 (브랜치 `stage6/data-model-and-ui`, 통합 계획 6단계):
+
+| 영역 | 내용 | 비고 |
+| --- | --- | --- |
+| 세션 스키마 | `programIoAudit`, `scopeAudit`을 값이 있을 때만 검사 | 저장된 실제 세션 6개(감사가 있는 시도 18개) 읽기 확인 |
+| 그래프 검증 | 플래그를 표로 검사하고 오류를 항목별로 분리. 저장 시 알려진 플래그만 남긴다 | 저장 순서 유지 |
+| 실행 진단 | `authoredNodeTests`에 `verificationContract`가 없으면 서버에서 차단 | 의도한 변경. 화면에서만 맞추던 규칙이며, 이 조합으로 저장된 그래프는 시작 전에 진단이 뜬다 |
+| 공통화 | 기본 노드(`defaultNode`, 간격은 인자)와 자율 기본 플래그(`autonomousDefaults`) | |
+| 파일 분리 | `resilience.ts`를 `file_lock`, `session_ownership`, `control_queue`로, `GraphInspector`를 `NodeInspector`·`GraphSettings`로, `useGraphEditor`를 `useGraphDraft`·`graphLibraryActions`·`graphNodeActions`로 분리 | 저장 필드 이름 유지 |
+| 문서 | [용어·제한값 사전](GLOSSARY.md) 추가, `VERIFICATION.md`를 최신 기록과 [이력](verification/2026-10-history.md)으로 분리하고 머신 경로 제거 | |
+
 수용한 위험: `npm audit`의 moderate 3건(`@fastify/static` → `glob` → `minimatch`). `@fastify/static`은 `wildcard: false`일 때만 `glob`을 호출하고 이 앱은 그 옵션을 쓰지 않는다. `audit fix --force`는 주 버전을 낮추므로 적용하지 않는다.
 
 유지하기로 결정한 것: stateVersion 3 스냅샷 읽기와 수동 그래프의 평문 보고 형식은 현재 기능이다. 마이그레이션 코드는 없었다.
@@ -102,14 +113,6 @@
 | `.git/config`의 빈 `user.name` 항목 정리. 전역 설정을 가려 `git commit`이 실패하며, 이 브랜치는 `-c user.name=SC_Logan`으로 커밋했다 | 옵션 없이 커밋 가능 |
 
 Codex는 사용자 결정으로 G4에서 제외했다. Codex 경로는 가짜 이벤트로만 검증되었고, 실제 Codex가 명령을 셸로 감싸는지도 확인하지 못했다.
-
-### 6단계: 데이터 모델과 화면 정리
-
-- 세션 스키마에 `programIoAudit`, `scopeAudit` 검증 추가(값이 있을 때만 검사).
-- 그래프 플래그 검증을 표 방식으로 전환하고 오류 메시지를 항목별로 분리.
-- `authoredNodeTests → verificationContract` 규칙을 실행 진단으로 서버에 추가(지금은 화면에서만 맞춘다).
-- 기본 노드 생성 공통화(간격은 인자로 유지), 제한값·용어 사전 작성(저장 필드 이름은 유지).
-- `resilience.ts` 분할, `GraphInspector`와 `useGraphEditor` 분리, `VERIFICATION.md` 분리와 머신 경로 정리.
 
 ### 7단계: 사용성
 
