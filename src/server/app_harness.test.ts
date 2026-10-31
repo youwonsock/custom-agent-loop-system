@@ -160,12 +160,23 @@ export async function resumeHeld(
   s: Awaited<ReturnType<typeof setup>>,
   id: string,
 ) {
-  await delay(100);
-  const response = await s.request("POST", `/api/sessions/${id}/actions`, {
-    requestId: randomUUID(),
-    type: "resume",
-  });
-  assert.equal(response.statusCode, 200, response.body);
+  // A settled state is saved before the worker exits, and resume refuses a live worker.
+  const deadline = Date.now() + 10000;
+  for (;;) {
+    const response = await s.request("POST", `/api/sessions/${id}/actions`, {
+      requestId: randomUUID(),
+      type: "resume",
+    });
+    if (
+      response.statusCode !== 409 ||
+      !response.body.includes("아직 실행 중") ||
+      Date.now() > deadline
+    ) {
+      assert.equal(response.statusCode, 200, response.body);
+      return;
+    }
+    await delay(50);
+  }
 }
 export async function setModelPricing(
   s: Awaited<ReturnType<typeof setup>>,
