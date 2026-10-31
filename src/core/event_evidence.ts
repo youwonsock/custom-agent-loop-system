@@ -64,6 +64,142 @@ function mutatingTool(name: string, input: unknown): boolean {
   return false;
 }
 
+/** One tool lifecycle report, in the form every CLI's events reduce to. */
+interface ToolCall {
+  id: unknown;
+  name: string;
+  input: unknown;
+  status: string;
+  denied: boolean;
+  nativeChange?: boolean;
+}
+const denial = (id: unknown): ToolCall => ({
+  id,
+  name: "",
+  input: null,
+  status: "denied",
+  denied: true,
+});
+const nativeFileChange = (e: Event): ToolCall[] => [
+  {
+    id: e.id,
+    name: "",
+    input: e,
+    status: "completed",
+    denied: false,
+    nativeChange: true,
+  },
+];
+function codexItem(e: Event): ToolCall[] {
+  const item = obj(e.item),
+    isFileChange = item.type === "file_change";
+  if (!isFileChange && item.type !== "command_execution") return [];
+  return [
+    {
+      id: item.id,
+      name: String(item.type),
+      input: isFileChange
+        ? {
+            paths: Array.isArray(item.changes)
+              ? item.changes.map((c) => obj(c).path)
+              : [],
+          }
+        : item.command,
+      status:
+        e.type === "item.started"
+          ? "requested"
+          : String(item.status ?? "completed"),
+      denied: preExecutionDenied(
+        obj(item.error).message ?? item.error,
+        item.metadata,
+      ),
+      nativeChange: isFileChange,
+    },
+  ];
+}
+const commandExecution = (e: Event): ToolCall[] => [
+  {
+    id: e.id,
+    name: "commandexecution",
+    input: e.command,
+    status: String(e.status ?? "completed"),
+    denied: preExecutionDenied(e.error, e.metadata),
+  },
+];
+function runCliToolUse(e: Event): ToolCall[] {
+  const part = Object.keys(obj(e.part)).length ? obj(e.part) : e,
+    state = obj(part.state);
+  return [
+    {
+      id: part.callID ?? part.id ?? e.callID ?? e.id,
+      name: String(part.tool ?? part.name ?? part.tool_name ?? ""),
+      input: state.input ?? part.input ?? e.input,
+      status: String(state.status ?? part.status ?? "requested"),
+      denied: preExecutionDenied(
+        state.error ?? part.error,
+        state.metadata ?? part.metadata,
+      ),
+    },
+  ];
+}
+function claudeRequests(e: Event): ToolCall[] {
+  const content = obj(e.message).content;
+  if (!Array.isArray(content)) return [];
+  return content
+    .map(obj)
+    .filter((block) => block.type === "tool_use")
+    .map((block) => ({
+      id: block.id,
+      name: String(block.name ?? ""),
+      input: block.input,
+      status: "requested",
+      denied: false,
+    }));
+}
+function resultText(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return content
+    .map((v) => obj(v).text)
+    .filter((v) => typeof v === "string")
+    .join("\n");
+}
+function toolResults(content: unknown): ToolCall[] {
+  if (!Array.isArray(content)) return [];
+  return content
+    .map(obj)
+    .filter((block) => block.type === "tool_result")
+    .map((block) => ({
+      id: block.tool_use_id ?? block.callID,
+      name: "",
+      input: null,
+      status: block.is_error === true ? "failed" : "completed",
+      denied: preExecutionDenied(resultText(block.content), block.metadata),
+    }));
+}
+const EVENT_CALLS = new Map<unknown, (e: Event) => ToolCall[]>([
+  ["file_change", nativeFileChange],
+  ["filechange", nativeFileChange],
+  ["item.started", codexItem],
+  ["item.completed", codexItem],
+  ["command_execution", commandExecution],
+  ["tool_use", runCliToolUse],
+  ["assistant", claudeRequests],
+  ["user", (e) => toolResults(obj(e.message).content)],
+  ["tool_result", (e) => toolResults([e])],
+  [
+    "system",
+    (e) => (e.subtype === "permission_denied" ? [denial(e.tool_use_id)] : []),
+  ],
+  [
+    "result",
+    (e) =>
+      Array.isArray(e.permission_denials)
+        ? e.permission_denials.map((d) => denial(obj(d).tool_use_id))
+        : [],
+  ],
+]);
+
 export class MutationTracker {
   private confirmed = false;
   private readonly files = new Set<string>();
@@ -83,14 +219,14 @@ export class MutationTracker {
   finish(): boolean {
     return this.confirmed || this.pending.size > 0;
   }
-  private tool(
-    id: unknown,
-    name: string,
-    input: unknown,
-    status: string,
-    denied: boolean,
+  private tool({
+    id,
+    name,
+    input,
+    status,
+    denied,
     nativeChange = false,
-  ): void {
+  }: ToolCall): void {
     const key = typeof id === "string" && id ? id : null;
     const data = obj(input);
     const paths = [
@@ -153,103 +289,13 @@ export class MutationTracker {
     } else this.confirmed = true;
   }
   observe(value: unknown): void {
-    const e = obj(value),
-      type = e.type;
-    if (type === "file_change" || type === "filechange") {
-      this.tool(e.id, "", e, "completed", false, true);
-    } else if (type === "item.started" || type === "item.completed") {
-      const item = obj(e.item);
-      if (!["command_execution", "file_change"].includes(String(item.type)))
-        return;
-      const status =
-        type === "item.started"
-          ? "requested"
-          : String(item.status ?? "completed");
-      this.tool(
-        item.id,
-        String(item.type),
-        item.type === "file_change"
-          ? {
-              paths: Array.isArray(item.changes)
-                ? item.changes.map((c) => obj(c).path)
-                : [],
-            }
-          : item.command,
-        status,
-        preExecutionDenied(
-          obj(item.error).message ?? item.error,
-          item.metadata,
-        ),
-        item.type === "file_change",
-      );
-    } else if (type === "command_execution") {
-      this.tool(
-        e.id,
-        "commandexecution",
-        e.command,
-        String(e.status ?? "completed"),
-        preExecutionDenied(e.error, e.metadata),
-      );
-    } else if (type === "tool_use") {
-      const part = Object.keys(obj(e.part)).length ? obj(e.part) : e,
-        state = obj(part.state);
-      this.tool(
-        part.callID ?? part.id ?? e.callID ?? e.id,
-        String(part.tool ?? part.name ?? part.tool_name ?? ""),
-        state.input ?? part.input ?? e.input,
-        String(state.status ?? part.status ?? "requested"),
-        preExecutionDenied(
-          state.error ?? part.error,
-          state.metadata ?? part.metadata,
-        ),
-      );
-    } else if (type === "assistant") {
-      const content = obj(e.message).content;
-      if (Array.isArray(content))
-        for (const value of content) {
-          const block = obj(value);
-          if (block.type === "tool_use")
-            this.tool(
-              block.id,
-              String(block.name ?? ""),
-              block.input,
-              "requested",
-              false,
-            );
-        }
-    } else if (type === "user" || type === "tool_result") {
-      const content = type === "user" ? obj(e.message).content : [e];
-      if (Array.isArray(content))
-        for (const value of content) {
-          const block = obj(value);
-          if (block.type !== "tool_result") continue;
-          const text =
-            typeof block.content === "string"
-              ? block.content
-              : Array.isArray(block.content)
-                ? block.content
-                    .map((v) => obj(v).text)
-                    .filter((v) => typeof v === "string")
-                    .join("\n")
-                : "";
-          this.tool(
-            block.tool_use_id ?? block.callID,
-            "",
-            null,
-            block.is_error === true ? "failed" : "completed",
-            preExecutionDenied(text, block.metadata),
-          );
-        }
-    } else if (type === "system" && e.subtype === "permission_denied") {
-      this.tool(e.tool_use_id, "", null, "denied", true);
-    } else if (type === "result" && Array.isArray(e.permission_denials)) {
+    const e = obj(value);
+    for (const call of EVENT_CALLS.get(e.type)?.(e) ?? []) this.tool(call);
+    if (e.type === "result" && Array.isArray(e.permission_denials))
       for (const denied of e.permission_denials) {
-        const { tool_use_id, tool_input } = obj(denied);
-        this.tool(tool_use_id, "", null, "denied", true);
-        const file = obj(tool_input).file_path;
+        const file = obj(obj(denied).tool_input).file_path;
         if (typeof file === "string") this.deniedWrites.push(file);
       }
-    }
   }
 }
 export function fileMutation(value: unknown): boolean {
