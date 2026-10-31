@@ -1,5 +1,62 @@
 import AppKit
 
+// A Finder launch does not see the PATH set in shell profiles, so ask the login shell.
+func loginShellNode() -> String? {
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh")
+    process.arguments = ["-lc", "command -v node"]
+    let pipe = Pipe()
+    process.standardOutput = pipe
+    process.standardError = FileHandle.nullDevice
+    process.standardInput = FileHandle.nullDevice
+    guard (try? process.run()) != nil else { return nil }
+    var output = Data()
+    let finished = DispatchSemaphore(value: 0)
+    DispatchQueue.global().async {
+        output = pipe.fileHandleForReading.readDataToEndOfFile()
+        finished.signal()
+    }
+    if finished.wait(timeout: .now() + 3) == .timedOut {
+        process.terminate()
+        return nil
+    }
+    let line = String(decoding: output, as: UTF8.self).split(separator: "\n").last.map(String.init)
+    return line?.hasPrefix("/") == true ? line : nil
+}
+
+func supportedNode(_ path: String) -> Bool {
+    guard FileManager.default.isExecutableFile(atPath: path) else { return false }
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: path)
+    process.arguments = ["-p", "process.versions.node"]
+    let pipe = Pipe()
+    process.standardOutput = pipe
+    process.standardError = FileHandle.nullDevice
+    do {
+        try process.run()
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        let major = Int((String(data: data, encoding: .utf8) ?? "").split(separator: ".").first.map(String.init) ?? "") ?? 0
+        return process.terminationStatus == 0 && major >= 24
+    } catch { return false }
+}
+
+func nodeExecutable() -> URL? {
+    let fm = FileManager.default
+    var paths = loginShellNode().map { [$0] } ?? []
+    paths += (ProcessInfo.processInfo.environment["PATH"] ?? "").split(separator: ":").map { String($0) + "/node" }
+    paths.append("/usr/local/bin/node")
+    let nvm = fm.homeDirectoryForCurrentUser.appendingPathComponent(".nvm/versions/node")
+    if let versions = try? fm.contentsOfDirectory(atPath: nvm.path) {
+        paths += versions.sorted { $0.compare($1, options: .numeric) == .orderedDescending }.map { nvm.appendingPathComponent($0 + "/bin/node").path }
+    }
+    paths.append("/opt/homebrew/bin/node")
+    // Homebrew Node loads libuv from outside its prefix and cannot start under the Seatbelt profile.
+    let homebrew = { (path: String) in URL(fileURLWithPath: path).resolvingSymlinksInPath().path.contains("/Cellar/") }
+    let ordered = paths.filter { !homebrew($0) } + paths.filter(homebrew)
+    return ordered.first(where: supportedNode).map { URL(fileURLWithPath: $0) }
+}
+
 final class LauncherDelegate: NSObject, NSApplicationDelegate {
     private var window: NSWindow!
     private var status: NSTextField!
@@ -54,32 +111,6 @@ final class LauncherDelegate: NSObject, NSApplicationDelegate {
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
         startHelper()
-    }
-
-    private func nodeExecutable() -> URL? {
-        let fm = FileManager.default
-        var paths = ["/opt/homebrew/bin/node", "/usr/local/bin/node"]
-        paths += (ProcessInfo.processInfo.environment["PATH"] ?? "").split(separator: ":").map { String($0) + "/node" }
-        let nvm = fm.homeDirectoryForCurrentUser.appendingPathComponent(".nvm/versions/node")
-        if let versions = try? fm.contentsOfDirectory(atPath: nvm.path) {
-            paths += versions.sorted { $0.compare($1, options: .numeric) == .orderedDescending }.map { nvm.appendingPathComponent($0 + "/bin/node").path }
-        }
-        for path in paths where fm.isExecutableFile(atPath: path) {
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: path)
-            process.arguments = ["-p", "process.versions.node"]
-            let pipe = Pipe()
-            process.standardOutput = pipe
-            process.standardError = FileHandle.nullDevice
-            do {
-                try process.run()
-                let data = pipe.fileHandleForReading.readDataToEndOfFile()
-                process.waitUntilExit()
-                let major = Int((String(data: data, encoding: .utf8) ?? "").split(separator: ".").first.map(String.init) ?? "") ?? 0
-                if process.terminationStatus == 0 && major >= 24 { return URL(fileURLWithPath: path) }
-            } catch {}
-        }
-        return nil
     }
 
     private func startHelper() {
@@ -158,6 +189,11 @@ final class LauncherDelegate: NSObject, NSApplicationDelegate {
         }
         return .terminateLater
     }
+}
+
+if CommandLine.arguments.contains("--print-node") {
+    print(nodeExecutable()?.path ?? "")
+    exit(0)
 }
 
 let app = NSApplication.shared
