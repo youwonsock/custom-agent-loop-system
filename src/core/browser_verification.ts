@@ -1,6 +1,6 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { createRequire } from "node:module";
 import { spawn, ChildProcess } from "node:child_process";
 import { createServer as reservePort } from "node:net";
@@ -11,6 +11,7 @@ import { atomicWriteJsonFile, checkProcessLiveness, delay } from "./resilience";
 import { checks, validateBrowserSpec } from "./browser_spec";
 import { executeStep } from "./browser_steps";
 import { inside, sourceHashes } from "./verification_sources";
+import { sha } from "./values";
 export { validateBrowserSpec } from "./browser_spec";
 export interface BrowserReport {
   version: 1;
@@ -88,9 +89,7 @@ export async function runBrowserVerification(options: {
     report.sourceHashes = await sourceHashes(root, out);
     report.sourceHashes[
       path.relative(root, specFile).split(path.sep).join("/")
-    ] = createHash("sha256")
-      .update(await fs.readFile(specFile))
-      .digest("hex");
+    ] = sha(await fs.readFile(specFile));
     const requireFromTarget = createRequire(path.join(root, "package.json"));
     let modulePath: string;
     try {
@@ -247,11 +246,9 @@ export async function runBrowserVerification(options: {
     );
     // Check source/spec freshness while the owned server is still running.
     const after = await sourceHashes(root, out);
-    after[path.relative(root, specFile).split(path.sep).join("/")] = createHash(
-      "sha256",
-    )
-      .update(await fs.readFile(specFile))
-      .digest("hex");
+    after[path.relative(root, specFile).split(path.sep).join("/")] = sha(
+      await fs.readFile(specFile),
+    );
     if (JSON.stringify(after) !== JSON.stringify(report.sourceHashes))
       throw new Error(
         "Source changed during browser verification; rerun on current files.",
@@ -280,10 +277,9 @@ export async function runBrowserVerification(options: {
     if (report.allPassed && specFile) {
       try {
         const current = await sourceHashes(root, out);
-        current[path.relative(root, specFile).split(path.sep).join("/")] =
-          createHash("sha256")
-            .update(await fs.readFile(specFile))
-            .digest("hex");
+        current[path.relative(root, specFile).split(path.sep).join("/")] = sha(
+          await fs.readFile(specFile),
+        );
         if (JSON.stringify(current) !== JSON.stringify(report.sourceHashes))
           throw new Error(
             "Source changed before owned server cleanup completed.",

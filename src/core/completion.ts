@@ -13,13 +13,13 @@ import {
   RequirementItem,
   parseRequirementEvidence,
 } from "./requirement_ledger";
-import { isReadOnly } from "./invocation";
 import { FailureKind } from "./resilience";
 import {
   checkCommandKey,
   failedVerificationCommand,
   isVerificationCommand,
   isBrowserVerificationCommand,
+  commandSucceeded,
 } from "./verification_evidence";
 import { renderStructuredReport } from "./report_protocol";
 import { missingContractReceipts } from "./verification_contract";
@@ -31,6 +31,11 @@ import {
   nodeScopeAuditProblem,
   nodeInspectionProblem,
 } from "./node_test_policy";
+import {
+  isReadOnly,
+  isResearchRole,
+  isVerifierRole,
+} from "../shared/node_roles";
 export const requiresResearch = (goal: string): boolean =>
   /(?:인터넷|웹)\s*(?:을|를|에서|으로)?\s*(?:검색|조사|찾)|\b(?:search|browse|research|look\s*up)(?:\s+the)?\s+(?:internet|web)\b|\b(?:internet|web)\s+(?:search|research)\b/i.test(
     goal.replace(/\s+/g, " "),
@@ -174,7 +179,7 @@ export function validateCompletion(
     if (
       automation?.verificationContract &&
       contract?.status === "locked" &&
-      ["test", "review", "approval"].includes(node.type) &&
+      isVerifierRole(node.type) &&
       rendered === null
     )
       return fail("고정 검증 계약은 AGENT_REPORT JSON v1 보고가 필요합니다.");
@@ -206,7 +211,7 @@ export function validateCompletion(
   const repairableBlocker =
     Boolean(automation) &&
     /^BLOCKED_KIND:\s*(?:product|test_setup)\s*$/im.test(output);
-  if (["test", "review", "approval"].includes(node.type)) {
+  if (isVerifierRole(node.type)) {
     const blocked = commands.find((c) => c.environmentError);
     const reportedBlocked = parseRequirementEvidence(output).some(
       (r) => r.status === "BLOCKED",
@@ -228,10 +233,7 @@ export function validateCompletion(
     output.split("\n").at(-1)?.trim() !== "[PHASE_DONE]"
   )
     return fail("assistant 응답 마지막에 독립 행 [PHASE_DONE]이 필요합니다.");
-  if (
-    requiresResearch(goal) &&
-    ["planning", "review", "approval"].includes(node.type)
-  ) {
+  if (requiresResearch(goal) && isResearchRole(node.type)) {
     if (answer.researchBlocked) return answer;
     if (
       !result.evidence.completedSearches ||
@@ -358,7 +360,8 @@ export function validateCompletion(
     if (
       automation?.browserVerification &&
       !commands.some(
-        (c) => c.exitCode === 0 && isBrowserVerificationCommand(c.command, cwd),
+        (c) =>
+          commandSucceeded(c) && isBrowserVerificationCommand(c.command, cwd),
       )
     )
       return fail(
@@ -374,15 +377,14 @@ export function validateCompletion(
         !commands.some(
           (c) =>
             checkCommandKey(c.command) === checkCommandKey(command) &&
-            c.exitCode === 0 &&
-            !c.environmentError &&
+            commandSucceeded(c) &&
             isVerificationCommand(c.command, cwd),
         )
       );
     });
     if (
       !commands.some(
-        (c) => c.exitCode === 0 && isVerificationCommand(c.command, cwd),
+        (c) => commandSucceeded(c) && isVerificationCommand(c.command, cwd),
       ) ||
       unverified.length
     )
@@ -393,10 +395,7 @@ export function validateCompletion(
   if (
     answer.verdict === "APPROVED" &&
     !priorTestProof.some(
-      (c) =>
-        c.exitCode === 0 &&
-        !c.environmentError &&
-        isVerificationCommand(c.command, cwd),
+      (c) => commandSucceeded(c) && isVerificationCommand(c.command, cwd),
     )
   ) {
     answer.verdict = "REJECTED";

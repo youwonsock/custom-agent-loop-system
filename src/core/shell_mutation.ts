@@ -1,3 +1,5 @@
+import { scanShell } from "./shell_scan";
+
 interface Token {
   text: string;
   operator: boolean;
@@ -18,105 +20,98 @@ export function shellMutation(command: string, depth = 0): boolean {
   if (depth > 8) return true;
   const tokens: Token[] = [];
   let word = "",
-    quote = "",
     substitutionMutation = false;
   const flush = () => {
     if (word) tokens.push({ text: word, operator: false });
     word = "";
   };
-  for (let i = 0; i < command.length; i++) {
-    const c = command[i]!;
-    if (c === "\\" && quote !== "'") {
-      word += command[++i] ?? "";
-      continue;
-    }
-    if (quote === "'") {
-      if (c === "'") quote = "";
-      else word += c;
-      continue;
-    }
-    if (c === "'" && !quote) {
-      quote = "'";
-      continue;
-    }
-    if (c === '"') {
-      quote = quote === '"' ? "" : '"';
-      continue;
-    }
-    if (c === "`" || (c === "$" && command[i + 1] === "(")) {
-      const backtick = c === "`",
-        start = i + (backtick ? 1 : 2);
-      let end = start,
-        nesting = 1,
-        innerQuote = "";
-      for (; end < command.length; end++) {
-        const ch = command[end]!;
-        if (ch === "\\") {
-          end++;
-          continue;
-        }
-        if (backtick) {
-          if (ch === "`") break;
-          continue;
-        }
-        if (ch === "'" || ch === '"') {
-          if (innerQuote === ch) innerQuote = "";
-          else if (!innerQuote) innerQuote = ch;
-        }
-        if (innerQuote) continue;
-        if (ch === "(") nesting++;
-        if (ch === ")" && --nesting === 0) break;
+  scanShell(command, {
+    escape(next) {
+      word += next ?? "";
+    },
+    quoteMark() {},
+    char(c, i, quote) {
+      if (quote === "'") {
+        word += c;
+        return 0;
       }
-      substitutionMutation ||= shellMutation(
-        command.slice(start, end),
-        depth + 1,
-      );
-      word += "$(substitution)";
-      i = end;
-      continue;
-    }
-    if (quote) {
+      if (c === "`" || (c === "$" && command[i + 1] === "(")) {
+        const backtick = c === "`",
+          start = i + (backtick ? 1 : 2);
+        let end = start,
+          nesting = 1,
+          innerQuote = "";
+        for (; end < command.length; end++) {
+          const ch = command[end]!;
+          if (ch === "\\") {
+            end++;
+            continue;
+          }
+          if (backtick) {
+            if (ch === "`") break;
+            continue;
+          }
+          if (ch === "'" || ch === '"') {
+            if (innerQuote === ch) innerQuote = "";
+            else if (!innerQuote) innerQuote = ch;
+          }
+          if (innerQuote) continue;
+          if (ch === "(") nesting++;
+          if (ch === ")" && --nesting === 0) break;
+        }
+        substitutionMutation ||= shellMutation(
+          command.slice(start, end),
+          depth + 1,
+        );
+        word += "$(substitution)";
+        return end - i;
+      }
+      if (quote) {
+        word += c;
+        return 0;
+      }
+      if (c === "#" && !word) {
+        let end = i;
+        while (end < command.length && command[end] !== "\n") end++;
+        flush();
+        tokens.push({ text: ";", operator: true });
+        return end - i;
+      }
+      if (/\s/.test(c)) {
+        flush();
+        if (c === "\n") tokens.push({ text: ";", operator: true });
+        return 0;
+      }
+      const operator = [
+        "&>>",
+        "&>",
+        ">>",
+        ">&",
+        "<&",
+        "<>",
+        "<<-",
+        "<<<",
+        "<<",
+        "&&",
+        "||",
+        "|&",
+        ";",
+        "|",
+        "&",
+        ">",
+        "<",
+        "(",
+        ")",
+      ].find((v) => command.startsWith(v, i));
+      if (operator) {
+        flush();
+        tokens.push({ text: operator, operator: true });
+        return operator.length - 1;
+      }
       word += c;
-      continue;
-    }
-    if (c === "#" && !word) {
-      while (i < command.length && command[i] !== "\n") i++;
-      flush();
-      tokens.push({ text: ";", operator: true });
-      continue;
-    }
-    if (/\s/.test(c)) {
-      flush();
-      if (c === "\n") tokens.push({ text: ";", operator: true });
-      continue;
-    }
-    const operator = [
-      "&>>",
-      "&>",
-      ">>",
-      ">&",
-      "<&",
-      "<>",
-      "<<-",
-      "<<<",
-      "<<",
-      "&&",
-      "||",
-      "|&",
-      ";",
-      "|",
-      "&",
-      ">",
-      "<",
-      "(",
-      ")",
-    ].find((v) => command.startsWith(v, i));
-    if (operator) {
-      flush();
-      tokens.push({ text: operator, operator: true });
-      i += operator.length - 1;
-    } else word += c;
-  }
+      return 0;
+    },
+  });
   flush();
   if (substitutionMutation) return true;
   let segment: string[] = [];

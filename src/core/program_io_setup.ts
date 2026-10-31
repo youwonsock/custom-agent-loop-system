@@ -1,12 +1,13 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { spawnSync } from "node:child_process";
-import { randomUUID, createHash } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import {
   vmRuntimeFile,
   imageDigest,
   containerHostEnvironment,
 } from "./program_io_vm";
+import { sha } from "./values";
 
 /** Explicit developer/setup command. No model or user credentials enter its image. */
 export function prepareProgramIoRuntime(): void {
@@ -43,7 +44,7 @@ export function prepareProgramIoRuntime(): void {
     fs.readFileSync(path.join(dist, "program_io_dependencies.json"), "utf8"),
   );
   const lock = fs.readFileSync(path.join(dist, "program_io_package_lock.json"));
-  if (createHash("sha256").update(lock).digest("hex") !== metadata.lockDigest)
+  if (sha(lock) !== metadata.lockDigest)
     throw Error("Packaged runtime dependency lock is invalid.");
   let prepared: { image?: string; lockDigest?: string } | null = null;
   try {

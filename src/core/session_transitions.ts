@@ -7,6 +7,7 @@ import {
 import { AppError } from "./errors";
 import { transition } from "./graph";
 import { advanceConvergence } from "./requirement_ledger";
+import { isAuditRole, isVerifierRole } from "../shared/node_roles";
 
 /** Pure domain transitions. Callers own locks, process lifecycle and persistence. */
 export function applyApproval(
@@ -114,20 +115,12 @@ export function advanceVisit(
     visit.transitionCommitted = true;
   }
   const failed = visit.status === "failed";
-  if (
-    s.graph.automation &&
-    failed &&
-    ["test", "review", "approval"].includes(node.type)
-  ) {
+  if (s.graph.automation && failed && isVerifierRole(node.type)) {
     const failures = s.visits.filter(
       (v) =>
         v.status === "failed" &&
         v.transitionCommitted &&
-        s.graph.nodes.some(
-          (n) =>
-            n.id === v.nodeId &&
-            ["test", "review", "approval"].includes(n.type),
-        ),
+        s.graph.nodes.some((n) => n.id === v.nodeId && isVerifierRole(n.type)),
     ).length;
     s.currentNodeId =
       failures > s.graph.automation.maxRepairCycles
@@ -141,9 +134,7 @@ export function advanceVisit(
     return;
   }
   s.currentNodeId =
-    failed &&
-    ["review", "approval"].includes(node.type) &&
-    s.convergence.stagnantCycles >= 1
+    failed && isAuditRole(node.type) && s.convergence.stagnantCycles >= 1
       ? s.graph.entrypoints.interrupt
       : transition(s.graph, node.id, failed ? "failure" : "success");
   s.activeVisitId = null;

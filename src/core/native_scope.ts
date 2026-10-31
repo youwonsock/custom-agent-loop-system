@@ -5,23 +5,13 @@ import { NativeScopeAudit, SessionState } from "../shared/domain";
 import { canonicalCommand, literalShellWords } from "./verification_evidence";
 import { inspectionSegments, stripInspectionStderr } from "./inspection_syntax";
 import { preExecutionDenied } from "./event_evidence";
+import { obj, Obj } from "./values";
+import { isWithin } from "./access_paths";
 
 export const SCOPE_DENIED = "[AGENT_GRAPH_SCOPE_DENIED]";
 export const SCOPE_VIOLATION = "[AGENT_GRAPH_SCOPE_VIOLATION]";
-type Obj = Record<string, unknown>;
-const obj = (v: unknown): Obj =>
-  v && typeof v === "object" && !Array.isArray(v) ? (v as Obj) : {};
 const apiFor = (cwd: string) =>
   /^[A-Za-z]:[\\/]|^\\\\/.test(cwd) ? path.win32 : path.posix;
-function within(root: string, file: string, api: typeof path.posix): boolean {
-  const relative = api.relative(root, file);
-  return (
-    relative === "" ||
-    (!relative.startsWith(".." + api.sep) &&
-      relative !== ".." &&
-      !api.isAbsolute(relative))
-  );
-}
 function realPath(file: string): string {
   let ancestor = file;
   const suffix: string[] = [];
@@ -83,15 +73,15 @@ export function scopePathProblem(
     approved = roots.map((root) => api.resolve(cwd, root));
   // Foreign-platform paths are used only by pure compatibility checks.
   if (api !== path.posix && process.platform !== "win32")
-    return approved.some((root) => within(root, file, api))
+    return approved.some((root) => isWithin(root, file, api))
       ? null
       : "outside approved target roots";
   try {
     const realRoots = approved.map(realPath);
-    if (![...approved, ...realRoots].some((root) => within(root, file, api)))
+    if (![...approved, ...realRoots].some((root) => isWithin(root, file, api)))
       return "outside approved target roots";
     const real = realPath(file);
-    if (!realRoots.some((root) => within(root, real, api)))
+    if (!realRoots.some((root) => isWithin(root, real, api)))
       return "symlink leaves approved target roots";
   } catch {
     return "cannot establish the real target path";

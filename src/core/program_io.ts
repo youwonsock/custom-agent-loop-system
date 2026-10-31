@@ -1,13 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
-import {
-  createHash,
-  generateKeyPairSync,
-  randomUUID,
-  sign,
-  verify,
-} from "node:crypto";
+import { generateKeyPairSync, randomUUID, sign, verify } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
 import { literalShellWords } from "./verification_evidence";
@@ -21,8 +15,11 @@ import {
   cleanupPolicyVms,
   containerHostEnvironment,
 } from "./program_io_vm";
+import { obj, Obj } from "./values";
+import { sha } from "./values";
+import { isWithin } from "./access_paths";
+import { IoUnavailable } from "./program_io_errors";
 
-export const IO_UNAVAILABLE = "[AGENT_GRAPH_IO_UNAVAILABLE]";
 export const IO_VIOLATION = "[AGENT_GRAPH_IO_VIOLATION]";
 export const IO_DENIED = "[AGENT_GRAPH_IO_DENIED]";
 export interface ProgramIoPolicy {
@@ -46,15 +43,10 @@ export interface ProgramIoPolicy {
   backend: "macos-seatbelt" | "apple-container-vm";
   vm?: VmPolicy;
 }
-type Obj = Record<string, unknown>;
 export type ProgramIoCommandPolicy = Pick<
   ProgramIoPolicy,
   "id" | "node" | "runner" | "publicKey"
 >;
-const obj = (v: unknown): Obj =>
-  v && typeof v === "object" && !Array.isArray(v) ? (v as Obj) : {};
-export const ioDigest = (v: string | Buffer): string =>
-  createHash("sha256").update(v).digest("hex");
 const quote = (s: string): string => "'" + s.replace(/'/g, "'\\''") + "'";
 const key = <T extends "pkcs8" | "spki">(data: string, type: T) => ({
   key: Buffer.from(data, "base64"),
@@ -323,39 +315,37 @@ export function prepareProgramIo(options: {
   backend?: "macos-seatbelt" | "apple-container-vm";
 }): ProgramIoPolicy {
   if (process.platform !== "darwin" || !fs.existsSync("/usr/bin/sandbox-exec"))
-    throw Error(
-      `${IO_UNAVAILABLE} Kernel program I/O isolation is not supported on this host; refusing unsandboxed execution.`,
+    throw new IoUnavailable(
+      `Kernel program I/O isolation is not supported on this host; refusing unsandboxed execution.`,
     );
   const cwd = fs.realpathSync(options.cwd),
     requested = path.resolve(options.directory);
   if (fs.existsSync(requested) && fs.readdirSync(requested).length)
-    throw Error(
-      `${IO_UNAVAILABLE} Refusing to overwrite an existing broker audit directory.`,
+    throw new IoUnavailable(
+      `Refusing to overwrite an existing broker audit directory.`,
     );
   fs.mkdirSync(requested, { recursive: true, mode: 0o700 });
   const directory = fs.realpathSync(requested);
-  if (directory === cwd || directory.startsWith(cwd + path.sep))
-    throw Error(
-      `${IO_UNAVAILABLE} The broker/audit directory must be outside untrusted project writes.`,
+  if (isWithin(cwd, directory))
+    throw new IoUnavailable(
+      `The broker/audit directory must be outside untrusted project writes.`,
     );
   const id = randomUUID(),
     scratch = path.join(cwd, "verification", ".agent-io", id),
     runtimeReadRoots = discoverIoRuntimeRoots();
   if (
     cwd === path.parse(cwd).root ||
-    runtimeReadRoots.some(
-      (root) => root === cwd || root.startsWith(cwd + path.sep),
-    )
+    runtimeReadRoots.some((root) => isWithin(cwd, root))
   )
-    throw Error(
-      `${IO_UNAVAILABLE} The project must be disjoint from the trusted runtime installation.`,
+    throw new IoUnavailable(
+      `The project must be disjoint from the trusted runtime installation.`,
     );
   if (
     runtimeReadRoots.some(
       (root) => root === path.parse(root).root || root === os.homedir(),
     )
   )
-    throw Error(`${IO_UNAVAILABLE} A runtime read root is too broad.`);
+    throw new IoUnavailable(`A runtime read root is too broad.`);
   const writableRoots = options.readOnly
     ? [scratch]
     : options.testRole
@@ -384,7 +374,7 @@ export function prepareProgramIo(options: {
       runner: path.join(__dirname, "program_io_runner.js"),
       bootstrap: path.join(__dirname, "program_io_bootstrap.js"),
       profile,
-      profileDigest: ioDigest(profile),
+      profileDigest: sha(profile),
       publicKey: keys.publicKey
         .export({ format: "der", type: "spki" })
         .toString("base64"),
@@ -414,11 +404,9 @@ export function prepareProgramIo(options: {
         options.protectedFiles ?? [],
       );
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      throw Error(
-        message.startsWith(IO_UNAVAILABLE)
-          ? message
-          : `${IO_UNAVAILABLE} ${message}`,
+      if (error instanceof IoUnavailable) throw error;
+      throw new IoUnavailable(
+        error instanceof Error ? error.message : String(error),
       );
     }
     policy.browserPath = "/ms-playwright";
@@ -433,7 +421,7 @@ export function prepareProgramIo(options: {
       capabilities: [],
       scratch,
     });
-    policy.profileDigest = ioDigest(policy.profile);
+    policy.profileDigest = sha(policy.profile);
   }
   fs.writeFileSync(path.join(directory, "profile.sb"), policy.profile, {
     mode: 0o600,
@@ -503,8 +491,8 @@ export function prepareProgramIo(options: {
     JSON.stringify(publicPolicy, null, 2),
   );
   if (!policy.preflightPassed)
-    throw Error(
-      `${IO_UNAVAILABLE} Kernel isolation preflight failed: ${probe.error?.message ?? probe.stderr ?? probe.status}`,
+    throw new IoUnavailable(
+      `Kernel isolation preflight failed: ${probe.error?.message ?? probe.stderr ?? probe.status}`,
     );
   return policy;
 }
@@ -676,9 +664,8 @@ export class ProgramIoTracker {
       if ([...starts.keys(), ...ends.keys()].some((id) => !this.calls.has(id)))
         audit.invalidReceipts++;
       if (
-        ioDigest(
-          fs.readFileSync(path.join(this.policy.directory, "profile.sb")),
-        ) !== this.policy.profileDigest
+        sha(fs.readFileSync(path.join(this.policy.directory, "profile.sb"))) !==
+        this.policy.profileDigest
       )
         audit.invalidReceipts++;
     } catch {

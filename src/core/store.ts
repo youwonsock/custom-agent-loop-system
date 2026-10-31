@@ -24,6 +24,7 @@ import {
   validateGraphDocument,
 } from "./graph";
 import { AppError } from "./errors";
+import { sha } from "./values";
 
 export class StudioStore {
   private readonly summaryCache = new Map<
@@ -188,12 +189,9 @@ export class StudioStore {
     );
   }
   async cacheCatalog(catalog: ModelCatalog): Promise<void> {
-    const { createHash } = await import("node:crypto");
-    const key = createHash("sha256")
-      .update(
-        `${catalog.connectionId}\0${catalog.binary}\0${catalog.targetProjectPath}`,
-      )
-      .digest("hex");
+    const key = sha(
+      `${catalog.connectionId}\0${catalog.binary}\0${catalog.targetProjectPath}`,
+    );
     await atomicWriteJsonFile(
       path.join(this.root, "catalogs", `${key}.json`),
       catalog,

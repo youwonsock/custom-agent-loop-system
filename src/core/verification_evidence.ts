@@ -8,56 +8,47 @@ import {
   parseRequirementEvidence,
   RequirementItem,
 } from "./requirement_ledger";
-
-type Obj = Record<string, unknown>;
-const obj = (v: unknown): Obj =>
-  v && typeof v === "object" && !Array.isArray(v) ? (v as Obj) : {};
+import { obj, Obj } from "./values";
+import { STOP_SCAN, scanShell } from "./shell_scan";
 
 // Decode one literal argv layer; never evaluate substitutions or shell operators.
 export function literalShellWords(input: string): string[] | null {
   const words: string[] = [];
   let word = "",
-    quote = "",
-    started = false;
-  for (let i = 0; i < input.length; i++) {
-    const c = input[i]!;
-    if (c === "\\" && quote !== "'") {
-      const next = input[i + 1];
-      if (next === undefined) return null;
-      if (quote === '"' && !["$", "`", '"', "\\", "\n"].includes(next)) {
-        word += c;
-        started = true;
-        continue;
+    started = false,
+    refused = false;
+  const add = (text: string) => {
+    word += text;
+    started = true;
+  };
+  const open = scanShell(input, {
+    escape(next, quote) {
+      if (next === undefined) refused = true;
+      else if (quote === '"' && !["$", "`", '"', "\\", "\n"].includes(next))
+        add("\\" + next);
+      else add(next);
+    },
+    quoteMark: () => add(""),
+    char(c, _at, quote) {
+      if (quote) {
+        add(c);
+        return 0;
       }
-      word += next;
-      i++;
-      started = true;
-      continue;
-    }
-    if (quote) {
-      if (c === quote) quote = "";
-      else word += c;
-      started = true;
-      continue;
-    }
-    if (c === "'" || c === '"') {
-      quote = c;
-      started = true;
-      continue;
-    }
-    if (/\s/.test(c)) {
-      if (started) {
-        words.push(word);
+      if (/\s/.test(c)) {
+        if (started) words.push(word);
         word = "";
         started = false;
+        return 0;
       }
-      continue;
-    }
-    if (/[;&|<>`$]/.test(c)) return null;
-    word += c;
-    started = true;
-  }
-  if (quote) return null;
+      if (/[;&|<>`$]/.test(c)) {
+        refused = true;
+        return STOP_SCAN;
+      }
+      add(c);
+      return 0;
+    },
+  });
+  if (refused || open) return null;
   if (started) words.push(word);
   return words;
 }
@@ -328,11 +319,15 @@ export function acceptedVisit(visit: NodeVisit, cwd?: string): boolean {
   );
 }
 
+/** A receipt proves a check only with exit 0 and no environment failure. */
+export const commandSucceeded = (c: CommandReceipt): boolean =>
+  c.exitCode === 0 && !c.environmentError;
+
 /** Shared negative evidence policy for test, review, approval and terminal gates. */
 export function failedVerificationCommand(
   commands: CommandReceipt[],
 ): CommandReceipt | undefined {
-  return commands.find((c) => c.exitCode !== 0 || !!c.environmentError);
+  return commands.find((c) => !commandSucceeded(c));
 }
 
 export function visitCommands(

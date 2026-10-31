@@ -38,7 +38,7 @@ import {
 } from "./process_supervisor";
 import { AgentAttemptRunner } from "./agent_attempt_runner";
 import { queryModels } from "./catalog";
-import { buildInvocation, isReadOnly } from "./invocation";
+import { buildInvocation } from "./invocation";
 import { buildNodePrompt, buildRecoveryMessage } from "./prompt";
 import {
   parseRequirementEvidence,
@@ -70,7 +70,7 @@ import { sessionBudgetReason, pauseForBudget } from "./session_budget";
 import { stageDeadline, stageBudgetReason } from "./stage_budget";
 import { unscopedTerminationEvent } from "./process_command_policy";
 import { SCOPE_VIOLATION } from "./native_scope";
-import { IO_UNAVAILABLE, IO_VIOLATION } from "./program_io";
+import { IO_VIOLATION } from "./program_io";
 import { nodeTestScript } from "./node_test_policy";
 import { RunPolicy, runPolicy } from "./run_policy";
 import {
@@ -82,6 +82,8 @@ import {
   failedRegisteredCheck,
   currentVerificationSources,
 } from "./test_source_guard";
+import { isAuditRole, isReadOnly, isVerifierRole } from "../shared/node_roles";
+import { IoUnavailable } from "./program_io_errors";
 
 export interface RuntimeHooks {
   onState?: (state: SessionState) => void;
@@ -705,7 +707,7 @@ export class GraphRuntime {
           this.invocationOptions(stage, id, recoveryMessage, nextResume),
         );
       } catch (error) {
-        if (!messageOf(error).includes(IO_UNAVAILABLE)) throw error;
+        if (!(error instanceof IoUnavailable)) throw error;
         return this.halt(visit, "BLOCKED", messageOf(error), {
           pauseVisit: true,
           clearRecovery: false,
@@ -780,7 +782,7 @@ export class GraphRuntime {
   > {
     const policy = runPolicy(this.state.graph),
       sourceGuard = policy.testSourceGuard;
-    if (sourceGuard && ["review", "approval"].includes(node.type)) {
+    if (sourceGuard && isAuditRole(node.type)) {
       const expected = currentVerificationSources(this.state, visit);
       if (!expected)
         return {
@@ -831,7 +833,7 @@ export class GraphRuntime {
           ),
         };
     }
-    if (["test", "review", "approval"].includes(node.type)) {
+    if (isVerifierRole(node.type)) {
       const problem = await deliverableProblem(this.state);
       if (problem) return { result: this.verificationFailure(node, problem) };
     }
@@ -1188,7 +1190,7 @@ export class GraphRuntime {
       visit.verifiedCommands = [];
       delete visit.nodeTestProof;
     }
-    if (["test", "review", "approval"].includes(node.type))
+    if (isVerifierRole(node.type))
       visit.verifiedCommands = mergeProjectReceipts(
         this.state.targetProjectPath,
         visit.verifiedCommands,
@@ -1378,7 +1380,7 @@ export class GraphRuntime {
     }
     if (
       sourceGuard &&
-      ["review", "approval"].includes(node.type) &&
+      isAuditRole(node.type) &&
       result.outcome === "succeeded"
     ) {
       const expected = currentVerificationSources(this.state, visit);
@@ -1415,7 +1417,7 @@ export class GraphRuntime {
       nodeProofError: string | undefined;
     if (
       this.state.verificationContract?.manifest?.nodeTests &&
-      ["test", "review", "approval"].includes(node.type) &&
+      isVerifierRole(node.type) &&
       result.outcome === "succeeded"
     ) {
       try {
@@ -1455,7 +1457,7 @@ export class GraphRuntime {
     run.completion = completion;
     if (
       completion.valid &&
-      ["implementation", "test", "review", "approval"].includes(node.type) &&
+      (node.type === "implementation" || isVerifierRole(node.type)) &&
       !["FAIL", "REJECTED", "BLOCKED"].includes(completion.verdict ?? "")
     ) {
       const problem = await deliverableProblem(this.state);

@@ -11,12 +11,10 @@ import {
 } from "./verification_evidence";
 import { sourceHashes } from "./verification_sources";
 import { inspectionSegments, stripInspectionStderr } from "./inspection_syntax";
+import { obj, Obj } from "./values";
 
 export const TEST_POLICY = "[AGENT_GRAPH_TEST_POLICY]";
 export const TEST_FAILED = "[AGENT_GRAPH_TEST_FAILED]";
-type Obj = Record<string, unknown>;
-const obj = (v: unknown): Obj =>
-  v && typeof v === "object" && !Array.isArray(v) ? (v as Obj) : {};
 
 /** Test sources are immutable; only registered checks and inspection/preparation are allowed. */
 export function testCommandAllowed(
