@@ -84,19 +84,24 @@ export async function claimNextControlRequest(
     const processingPath = path.join(paths.processing, candidate.fileName);
     try {
       await fsp.rename(sourcePath, processingPath);
-      const ack: ControlAck = {
-        requestId: candidate.request.requestId,
-        type: candidate.request.type,
-        acceptedAt: new Date().toISOString(),
-        completedAt: null,
-        result: "accepted",
-        message: null,
-      };
-      await atomicWriteJsonFile(path.join(paths.acks, candidate.fileName), ack);
-      return { request: candidate.request, processingPath };
     } catch {
       // Another process claimed it.
+      continue;
     }
+    const ack: ControlAck = {
+      requestId: candidate.request.requestId,
+      type: candidate.request.type,
+      acceptedAt: new Date().toISOString(),
+      completedAt: null,
+      result: "accepted",
+      message: null,
+    };
+    // The claim is ours once renamed. A missing accepted ack must not lose a STOP.
+    await atomicWriteJsonFile(
+      path.join(paths.acks, candidate.fileName),
+      ack,
+    ).catch(() => {});
+    return { request: candidate.request, processingPath };
   }
   return null;
 }
