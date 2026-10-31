@@ -92,12 +92,25 @@ export function imageDigest(
     throw unavailable("Container image identity is unavailable.");
   return digest;
 }
+/** The VM mounts the install folder read-only, so nothing can be mounted beneath it. */
+export function nestedProjectProblem(
+  cwd: string,
+  installRoot: string,
+): string | null {
+  return cwd === installRoot || cwd.startsWith(installRoot + path.sep)
+    ? `대상 프로젝트(${cwd})가 앱 설치 폴더(${installRoot}) 안에 있습니다. VM은 설치 폴더를 읽기 전용으로 올리므로 그 안의 프로젝트를 마운트할 수 없습니다. 설치 폴더 밖의 프로젝트를 선택하세요.`
+    : null;
+}
 export function prepareVmPolicy(
   directory: string,
   cwd: string,
   mode: VmPolicy["mode"],
   protectedFiles: string[],
 ): VmPolicy {
+  const distRoot = path.resolve(__dirname, "../.."),
+    runtimeRoot = path.dirname(distRoot),
+    nested = nestedProjectProblem(cwd, runtimeRoot);
+  if (nested) throw unavailable(nested);
   const value = JSON.parse(
     fs.readFileSync(vmRuntimeFile(), "utf8"),
   ) as VmRuntime;
@@ -119,14 +132,12 @@ export function prepareVmPolicy(
   });
   if (status.status !== 0)
     cli(value.binary, ["system", "start", "--disable-kernel-install"], 30000);
-  const distRoot = path.resolve(__dirname, "../.."),
-    runtimeRoot = path.dirname(distRoot),
-    metadata = JSON.parse(
-      fs.readFileSync(
-        path.join(distRoot, "program_io_dependencies.json"),
-        "utf8",
-      ),
-    );
+  const metadata = JSON.parse(
+    fs.readFileSync(
+      path.join(distRoot, "program_io_dependencies.json"),
+      "utf8",
+    ),
+  );
   if (value.lockDigest !== metadata.lockDigest)
     throw unavailable(
       "Isolated runtime dependencies differ from this package lock; prepare the runtime again.",

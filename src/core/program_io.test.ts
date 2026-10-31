@@ -24,7 +24,7 @@ import { ProcessSupervisor } from "./process_supervisor";
 import { buildInvocation } from "./invocation";
 import { preExecutionDenied } from "./event_evidence";
 import { ToolFailureTracker } from "./tool_failures";
-import { vmRuntimeStatus } from "./program_io_vm";
+import { nestedProjectProblem, vmRuntimeStatus } from "./program_io_vm";
 
 const mac = process.platform === "darwin",
   sq = (s: string) => "'" + s.replace(/'/g, "'\\''") + "'";
@@ -823,4 +823,13 @@ test("VM runtime status separates missing, stale and corrupt descriptors without
   );
   fs.writeFileSync(file, JSON.stringify({ lockDigest }));
   assert.equal(vmRuntimeStatus(), "ready");
+});
+test("a project inside the install folder gets a stated reason instead of a mount error", () => {
+  const install = path.resolve("agent-graph");
+  assert.match(
+    nestedProjectProblem(path.join(install, "artifacts/x"), install)!,
+    /설치 폴더/,
+  );
+  assert.match(nestedProjectProblem(install, install)!, /설치 폴더/);
+  assert.equal(nestedProjectProblem(`${install}-other/project`, install), null);
 });

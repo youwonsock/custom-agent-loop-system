@@ -414,8 +414,11 @@ export function prepareProgramIo(options: {
         options.protectedFiles ?? [],
       );
     } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
       throw Error(
-        `${IO_UNAVAILABLE} ${error instanceof Error ? error.message : String(error)}`,
+        message.startsWith(IO_UNAVAILABLE)
+          ? message
+          : `${IO_UNAVAILABLE} ${message}`,
       );
     }
     policy.browserPath = "/ms-playwright";
