@@ -968,3 +968,64 @@ test("initial graph JavaScript stays under 500 kB and defers other screens and M
     ),
   );
 });
+
+test("hovering or focusing a menu item loads its screen before the click", async ({
+  page,
+}) => {
+  const loaded: string[] = [];
+  page.on("response", (response) => loaded.push(response.url()));
+  await page.goto("/");
+  await expect(page.getByTestId("graph-canvas")).toBeVisible();
+  expect(loaded.some((url) => /ConnectionsView-/.test(url))).toBe(false);
+  await page.getByRole("button", { name: "CLI 연결", exact: false }).hover();
+  await expect
+    .poll(() => loaded.some((u) => /ConnectionsView-/.test(u)))
+    .toBe(true);
+  await expect(page.getByRole("heading", { name: "내 CLI 연결" })).toHaveCount(
+    0,
+  );
+  expect(loaded.some((url) => /RunsView-/.test(url))).toBe(false);
+  await page.getByRole("button", { name: "실행 기록", exact: false }).focus();
+  await expect.poll(() => loaded.some((u) => /RunsView-/.test(u))).toBe(true);
+});
+
+test("installed CLIs are looked up only on request and registered one at a time", async ({
+  page,
+}) => {
+  // Another test may already hold the fixture, so offer a path nothing registered.
+  const found = path.resolve("test/fake_cli.js");
+  let lookups = 0;
+  await page.route("**/api/connections/discover", (route) => {
+    lookups++;
+    return route.fulfill({
+      json: [
+        { type: "codex", binary: found },
+        { type: "claude", binary: null },
+        { type: "opencode", binary: null },
+        { type: "kilo", binary: null },
+      ],
+    });
+  });
+  await page.goto("/");
+  await page.getByRole("button", { name: "CLI 연결", exact: false }).click();
+  await expect(page.getByLabel("연결 이름")).toBeVisible();
+  expect(lookups).toBe(0);
+  await page.getByRole("button", { name: "설치된 CLI 찾기" }).click();
+  const list = page.getByRole("list", { name: "찾은 CLI" });
+  await expect(list.getByText(found)).toBeVisible();
+  await expect(list.getByText("PATH에서 찾지 못함")).toHaveCount(3);
+  expect(lookups).toBe(1);
+  await list.getByRole("button", { name: "Codex 등록" }).click();
+  await expect(list.getByText("등록됨")).toBeVisible();
+  const saved = await page.evaluate(async (file) => {
+    const all: Array<{ id: string; binary: string }> = await (
+      await fetch("/api/connections")
+    ).json();
+    const match = all.filter((c) => c.binary === file);
+    await Promise.all(
+      match.map((c) => fetch(`/api/connections/${c.id}`, { method: "DELETE" })),
+    );
+    return match.length;
+  }, found);
+  expect(saved).toBe(1);
+});

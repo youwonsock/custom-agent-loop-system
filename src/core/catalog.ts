@@ -5,6 +5,7 @@ import {
   LocalConnection,
   ModelCatalog,
   ModelInfo,
+  SERVICE_TYPES,
   ServiceType,
 } from "../shared/domain";
 import { cliDiagnostic, CliDiagnosticError } from "./cli_diagnostics";
@@ -16,17 +17,18 @@ export interface Executable {
   file: string;
   prefix: string[];
 }
-export async function resolveExecutable(binary: string): Promise<Executable> {
+function executableCandidates(binary: string): string[] {
   const directories = (process.env.PATH ?? "").split(path.delimiter);
   const extensions =
     process.platform === "win32" ? ["", ".exe", ".cmd", ".bat", ".js"] : [""];
-  const candidates =
-    path.isAbsolute(binary) || binary.includes(path.sep)
-      ? [path.resolve(binary)]
-      : directories.flatMap((dir) =>
-          extensions.map((ext) => path.join(dir, binary + ext)),
-        );
-  for (let candidate of candidates) {
+  return path.isAbsolute(binary) || binary.includes(path.sep)
+    ? [path.resolve(binary)]
+    : directories.flatMap((dir) =>
+        extensions.map((ext) => path.join(dir, binary + ext)),
+      );
+}
+export async function resolveExecutable(binary: string): Promise<Executable> {
+  for (let candidate of executableCandidates(binary)) {
     const stat = await fs.stat(candidate).catch(() => null);
     if (!stat?.isFile()) continue;
     candidate = await fs.realpath(candidate);
@@ -51,6 +53,24 @@ export async function resolveExecutable(binary: string): Promise<Executable> {
   }
   throw new Error(
     "CLI 실행 파일을 찾을 수 없습니다. 설치한 실행 파일의 경로를 확인하세요.",
+  );
+}
+export interface DiscoveredCli {
+  type: ServiceType;
+  /** What to register, or null when PATH has no runnable file of that name. */
+  binary: string | null;
+}
+/** Runs only when the operator asks. Looks at PATH and never starts the CLI.
+ * Offers the PATH entry, not its target: a link usually points into a versioned
+ * folder, and a connection saved there would break on the next CLI update. */
+export function discoverClis(): Promise<DiscoveredCli[]> {
+  return Promise.all(
+    SERVICE_TYPES.map(async (type) => {
+      for (const candidate of executableCandidates(type))
+        if (await resolveExecutable(candidate).catch(() => null))
+          return { type, binary: candidate };
+      return { type, binary: null };
+    }),
   );
 }
 export async function stopChild(

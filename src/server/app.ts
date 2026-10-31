@@ -6,7 +6,7 @@ import { randomBytes } from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { StudioStore } from "../core/store";
-import { queryModels } from "../core/catalog";
+import { discoverClis, queryModels } from "../core/catalog";
 import { AppError, messageOf } from "../core/errors";
 import { graphDiagnostics } from "../core/graph";
 import { LocalConnection, SessionAction, StudioEvent } from "../shared/domain";
@@ -159,6 +159,7 @@ export async function createServer(options: ServerOptions): Promise<{
     coordinator.emitStudio({ type: "connections" });
     return c;
   });
+  app.post("/api/connections/discover", () => discoverClis());
   app.delete<{ Params: { id: string } }>(
     "/api/connections/:id",
     async (request) => {
