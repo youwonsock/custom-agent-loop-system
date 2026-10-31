@@ -1549,12 +1549,6 @@ export class GraphRuntime {
     attempt.message = failure.message;
     visit.output = completion!.output;
     await this.save();
-    // Unreachable in practice: the supervisor reports orphans as an outcome, handled earlier.
-    if (failure.kind === "orphaned_process")
-      return this.halt(visit, "BLOCKED", failure.message, {
-        pauseVisit: false,
-        clearRecovery: false,
-      });
     if (!failure.retryable)
       return this.halt(visit, "WAITING_USER", failure.message, {
         pauseVisit: true,

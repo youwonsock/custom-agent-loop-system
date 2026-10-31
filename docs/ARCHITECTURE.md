@@ -54,7 +54,6 @@ flowchart LR
 | 완료 응답의 환경 차단 | WAITING_USER | ✅ | ✅ |
 | 비재시도 실패 | WAITING_USER | ✅ | ❌ |
 | 유료·미확인 모델의 할당량 소진 | PAUSED | ✅ | ❌ |
-| 분류상 고아 프로세스 (도달하지 않음) | BLOCKED | ❌ | ❌ |
 
 예산(`budgetStop`), 단계 예산(`stageStop`), 계약 변조(`contractStop`), 소진(`exhausted`)은 별도 메서드가 처리한다. `run()` 시작 시 예약 복구는 이미 비워지므로 "취소 ❌"는 실행 중 새로 예약된 복구가 없다는 뜻이다.
 
