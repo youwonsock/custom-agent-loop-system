@@ -3,6 +3,8 @@
 // This costs model usage, so it is never part of npm test or CI.
 //   node scripts/real-cli-regression.js claude [--model <text in the model ID>]
 //   node scripts/real-cli-regression.js kilo   [--model <text in the model ID>]
+// --scenario tiny-web runs the autonomous preset unchanged, including browser
+// verification and authored node tests. The default scenario turns those off.
 // Results stay in artifacts/real-cli/. Pass criteria are in docs/STATUS.md (G4).
 const fs = require("node:fs");
 const os = require("node:os");
@@ -17,11 +19,50 @@ const { queryModels } = require(dist("core/catalog.js"));
 const { createAutonomousGraph } = require(dist("core/graph.js"));
 const { SessionCoordinator } = require(dist("server/coordinator.js"));
 
-const GOAL = [
-  "Implement slugify(text) in slug.mjs as a named export that lowercases text, replaces each run of non-alphanumeric characters with one hyphen and trims leading and trailing hyphens.",
-  "Document the function with one usage example in README.md.",
-].join("\n");
-const SESSION_LIMIT_MS = 30 * 60 * 1000;
+const SCENARIOS = {
+  slugify: {
+    goal: [
+      "Implement slugify(text) in slug.mjs as a named export that lowercases text, replaces each run of non-alphanumeric characters with one hyphen and trims leading and trailing hyphens.",
+      "Document the function with one usage example in README.md.",
+    ].join("\n"),
+    limitMs: 30 * 60 * 1000,
+    maxAttempts: 16,
+    automation: (profile) => ({
+      maxRepairCycles: 3,
+      nativeApprovalReview: false,
+      browserVerification: false,
+      verificationContract: true,
+      authoredNodeTests: false,
+      testSourceGuard: true,
+      reserveFinalizationBudget: true,
+      guardOwnedProcesses: true,
+      targetScopeGuard: false,
+      programIoGuard: false,
+      ...profile.automation,
+    }),
+    claudeAllow: [],
+    passed: () => true,
+  },
+  "tiny-web": {
+    goal: [
+      "Build a small counter web app. server.mjs starts an HTTP server on process.env.PORT, prints its http://127.0.0.1:<port> URL and serves index.html.",
+      "The page has an h1 heading, a #count element that starts at 0 and a #add button that adds 1 to it.",
+      "The count survives a page reload by using localStorage.",
+    ].join("\n"),
+    limitMs: 60 * 60 * 1000,
+    maxAttempts: 24,
+    automation: () => undefined,
+    claudeAllow: ["Bash(node:*)", "Bash(mkdir:*)"],
+    passed: (summary) =>
+      summary.visits.some((visit) =>
+        visit.attempts.some((attempt) =>
+          attempt.commands.some(
+            (c) => c.startsWith("0 ") && c.includes("verify-browser"),
+          ),
+        ),
+      ),
+  },
+};
 const SETTLED = [
   "SUCCESS",
   "PAUSED",
@@ -99,7 +140,8 @@ function summarize(state) {
       : null,
   };
 }
-function passed(profile, summary) {
+function passed(profile, scenario, summary) {
+  if (!scenario.passed(summary)) return false;
   if (profile === "claude") return summary.status === "SUCCESS";
   const vm = summary.vm;
   return (
@@ -115,11 +157,19 @@ function passed(profile, summary) {
 }
 async function main() {
   const profile = process.argv[2],
-    config = PROFILES[profile];
-  if (!config)
-    throw new Error("Usage: real-cli-regression.js claude|kilo [--model text]");
+    config = PROFILES[profile],
+    scenarioName = option("scenario") ?? "slugify",
+    scenario = SCENARIOS[scenarioName];
+  if (!config || !scenario)
+    throw new Error(
+      "Usage: real-cli-regression.js claude|kilo [--scenario slugify|tiny-web] [--model text]",
+    );
   const stamp = new Date().toISOString().replace(/[:.]/g, "-"),
-    output = path.join(repository, "artifacts/real-cli", `${profile}-${stamp}`),
+    output = path.join(
+      repository,
+      "artifacts/real-cli",
+      `${profile}-${scenarioName}-${stamp}`,
+    ),
     // Outside the repository: the VM mounts this checkout read-only, so a target
     // nested inside it cannot be mounted and the run stops before any model call.
     target = path.join(
@@ -127,14 +177,25 @@ async function main() {
       "target",
     );
   fs.mkdirSync(output, { recursive: true });
-  fs.cpSync(path.join(repository, "test/real-cli/slugify"), target, {
+  fs.cpSync(path.join(repository, "test/real-cli", scenarioName), target, {
     recursive: true,
   });
   if (config.claudeSettings) {
     fs.mkdirSync(path.join(target, ".claude"));
     fs.writeFileSync(
       path.join(target, ".claude/settings.json"),
-      JSON.stringify(config.claudeSettings, null, 2),
+      JSON.stringify(
+        {
+          permissions: {
+            allow: [
+              ...config.claudeSettings.permissions.allow,
+              ...scenario.claudeAllow,
+            ],
+          },
+        },
+        null,
+        2,
+      ),
     );
   }
   const store = new StudioStore(path.join(output, "root"));
@@ -159,19 +220,7 @@ async function main() {
     );
   const document = createAutonomousGraph(`Regression ${profile}`);
   document.defaultBinding = { connectionId: profile, modelId: model.id };
-  document.automation = {
-    maxRepairCycles: 3,
-    nativeApprovalReview: false,
-    browserVerification: false,
-    verificationContract: true,
-    authoredNodeTests: false,
-    testSourceGuard: true,
-    reserveFinalizationBudget: true,
-    guardOwnedProcesses: true,
-    targetScopeGuard: false,
-    programIoGuard: false,
-    ...config.automation,
-  };
+  document.automation = scenario.automation(config) ?? document.automation;
   const graph = await store.createGraph({ document });
   const manager = new SessionCoordinator(store);
   const started = Date.now();
@@ -180,15 +229,18 @@ async function main() {
     requestId: crypto.randomUUID(),
     graphId: graph.id,
     expectedRevision: graph.revision,
-    goal: GOAL,
+    goal: scenario.goal,
     targetProjectPath: target,
     accessMode: "ask",
-    settings: { sessionTimeoutMs: SESSION_LIMIT_MS, maxSessionAttempts: 16 },
+    settings: {
+      sessionTimeoutMs: scenario.limitMs,
+      maxSessionAttempts: scenario.maxAttempts,
+    },
   });
   while (!SETTLED.includes(state.status)) {
     await new Promise((resolve) => setTimeout(resolve, 5000));
     state = await store.readSession(state.id);
-    if (Date.now() - started > SESSION_LIMIT_MS + 5 * 60 * 1000) {
+    if (Date.now() - started > scenario.limitMs + 5 * 60 * 1000) {
       await manager.action(state.id, {
         type: "stop",
         requestId: crypto.randomUUID(),
@@ -199,6 +251,7 @@ async function main() {
   await manager.close();
   const summary = {
     profile,
+    scenario: scenarioName,
     model: model.id,
     pricing: model.pricing ?? null,
     session: state.id,
@@ -207,7 +260,7 @@ async function main() {
     pass: false,
     ...summarize(state),
   };
-  summary.pass = passed(profile, summary);
+  summary.pass = passed(profile, scenario, summary);
   fs.writeFileSync(
     path.join(output, "summary.json"),
     JSON.stringify(summary, null, 2) + "\n",
