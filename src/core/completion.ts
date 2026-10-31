@@ -19,6 +19,7 @@ import {
   failedVerificationCommand,
   isVerificationCommand,
   isBrowserVerificationCommand,
+  commandSucceeded,
 } from "./verification_evidence";
 import { renderStructuredReport } from "./report_protocol";
 import { missingContractReceipts } from "./verification_contract";
@@ -359,7 +360,9 @@ export function validateCompletion(
     if (
       automation?.browserVerification &&
       !commands.some(
-        (c) => c.exitCode === 0 && isBrowserVerificationCommand(c.command, cwd),
+        (c) =>
+          commandSucceeded(c, { ignoreEnvironment: true }) &&
+          isBrowserVerificationCommand(c.command, cwd),
       )
     )
       return fail(
@@ -375,15 +378,16 @@ export function validateCompletion(
         !commands.some(
           (c) =>
             checkCommandKey(c.command) === checkCommandKey(command) &&
-            c.exitCode === 0 &&
-            !c.environmentError &&
+            commandSucceeded(c) &&
             isVerificationCommand(c.command, cwd),
         )
       );
     });
     if (
       !commands.some(
-        (c) => c.exitCode === 0 && isVerificationCommand(c.command, cwd),
+        (c) =>
+          commandSucceeded(c, { ignoreEnvironment: true }) &&
+          isVerificationCommand(c.command, cwd),
       ) ||
       unverified.length
     )
@@ -394,10 +398,7 @@ export function validateCompletion(
   if (
     answer.verdict === "APPROVED" &&
     !priorTestProof.some(
-      (c) =>
-        c.exitCode === 0 &&
-        !c.environmentError &&
-        isVerificationCommand(c.command, cwd),
+      (c) => commandSucceeded(c) && isVerificationCommand(c.command, cwd),
     )
   ) {
     answer.verdict = "REJECTED";

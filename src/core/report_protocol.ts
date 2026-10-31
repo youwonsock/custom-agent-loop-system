@@ -4,7 +4,7 @@ import {
   VerificationContract,
 } from "../shared/domain";
 import { RequirementItem } from "./requirement_ledger";
-import { projectCommandKey } from "./verification_evidence";
+import { commandSucceeded, projectCommandKey } from "./verification_evidence";
 import { isVerifierRole } from "../shared/node_roles";
 import { isObj } from "./values";
 /** Model-authored judgments; receipt facts are attached by the engine only. */
@@ -95,9 +95,7 @@ export function renderStructuredReport(
         /\[(\/?(?:REQUIREMENT_EVIDENCE|PHASE_DONE|AGENT_REPORT))\]/gi,
         "〈$1〉",
       );
-    const effectiveStatus = observed.some(
-      (o) => o.receipt.exitCode !== 0 || o.receipt.environmentError,
-    )
+    const effectiveStatus = observed.some((o) => !commandSucceeded(o.receipt))
       ? "FAILED"
       : item.status;
     lines.push(

@@ -13,6 +13,7 @@ import {
   checkCommandKey,
   canonicalCommand,
   projectCommandKey,
+  commandSucceeded,
 } from "./verification_evidence";
 import { validateNodeTestPolicy, nodeTestScript } from "./node_test_policy";
 import { nodeTestVerificationCommand } from "./node_test_command";
@@ -299,8 +300,7 @@ export function missingContractReceipts(
       (check) =>
         !commands.some(
           (r) =>
-            r.exitCode === 0 &&
-            !r.environmentError &&
+            commandSucceeded(r) &&
             isVerificationCommand(r.command, cwd) &&
             projectCommandKey(r.command, cwd) ===
               projectCommandKey(check.command, cwd),

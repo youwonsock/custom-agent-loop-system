@@ -325,11 +325,17 @@ export function acceptedVisit(visit: NodeVisit, cwd?: string): boolean {
   );
 }
 
+/** A receipt proves a check only with exit 0 and no environment failure. */
+export const commandSucceeded = (
+  c: CommandReceipt,
+  { ignoreEnvironment = false } = {},
+): boolean => c.exitCode === 0 && (ignoreEnvironment || !c.environmentError);
+
 /** Shared negative evidence policy for test, review, approval and terminal gates. */
 export function failedVerificationCommand(
   commands: CommandReceipt[],
 ): CommandReceipt | undefined {
-  return commands.find((c) => c.exitCode !== 0 || !!c.environmentError);
+  return commands.find((c) => !commandSucceeded(c));
 }
 
 export function visitCommands(

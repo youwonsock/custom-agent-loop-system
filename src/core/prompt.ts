@@ -8,6 +8,7 @@ import {
   checkCommandKey,
   projectCommandKey,
   isVerificationCommand,
+  commandSucceeded,
 } from "./verification_evidence";
 import { parseRequirementEvidence } from "./requirement_ledger";
 import { nodeTestScript } from "./node_test_policy";
@@ -343,8 +344,7 @@ export function buildNodePrompt(
           r.checkCommand &&
           !receipts.some(
             (c) =>
-              c.exitCode === 0 &&
-              !c.environmentError &&
+              commandSucceeded(c) &&
               checkCommandKey(c.command) === checkCommandKey(r.checkCommand!),
           )
             ? [r.checkCommand]
@@ -382,8 +382,7 @@ export function buildNodePrompt(
       (check) =>
         !receipts.some(
           (r) =>
-            r.exitCode === 0 &&
-            !r.environmentError &&
+            commandSucceeded(r) &&
             projectCommandKey(r.command, state.targetProjectPath) ===
               projectCommandKey(check.command, state.targetProjectPath),
         ),
