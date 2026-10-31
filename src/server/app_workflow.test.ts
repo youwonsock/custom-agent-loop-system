@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import * as fs from "node:fs/promises";
+import * as os from "node:os";
 import * as path from "node:path";
 import { randomUUID } from "node:crypto";
 import { AgentGraphDocument, SessionState } from "../shared/domain";
@@ -375,4 +376,50 @@ test("auth failure waits without replacing model and manual resume continues the
   assert.equal(state.visits[0]!.id, visit);
   assert.equal(state.visits[0]!.attempts.length, 2);
   assert.equal(state.bindings.implementation!.modelId, "fixture-model");
+});
+test("CLI discovery runs only on request, finds PATH entries and neither runs nor registers them", async (t) => {
+  const s = await setup();
+  t.after(s.cleanup);
+  const bin = await fs.mkdtemp(path.join(os.tmpdir(), "discover-"));
+  const marker = path.join(bin, "ran");
+  const script = path.join(bin, "codex");
+  await fs.writeFile(script, `#!/bin/sh\ntouch "${marker}"\n`, { mode: 0o755 });
+  // A link stands in for a versioned install; the PATH entry is what gets offered.
+  if (process.platform !== "win32") {
+    const versions = path.join(bin, "versions");
+    await fs.mkdir(versions);
+    await fs.writeFile(path.join(versions, "kilo-1.2.3"), "#!/bin/sh\n", {
+      mode: 0o755,
+    });
+    await fs.symlink(path.join(versions, "kilo-1.2.3"), path.join(bin, "kilo"));
+  }
+  const saved = process.env.PATH;
+  process.env.PATH = bin;
+  t.after(async () => {
+    process.env.PATH = saved;
+    await fs.rm(bin, { recursive: true, force: true });
+  });
+  const before = (await s.request("GET", "/api/connections")).body;
+  const response = await s.request("POST", "/api/connections/discover");
+  assert.equal(response.statusCode, 200, response.body);
+  const found = JSON.parse(response.body) as Array<{
+    type: string;
+    binary: string | null;
+  }>;
+  assert.deepEqual(found.map((c) => c.type).sort(), [
+    "claude",
+    "codex",
+    "kilo",
+    "opencode",
+  ]);
+  assert.equal(found.find((c) => c.type === "codex")!.binary, script);
+  if (process.platform !== "win32")
+    assert.equal(
+      found.find((c) => c.type === "kilo")!.binary,
+      path.join(bin, "kilo"),
+    );
+  for (const type of ["claude", "opencode"])
+    assert.equal(found.find((c) => c.type === type)!.binary, null);
+  await assert.rejects(fs.access(marker));
+  assert.equal((await s.request("GET", "/api/connections")).body, before);
 });

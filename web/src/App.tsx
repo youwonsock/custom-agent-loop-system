@@ -2,9 +2,18 @@ import { lazy, Suspense } from "react";
 import { useStudioController } from "./hooks/useStudioController";
 import { ViewBoundary } from "./components/ViewBoundary";
 import DirectoryDialog from "./views/DirectoryDialog";
-const GraphsView = lazy(() => import("./views/GraphsView"));
-const ConnectionsView = lazy(() => import("./views/ConnectionsView"));
-const RunsView = lazy(() => import("./views/RunsView"));
+const loadScreen = {
+  graphs: () => import("./views/GraphsView"),
+  connections: () => import("./views/ConnectionsView"),
+  runs: () => import("./views/RunsView"),
+};
+const GraphsView = lazy(loadScreen.graphs);
+const ConnectionsView = lazy(loadScreen.connections);
+const RunsView = lazy(loadScreen.runs);
+/** Start fetching before the click. A failed fetch surfaces when the screen opens. */
+const preloadScreen = (key: keyof typeof loadScreen) => {
+  void loadScreen[key]().catch(() => {});
+};
 export function App() {
   const controller = useStudioController();
   const {
@@ -64,6 +73,8 @@ export function App() {
             <button
               key={key}
               className={view === key ? "active" : ""}
+              onMouseEnter={() => preloadScreen(key)}
+              onFocus={() => preloadScreen(key)}
               onClick={() => {
                 setView(key);
                 setError("");

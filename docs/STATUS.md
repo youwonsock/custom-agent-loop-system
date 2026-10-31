@@ -6,9 +6,9 @@
 
 | 항목 | 상태 |
 | --- | --- |
-| 기준 커밋 | 브랜치 `stage6/data-model-and-ui` |
-| 원격 CI | PR #16~#19 병합 전 3개 OS와 브라우저 통과. 이 표의 브랜치는 PR CI에서 확인한다 |
-| 로컬 검사 (macOS 26 arm64, 공식 Node 24.22.2) | `verify:platform` 10단계 통과: 단위 354개 중 352 통과·0 실패·Windows 전용 2 건너뜀, tooling 10/10, audit high 이상 0건(moderate 3건은 아래 "수용한 위험"). `verify:browser` 25/25. `verify:vm` 17/17 |
+| 기준 커밋 | 브랜치 `stage7/usability` |
+| 원격 CI | PR #16~#21 병합 전 3개 OS와 브라우저 통과. 이 표의 브랜치는 PR CI에서 확인한다 |
+| 로컬 검사 (macOS 26 arm64, 공식 Node 24.22.2) | `verify:platform` 10단계 통과: 단위 360개 중 358 통과·0 실패·Windows 전용 2 건너뜀, tooling 10/10, audit high 이상 0건(moderate 3건은 아래 "수용한 위험"). `verify:browser` 27/27. `verify:vm` 17/17 |
 | 실제 모델 호출 | G4 재실행 통과(5단계). Claude Haiku와 Kilo 무료 모델 모두 수동 개입 없이 `SUCCESS`, Kilo VM 명령 26/26 정상 |
 
 ## 완료한 작업 (2026-10-29 ~ 10-30)
@@ -85,6 +85,16 @@
 | 파일 분리 | `resilience.ts`를 `file_lock`, `session_ownership`, `control_queue`로, `GraphInspector`를 `NodeInspector`·`GraphSettings`로, `useGraphEditor`를 `useGraphDraft`·`graphLibraryActions`·`graphNodeActions`로 분리 | 저장 필드 이름 유지 |
 | 문서 | [용어·제한값 사전](GLOSSARY.md) 추가, `VERIFICATION.md`를 최신 기록과 [이력](verification/2026-10-history.md)으로 분리하고 머신 경로 제거 | |
 
+2026-10-31 (브랜치 `stage7/usability`, 통합 계획 7단계):
+
+| 과제 | 결과 |
+| --- | --- |
+| 화면 전환 지연 | 메뉴에 마우스를 올리거나 포커스하면 해당 화면을 미리 불러온다. 초기 번들 제한 E2E는 그대로 통과 |
+| CLI 찾기 | **설치된 CLI 찾기** 버튼을 눌렀을 때만 CLI 4종을 PATH에서 찾아 경로를 보여 준다. 링크를 따라간 버전별 경로가 아니라 PATH 항목을 제안해 CLI를 업데이트해도 연결이 깨지지 않는다. CLI를 실행하지 않고, 등록은 항목별로 직접 누른다. 자동 스캔 없음 원칙 유지 |
+| 캔버스 휠 | 현재 동작을 유지하고 과제 종료 |
+
+통합 계획은 이 단계로 끝났다. 아래 범위 밖 항목은 착수 여부를 따로 정한다.
+
 수용한 위험: `npm audit`의 moderate 3건(`@fastify/static` → `glob` → `minimatch`). `@fastify/static`은 `wildcard: false`일 때만 `glob`을 호출하고 이 앱은 그 옵션을 쓰지 않는다. `audit fix --force`는 주 버전을 낮추므로 적용하지 않는다.
 
 유지하기로 결정한 것: stateVersion 3 스냅샷 읽기와 수동 그래프의 평문 보고 형식은 현재 기능이다. 마이그레이션 코드는 없었다.
@@ -114,17 +124,9 @@
 
 Codex는 사용자 결정으로 G4에서 제외했다. Codex 경로는 가짜 이벤트로만 검증되었고, 실제 Codex가 명령을 셸로 감싸는지도 확인하지 못했다.
 
-### 7단계: 사용성
-
-| 과제 | 결정 |
-| --- | --- |
-| 화면 전환 지연 | 메뉴 호버·포커스 시 미리 로드. 번들 제한 E2E 유지 |
-| CLI 찾기 제안 | 버튼을 눌렀을 때만 CLI 4종을 PATH에서 찾고, 확인한 경로만 등록. "자동 스캔 없음" 원칙 유지 |
-| 캔버스 휠 | 현재 동작을 유지하고 과제 종료 |
-
 ### 범위 밖
 
-리팩터링과 섞지 않으며, 7단계 후 착수 여부를 따로 정한다.
+리팩터링과 섞지 않으며, 착수 여부를 따로 정한다.
 
 - Linux·Windows용 프로그램 I/O 격리 백엔드. 지금은 macOS 26 + Apple container에서만 강한 격리가 성립하고, 다른 환경에서는 화면 안내만 제공한다.
 - 병렬 노드 실행과 금액 기준 예산.

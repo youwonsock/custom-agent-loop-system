@@ -1,11 +1,25 @@
+import { useState } from "react";
 import {
   SERVICE_TYPES,
   type LocalConnection,
+  type ServiceType,
 } from "../../../src/shared/domain";
 import { api, id } from "../api";
 import { pricingNames, stamp } from "../studioTypes";
 import type { ConnectionsViewModel } from "./viewModels";
 
+const serviceLabel = (type: ServiceType) =>
+  type === "claude"
+    ? "Claude Code"
+    : type === "codex"
+      ? "Codex"
+      : type === "opencode"
+        ? "OpenCode"
+        : "Kilo";
+interface DiscoveredCli {
+  type: ServiceType;
+  binary: string | null;
+}
 export default function ConnectionsView({
   controller,
 }: {
@@ -26,6 +40,23 @@ export default function ConnectionsView({
     querying,
     query,
   } = controller;
+  const [discovered, setDiscovered] = useState<DiscoveredCli[] | null>(null);
+  const discover = () =>
+    attempt(async () =>
+      setDiscovered(
+        await api<DiscoveredCli[]>("/connections/discover", "POST"),
+      ),
+    );
+  const register = (type: ServiceType, binary: string) =>
+    attempt(async () => {
+      const c = await api<LocalConnection>("/connections", "POST", {
+        id: id(),
+        label: serviceLabel(type),
+        type,
+        binary,
+      });
+      setConnections((values) => [...values, c]);
+    });
 
   return (
     <>
@@ -78,13 +109,7 @@ export default function ConnectionsView({
                 >
                   {SERVICE_TYPES.map((t) => (
                     <option key={t} value={t}>
-                      {t === "claude"
-                        ? "Claude Code"
-                        : t === "codex"
-                          ? "Codex"
-                          : t === "opencode"
-                            ? "OpenCode"
-                            : "Kilo"}
+                      {serviceLabel(t)}
                     </option>
                   ))}
                 </select>
@@ -111,6 +136,38 @@ export default function ConnectionsView({
                   onChange={(e) => setTarget(e.target.value)}
                 />
               </label>
+              <button className="button full" onClick={() => void discover()}>
+                설치된 CLI 찾기
+              </button>
+              {discovered && (
+                <ul className="discovered-clis" aria-label="찾은 CLI">
+                  {discovered.map(({ type, binary }) => (
+                    <li key={type}>
+                      <strong>{serviceLabel(type)}</strong>
+                      {!binary ? (
+                        <span className="muted">PATH에서 찾지 못함</span>
+                      ) : (
+                        <>
+                          <code>{binary}</code>
+                          {connections.some(
+                            (c) => c.type === type && c.binary === binary,
+                          ) ? (
+                            <span className="muted">등록됨</span>
+                          ) : (
+                            <button
+                              className="button"
+                              aria-label={`${serviceLabel(type)} 등록`}
+                              onClick={() => void register(type, binary)}
+                            >
+                              등록
+                            </button>
+                          )}
+                        </>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              )}
               <p className="field-hint">
                 인증과 MCP·스킬·훅은 CLI에서 설정합니다. 앱은 API 키를
                 요청하거나 저장하지 않습니다.
