@@ -8,6 +8,12 @@ const mode = process.argv[2] || "success";
 const emit = (event) => process.stdout.write(`${JSON.stringify(event)}\n`);
 const assistant = (text, id = `text-${Date.now()}`) =>
   emit({ type: "text", id, part: { id, text } });
+// Windows TTY writes are asynchronous and winpty reads the console on a timer:
+// exit only after the tail is flushed and has had time to be read.
+const writeThenExit = (text) =>
+  process.stdout.write(text, () =>
+    setTimeout(() => process.exit(0), process.platform === "win32" ? 300 : 0),
+  );
 
 switch (mode) {
   case "pipe-json-interleaved": {
@@ -272,8 +278,7 @@ switch (mode) {
       '{"type":"text","id":"split-secret","part":{"id":"split-secret","text":"credential=top-',
     );
     setTimeout(() => {
-      // Windows TTY writes are asynchronous: exit only after the tail is flushed.
-      process.stdout.write('secret\\n[PHASE_DONE]"}}\n', () => process.exit(0));
+      writeThenExit('secret\\n[PHASE_DONE]"}}\n');
     }, 30);
     break;
   case "wrapped-secret-echo":
@@ -281,8 +286,7 @@ switch (mode) {
       '{"type":"text","id":"wrapped-secret","part":{"id":"wrapped-secret","text":"credential=top-\r\n',
     );
     setTimeout(() => {
-      // Windows TTY writes are asynchronous: exit only after the tail is flushed.
-      process.stdout.write('secret\\n[PHASE_DONE]"}}\n', () => process.exit(0));
+      writeThenExit('secret\\n[PHASE_DONE]"}}\n');
     }, 30);
     break;
   case "incomplete":

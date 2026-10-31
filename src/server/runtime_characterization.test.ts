@@ -35,7 +35,8 @@ const quickSettings = {
   phaseTimeoutMs: 3000,
   idleTimeoutMs: 1000,
   toolTimeoutMs: 1000,
-  transportTimeoutMs: 1000,
+  // A loaded Windows runner can take over a second to get ConPTY and Node talking.
+  transportTimeoutMs: process.platform === "win32" ? 3000 : 1000,
   phaseRecoveryBudgetMs: 6000,
   retryBackoffMs: [10, 20],
   terminationGraceMs: 50,
