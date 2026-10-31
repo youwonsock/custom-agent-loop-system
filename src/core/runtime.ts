@@ -116,6 +116,25 @@ interface AttemptRun {
   /** Set once the completion was parsed. */
   completion?: Completion;
 }
+/** The session already stopped at this visit; nothing is left to judge. */
+interface Stopped {
+  step: "stopped";
+}
+/** The stage reached a result the visit should record. */
+interface Completed {
+  step: "completed";
+  completion: Completion;
+}
+/** Nothing decided yet; the next step of the attempt looks. */
+interface Undecided {
+  step: "undecided";
+}
+const STOPPED: Stopped = { step: "stopped" };
+const UNDECIDED: Undecided = { step: "undecided" };
+const completed = (completion: Completion): Completed => ({
+  step: "completed",
+  completion,
+});
 const cycleAttempts = (visit: NodeVisit) =>
   visit.attempts.filter(
     (a) => Date.parse(a.startedAt) >= Date.parse(visit.cycleStartedAt),
@@ -256,13 +275,20 @@ export class GraphRuntime {
     this.stopRequested = true;
     await this.save();
   }
-  private async stageStop(reason: string, visit: NodeVisit): Promise<void> {
-    this.state.status = "PAUSED";
+  /** The one place this class sets a session status. */
+  private async settle(
+    status: SessionStatus,
+    reason: string | null,
+  ): Promise<void> {
+    this.state.status = status;
     this.state.statusReason = reason;
+    await this.save();
+  }
+  private async stageStop(reason: string, visit: NodeVisit): Promise<void> {
     this.state.automaticRecovery = null;
     visit.status = "paused";
     this.stopRequested = true;
-    await this.save();
+    await this.settle("PAUSED", reason);
   }
   private verificationFailure(node: AgentNode, reason: string): Completion {
     const verdict = node.type === "test" ? "FAIL" : "REJECTED";
@@ -280,15 +306,13 @@ export class GraphRuntime {
   private async contractStop(): Promise<boolean> {
     const reason = await contractViolation(this.state);
     if (!reason) return false;
-    this.state.status = "BLOCKED";
-    this.state.statusReason = reason;
     this.state.automaticRecovery = null;
     this.stopRequested = true;
     const visit = this.state.visits.find(
       (v) => v.id === this.state.activeVisitId,
     );
     if (visit) visit.status = "paused";
-    await this.save();
+    await this.settle("BLOCKED", reason);
     return true;
   }
   private outside(text: string, intentRoots: string[] = []): string[] {
@@ -335,10 +359,11 @@ export class GraphRuntime {
       )
         return;
       if (mode === "manual") prepareManualResume(this.state);
-      this.state.status = "RUNNING";
-      this.state.statusReason = "실행 연결과 모델 목록을 확인하고 있습니다.";
       this.state.automaticRecovery = null;
-      await this.save();
+      await this.settle(
+        "RUNNING",
+        "실행 연결과 모델 목록을 확인하고 있습니다.",
+      );
       if ((await this.poll()) && this.stopRequested) return;
       if (await this.contractStop()) return;
       if (!(await this.recheckModels())) return;
@@ -374,10 +399,10 @@ export class GraphRuntime {
           this.state.settings.killTimeoutMs,
         )) !== "dead"
       ) {
-        this.state.status = "BLOCKED";
-        this.state.statusReason =
-          "이전 자식 프로세스 종료를 확인할 수 없습니다.";
-        await this.save();
+        await this.settle(
+          "BLOCKED",
+          "이전 자식 프로세스 종료를 확인할 수 없습니다.",
+        );
         return false;
       }
     }
@@ -431,9 +456,10 @@ export class GraphRuntime {
               ),
           )
         ) {
-          this.state.status = "WAITING_USER";
-          this.state.statusReason = `[${this.state.graph.nodes.find((n) => n.id === this.state.currentNodeId)?.name ?? "모델 조회"} · ${connection.label}] ${catalog.error ?? "선택한 모델 또는 추론 강도를 조회할 수 없습니다. CLI의 모델 권한과 설정을 확인하고 재개하세요."}`;
-          await this.save();
+          await this.settle(
+            "WAITING_USER",
+            `[${this.state.graph.nodes.find((n) => n.id === this.state.currentNodeId)?.name ?? "모델 조회"} · ${connection.label}] ${catalog.error ?? "선택한 모델 또는 추론 강도를 조회할 수 없습니다. CLI의 모델 권한과 설정을 확인하고 재개하세요."}`,
+          );
           return false;
         }
         for (const [nodeId, binding] of Object.entries(this.state.bindings)) {
@@ -452,10 +478,10 @@ export class GraphRuntime {
   ): Promise<boolean> {
     if (!visitId || this.state.activeVisitId !== visitId) return true;
     if (this.pricing.get(this.state.currentNodeId ?? "")?.status !== "free") {
-      this.state.status = "PAUSED";
-      this.state.statusReason =
-        "자동 복구 전에 무료 모델임을 다시 확인하지 못했습니다. 추가 모델 호출 없이 정지했습니다.";
-      await this.save();
+      await this.settle(
+        "PAUSED",
+        "자동 복구 전에 무료 모델임을 다시 확인하지 못했습니다. 추가 모델 호출 없이 정지했습니다.",
+      );
       return false;
     }
     const visit = this.state.visits.find((v) => v.id === visitId)!;
@@ -484,11 +510,12 @@ export class GraphRuntime {
       }
       visit ??= await this.openVisit(node);
       if (!visit || !(await this.readyToExecute(node, visit))) return;
-      const completion = await this.execute(node, visit);
+      const outcome = await this.execute(node, visit);
       if (this.state.status !== "RUNNING") return;
       if (this.state.activeVisitId !== visit.id) continue; // interrupt control changed traversal
-      if (!completion) continue;
-      if (!(await this.applyCompletion(node, visit, completion))) return;
+      if (outcome.step === "stopped") continue;
+      if (!(await this.applyCompletion(node, visit, outcome.completion)))
+        return;
     }
   }
   /** The terminal decision: SUCCESS has to prove itself again, or the run pauses. */
@@ -498,8 +525,7 @@ export class GraphRuntime {
       const problem = await deliverableProblem(this.state);
       if (problem) blockers.push(problem);
     }
-    this.state.status = blockers.length ? "PAUSED" : id;
-    this.state.statusReason = blockers.length
+    const reason = blockers.length
       ? `성공 조건 미충족: ${blockers.join(" ")} 수정·테스트·최종 승인을 다시 수행하도록 수동 재개하세요.`
       : id === "SUCCESS"
         ? "모든 필수 요구사항, 실제 테스트 실행 증거와 최종 승인을 확인했습니다."
@@ -510,7 +536,7 @@ export class GraphRuntime {
       this.state.automaticRecovery = null;
     }
     this.state.activeVisitId = null;
-    await this.save();
+    await this.settle(blockers.length ? "PAUSED" : id, reason);
   }
   /** Start the node's next visit, or undefined once the run budget paused the session. */
   private async openVisit(node: AgentNode): Promise<NodeVisit | undefined> {
@@ -519,10 +545,10 @@ export class GraphRuntime {
       (this.state.completedIterations >= this.state.iterationLimit &&
         node.id === this.state.graph.entrypoints.reentry)
     ) {
-      this.state.status = "PAUSED";
-      this.state.statusReason =
-        "노드 방문 또는 반복 실행 예산을 소진했습니다. 그래프와 미해결 요구사항을 검토한 뒤 수동 재개하세요.";
-      await this.save();
+      await this.settle(
+        "PAUSED",
+        "노드 방문 또는 반복 실행 예산을 소진했습니다. 그래프와 미해결 요구사항을 검토한 뒤 수동 재개하세요.",
+      );
       return undefined;
     }
     const now = new Date().toISOString();
@@ -557,9 +583,10 @@ export class GraphRuntime {
     visit: NodeVisit,
   ): Promise<boolean> {
     if (visit.status === "waiting_approval") {
-      this.state.status = "WAITING_USER";
-      this.state.statusReason = "이 방문의 계획 선택과 승인이 필요합니다.";
-      await this.save();
+      await this.settle(
+        "WAITING_USER",
+        "이 방문의 계획 선택과 승인이 필요합니다.",
+      );
       return false;
     }
     if (visit.status === "paused") visit.status = "running";
@@ -589,10 +616,10 @@ export class GraphRuntime {
       nodeId: node.id,
       visitId: visit.id,
     };
-    this.state.status = "WAITING_USER";
-    this.state.statusReason =
-      "프로젝트 밖의 경로에 대한 접근 승인이 필요합니다.";
-    await this.save();
+    await this.settle(
+      "WAITING_USER",
+      "프로젝트 밖의 경로에 대한 접근 승인이 필요합니다.",
+    );
     return false;
   }
   /** Record an accepted completion and move on; false once it needs the operator. */
@@ -607,10 +634,10 @@ export class GraphRuntime {
     visit.verdict = completion.verdict;
     if (completion.researchBlocked) {
       visit.status = "paused";
-      this.state.status = "WAITING_USER";
-      this.state.statusReason =
-        "필요한 인터넷 조사 기능을 CLI에서 설정한 뒤 재개하세요.";
-      await this.save();
+      await this.settle(
+        "WAITING_USER",
+        "필요한 인터넷 조사 기능을 CLI에서 설정한 뒤 재개하세요.",
+      );
       return false;
     }
     if (node.type === "planning") {
@@ -619,9 +646,10 @@ export class GraphRuntime {
       if (node.planning?.requiresApproval !== false) {
         visit.status = "waiting_approval";
         this.state.pendingApproval = { nodeId: node.id, visitId: visit.id };
-        this.state.status = "WAITING_USER";
-        this.state.statusReason = "생성한 계획을 검토하고 선택·승인하세요.";
-        await this.save();
+        await this.settle(
+          "WAITING_USER",
+          "생성한 계획을 검토하고 선택·승인하세요.",
+        );
         return false;
       }
       const plan = visit.plans[0]!;
@@ -654,12 +682,12 @@ export class GraphRuntime {
       await this.budgetStop(budget);
       return;
     }
-    this.state.status =
+    await this.settle(
       this.activePid && checkProcessLiveness(this.activePid) !== "dead"
         ? "BLOCKED"
-        : "FAILED";
-    this.state.statusReason = messageOf(error);
-    await this.save();
+        : "FAILED",
+      messageOf(error),
+    );
   }
   private recordEvidence(node: AgentNode, visit: NodeVisit): void {
     const ids = new Set(this.state.requirements.items.map((r) => r.id));
@@ -691,21 +719,19 @@ export class GraphRuntime {
     status: SessionStatus,
     reason: string,
     effects: { pauseVisit: boolean; clearRecovery: boolean },
-  ): Promise<null> {
-    this.state.status = status;
-    this.state.statusReason = reason;
+  ): Promise<Stopped> {
     if (effects.clearRecovery) this.state.automaticRecovery = null;
     if (effects.pauseVisit) visit.status = "paused";
-    await this.save();
-    return null;
+    await this.settle(status, reason);
+    return STOPPED;
   }
-  /** Run one node visit to a completion, or return null once the session stopped. */
+  /** Run one node visit to a completion, or until the session stopped. */
   private async execute(
     node: AgentNode,
     visit: NodeVisit,
-  ): Promise<Completion | null> {
+  ): Promise<Stopped | Completed> {
     const preflight = await this.preflight(node, visit);
-    if ("result" in preflight) return preflight.result;
+    if (preflight.step !== "ready") return preflight;
     const stage = this.stage(node, visit, preflight.testInputs);
     const runner = new AgentAttemptRunner({
       maxAttempts: stage.normalLimit,
@@ -715,7 +741,7 @@ export class GraphRuntime {
       nextResume: string | undefined;
     let recoveryMessage: string | undefined;
     for (;;) {
-      if (await this.attemptGuards(stage)) return null;
+      if (await this.attemptGuards(stage)) return STOPPED;
       const normal = cycleAttempts(visit).filter(
         (a) => a.mode === "standard",
       ).length;
@@ -732,7 +758,7 @@ export class GraphRuntime {
           visit,
           "단계 복구 예산 또는 attempt 한도를 소진했습니다.",
         );
-        return null;
+        return STOPPED;
       }
       const id = randomUUID();
       let invocation: Invocation;
@@ -750,7 +776,7 @@ export class GraphRuntime {
           clearRecovery: false,
         });
       }
-      if (await this.poll()) return null; // Includes bounded native config preflight time.
+      if (await this.poll()) return STOPPED; // Includes bounded native config preflight time.
       const attempt = this.newAttempt(
         stage,
         id,
@@ -762,11 +788,11 @@ export class GraphRuntime {
       const run = await this.supervise(stage, attempt, invocation);
       await this.recordOutcome(stage, run);
       const gated = await this.evidenceGates(stage, run);
-      if (gated !== undefined) return gated;
+      if (gated.step !== "undecided") return gated;
       const judged = await this.judge(stage, run);
-      if (judged !== undefined) return judged.result;
+      if (judged.step !== "undecided") return judged;
       const failure = await this.failure(stage, run);
-      if (!failure) return null;
+      if (!failure) return STOPPED;
       const { result } = run;
       recoveryMessage = buildRecoveryMessage(
         failure.kind,
@@ -793,7 +819,7 @@ export class GraphRuntime {
         await this.save();
         const retryAt = Date.now() + decision.delayMs;
         while (Date.now() < retryAt) {
-          if (await this.poll()) return null;
+          if (await this.poll()) return STOPPED;
           await delay(Math.min(100, Math.max(1, retryAt - Date.now())));
         }
       } else if (
@@ -805,7 +831,7 @@ export class GraphRuntime {
         nextResume = undefined;
       } else {
         await this.exhausted(node, visit, failure.message);
-        return null;
+        return STOPPED;
       }
     }
   }
@@ -814,31 +840,32 @@ export class GraphRuntime {
     node: AgentNode,
     visit: NodeVisit,
   ): Promise<
-    | { result: Completion | null }
-    | { testInputs: Record<string, string> | null }
+    | Stopped
+    | Completed
+    | { step: "ready"; testInputs: Record<string, string> | null }
   > {
     const policy = runPolicy(this.state.graph),
       sourceGuard = policy.testSourceGuard;
     if (sourceGuard && isAuditRole(node.type)) {
       const expected = currentVerificationSources(this.state, visit);
       if (!expected)
-        return {
-          result: this.verificationFailure(
+        return completed(
+          this.verificationFailure(
             node,
             "현재 테스트 역할의 고정 소스 snapshot이 없습니다. 구현과 전체 테스트를 다시 수행해야 합니다.",
           ),
-        };
+        );
       const changed = sourceDifference(
         expected,
         await testSources(this.state.targetProjectPath),
       );
       if (changed.length)
-        return {
-          result: this.verificationFailure(
+        return completed(
+          this.verificationFailure(
             node,
             `테스트 이후 소스가 변경되어 증거를 무효화했습니다: ${changed.join(", ")}. 구현과 모든 등록 검사를 다시 수행해야 합니다.`,
           ),
-        };
+        );
     }
     if (
       policy.verificationContract &&
@@ -852,44 +879,44 @@ export class GraphRuntime {
         );
         await this.save();
       } catch (error) {
-        return {
-          result: failedPreparation(
+        return completed(
+          failedPreparation(
             `검증 계약 준비 실패: ${messageOf(error)}`,
             `검증 계약 준비 실패: ${messageOf(error)}\n구현 역할에서 .agent-graph/verification.json과 인수 검사를 준비하세요.`,
           ),
-        };
+        );
       }
     }
     if (node.type === "test") {
       const problem = await verificationRunnerProblem(this.state);
       if (problem)
-        return {
-          result: failedPreparation(
+        return completed(
+          failedPreparation(
             problem,
             `검증 runner 준비 실패: ${problem}\n구현 역할에서 필수 runner를 수정한 뒤 다시 검증하세요.`,
           ),
-        };
+        );
     }
     if (isVerifierRole(node.type)) {
       const problem = await deliverableProblem(this.state);
-      if (problem) return { result: this.verificationFailure(node, problem) };
+      if (problem) return completed(this.verificationFailure(node, problem));
     }
-    if (!policy.automated || node.type !== "test") return { testInputs: null };
+    if (!policy.automated || node.type !== "test")
+      return { step: "ready", testInputs: null };
     try {
       return {
+        step: "ready",
         testInputs: sourceGuard
           ? await testSources(this.state.targetProjectPath)
           : await productionHashes(this.state.targetProjectPath),
       };
     } catch (error) {
-      return {
-        result: await this.halt(
-          visit,
-          "WAITING_USER",
-          `검증 전 소스 읽기가 차단됐습니다. 경로·권한을 확인하세요: ${messageOf(error)}`,
-          { pauseVisit: true, clearRecovery: false },
-        ),
-      };
+      return this.halt(
+        visit,
+        "WAITING_USER",
+        `검증 전 소스 읽기가 차단됐습니다. 경로·권한을 확인하세요: ${messageOf(error)}`,
+        { pauseVisit: true, clearRecovery: false },
+      );
     }
   }
   private stage(
@@ -1243,7 +1270,7 @@ export class GraphRuntime {
   private async evidenceGates(
     stage: Stage,
     run: AttemptRun,
-  ): Promise<Completion | null | undefined> {
+  ): Promise<Stopped | Completed | Undecided> {
     const { node, visit, policy, testInputs } = stage,
       { attempt, result } = run,
       sourceGuard = policy.testSourceGuard;
@@ -1264,11 +1291,11 @@ export class GraphRuntime {
           "failed",
           "자식 프로세스 종료를 확인하지 못해 실행을 차단했습니다.",
         );
-      return null;
+      return STOPPED;
     }
     if (result.controlRequest) {
       await this.finishControl(result.controlRequest);
-      return null;
+      return STOPPED;
     }
     if (
       attempt.programIoAudit &&
@@ -1341,9 +1368,9 @@ export class GraphRuntime {
     const budgetAfter = sessionBudgetReason(this.state);
     if (budgetAfter) {
       await this.budgetStop(budgetAfter);
-      return null;
+      return STOPPED;
     }
-    if (await this.contractStop()) return null;
+    if (await this.contractStop()) return STOPPED;
     const protectedWrites = (result.evidence.changedFiles ?? []).filter(
       (file) =>
         this.state.verificationContract?.hashes?.[file.replace(/\\/g, "/")] !==
@@ -1390,12 +1417,12 @@ export class GraphRuntime {
           { pauseVisit: true, clearRecovery: false },
         );
       await this.save();
-      return this.verificationFailure(node, run.policyReason);
+      return completed(this.verificationFailure(node, run.policyReason));
     }
     const stageAfter = stageBudgetReason(this.state, node, visit);
     if (stageAfter) {
       await this.stageStop(stageAfter, visit);
-      return null;
+      return STOPPED;
     }
     if (testInputs && !sourceGuard && result.outcome === "succeeded") {
       let changed: string[];
@@ -1433,22 +1460,24 @@ export class GraphRuntime {
           reason: "테스트 이후 소스 변경",
           files: changes,
         };
-        return this.verificationFailure(
-          node,
-          `테스트 이후 소스가 변경되어 승인 근거를 무효화했습니다: ${changes.join(", ")}`,
+        return completed(
+          this.verificationFailure(
+            node,
+            `테스트 이후 소스가 변경되어 승인 근거를 무효화했습니다: ${changes.join(", ")}`,
+          ),
         );
       }
     }
-    return undefined;
+    return UNDECIDED;
   }
   /**
-   * Parse and validate the role's completion. Returns the stage result, or
-   * `undefined` with run.completion set when the attempt failed.
+   * Parse and validate the role's completion. Undecided means the attempt
+   * failed, with run.completion set for the failure step.
    */
   private async judge(
     { node, visit, policy }: Stage,
     run: AttemptRun,
-  ): Promise<{ result: Completion | null } | undefined> {
+  ): Promise<Stopped | Completed | Undecided> {
     const { attempt, result } = run;
     let nodeProof: NodeTestProof | undefined,
       nodeProofError: string | undefined;
@@ -1507,7 +1536,7 @@ export class GraphRuntime {
         visit.verifiedCommands = [];
         delete visit.nodeTestProof;
         delete visit.verificationSourceHashes;
-        return { result: this.verificationFailure(node, problem) };
+        return completed(this.verificationFailure(node, problem));
       }
     }
     if (
@@ -1553,21 +1582,17 @@ export class GraphRuntime {
       visit.verdict = "BLOCKED";
       attempt.message = completion.environmentBlocked;
       attempt.completionAccepted = false;
-      return {
-        result: await this.halt(
-          visit,
-          "WAITING_USER",
-          completion.environmentBlocked,
-          { pauseVisit: true, clearRecovery: true },
-        ),
-      };
+      return this.halt(visit, "WAITING_USER", completion.environmentBlocked, {
+        pauseVisit: true,
+        clearRecovery: true,
+      });
     }
     if (completion.valid) {
       attempt.completionAccepted = !completion.researchBlocked;
       await this.save();
-      return { result: completion };
+      return completed(completion);
     }
-    return undefined;
+    return UNDECIDED;
   }
   /** Classify a failed attempt; null once a non-retryable failure stopped the session. */
   private async failure(
@@ -1586,24 +1611,28 @@ export class GraphRuntime {
     attempt.message = failure.message;
     visit.output = completion!.output;
     await this.save();
-    if (!failure.retryable)
-      return this.halt(visit, "WAITING_USER", failure.message, {
+    if (!failure.retryable) {
+      await this.halt(visit, "WAITING_USER", failure.message, {
         pauseVisit: true,
         clearRecovery: false,
       });
+      return null;
+    }
     const providerFailure =
       result.diagnostics.terminalError ?? result.diagnostics.plainError;
     if (
       (failure.kind === "quota_exhausted" ||
         providerFailure?.kind === "quota_exhausted") &&
       attempt.pricing?.status !== "free"
-    )
-      return this.halt(
+    ) {
+      await this.halt(
         visit,
         "PAUSED",
         `${failure.message} ${attempt.pricing?.status === "paid" ? "유료" : "가격 미확인"} 모델의 공급자 사용 한도에 도달해 추가 호출 없이 정지했습니다.`,
         { pauseVisit: true, clearRecovery: false },
       );
+      return null;
+    }
     return failure;
   }
   private async exhausted(
@@ -1655,14 +1684,17 @@ export class GraphRuntime {
       visit.cycleDeadlineAt = new Date(
         Date.now() + delayMs + s.phaseRecoveryBudgetMs,
       ).toISOString();
-      this.state.status = "RECOVERING";
-      this.state.statusReason = `${reason} 무료로 확인된 모델이므로 자동 복구 ${visit.automaticCycles}/${s.maxAutomaticRecoveryCycles}회를 예약했습니다. 재개 전에 무료 여부를 다시 확인합니다.`;
+      await this.settle(
+        "RECOVERING",
+        `${reason} 무료로 확인된 모델이므로 자동 복구 ${visit.automaticCycles}/${s.maxAutomaticRecoveryCycles}회를 예약했습니다. 재개 전에 무료 여부를 다시 확인합니다.`,
+      );
     } else {
       visit.status = "paused";
-      this.state.status = "PAUSED";
       this.state.automaticRecovery = null;
-      this.state.statusReason = `${reason} ${pricing.status === "free" ? "무료 모델의 자동 복구 한도 또는 중단 처리 제한에 도달했습니다." : `${pricing.status === "paid" ? "유료" : "가격 미확인"} 모델이므로 추가 자동 복구를 중지했습니다.`} 확인 후 수동 재개하세요.`;
+      await this.settle(
+        "PAUSED",
+        `${reason} ${pricing.status === "free" ? "무료 모델의 자동 복구 한도 또는 중단 처리 제한에 도달했습니다." : `${pricing.status === "paid" ? "유료" : "가격 미확인"} 모델이므로 추가 자동 복구를 중지했습니다.`} 확인 후 수동 재개하세요.`,
+      );
     }
-    await this.save();
   }
 }

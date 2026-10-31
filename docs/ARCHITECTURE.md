@@ -20,7 +20,7 @@ flowchart LR
 
 ## 방문 실행 (`GraphRuntime.execute`)
 
-`run()`은 현재 노드의 방문을 고르고 `execute(node, visit)`를 호출한다. 반환값이 `Completion`이면 성공·실패 간선으로 이동하고, `null`이면 세션이 이미 정지(또는 제어 요청 처리)된 것이다.
+`run()`은 소유권 확보 후 `recoverStaleOwner`, `recheckModels`, `renewAutomaticRecovery`, `visitLoop` 순서로 진행한다. `visitLoop`는 현재 노드의 방문을 고르고(`openVisit`, `readyToExecute`) `execute(node, visit)`를 호출한다. 결과가 `completed`면 `applyCompletion`이 성공·실패 간선으로 이동하고, `stopped`면 세션이 이미 정지(또는 제어 요청 처리)된 것이다. 종단 노드에서는 `finishRun`이 성공 조건을 다시 확인한다.
 
 | 단계 | 메서드 | 내용 |
 | --- | --- | --- |
@@ -35,11 +35,13 @@ flowchart LR
 | 9 | `judge` | 자체 Node 증명, `validateCompletion`, 필수 파일, 자율 계획의 외부 경로, 환경 차단 |
 | 10 | `failure` + 재시도 | 실패 분류, 비재시도·할당량 정지, 재시도·재접속·완료 복구 |
 
-`evidenceGates`와 `judge`는 `undefined`이면 다음 단계로 진행한다.
+`evidenceGates`와 `judge`는 `undecided`이면 다음 단계로 진행한다.
+
+`validateCompletion`은 역할 판정을 순서가 있는 게이트 목록(`GATES`)으로 실행하며, 앞선 게이트가 걸러 낸 조건을 뒤의 게이트가 전제로 삼으므로 순서를 바꾸지 않는다.
 
 ## 정지 경로
 
-정지는 `halt(visit, status, reason, { pauseVisit, clearRecovery })`로 하며 부수효과를 호출부에서 명시한다. 같은 상태라도 경로마다 다르므로 통일하지 않는다.
+`GraphRuntime`에서 세션 상태는 `settle(status, reason)`에서만 쓴다. 방문 단위 정지는 `halt(visit, status, reason, { pauseVisit, clearRecovery })`로 하며 부수효과를 호출부에서 명시한다. 같은 상태라도 경로마다 다르므로 통일하지 않는다.
 
 | 경로 | 상태 | 방문 pause | 예약 복구 취소 |
 | --- | --- | --- | --- |
