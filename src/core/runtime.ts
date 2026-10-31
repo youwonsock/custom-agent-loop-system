@@ -329,35 +329,11 @@ export class GraphRuntime {
     try {
       await ensureControlQueue(this.controls());
       await recoverClaimedControlRequests(this.controls());
-      if (acquired.recoveredStaleOwner) {
-        const activeAttempt = this.state.visits
-          .find((v) => v.id === this.state.activeVisitId)
-          ?.attempts.at(-1);
-        for (const pid of collectRecoveredChildPids(
-          acquired.previousLease,
-          activeAttempt?.pid,
-        )) {
-          if (
-            checkProcessLiveness(pid) !== "dead" &&
-            (await terminateProcessTreeBounded(pid, settings.killTimeoutMs)) !==
-              "dead"
-          ) {
-            this.state.status = "BLOCKED";
-            this.state.statusReason =
-              "이전 자식 프로세스 종료를 확인할 수 없습니다.";
-            await this.save();
-            return;
-          }
-        }
-        if (activeAttempt?.status === "running") {
-          activeAttempt.status = "interrupted";
-          activeAttempt.failureKind = "worker_crash";
-          activeAttempt.message =
-            "이전 워커 종료 후 남은 자식 프로세스를 정리했습니다.";
-          activeAttempt.endedAt = new Date().toISOString();
-          activeAttempt.pid = null;
-        }
-      }
+      if (
+        acquired.recoveredStaleOwner &&
+        !(await this.recoverStaleOwner(acquired.previousLease))
+      )
+        return;
       if (mode === "manual") prepareManualResume(this.state);
       this.state.status = "RUNNING";
       this.state.statusReason = "실행 연결과 모델 목록을 확인하고 있습니다.";
@@ -365,264 +341,325 @@ export class GraphRuntime {
       await this.save();
       if ((await this.poll()) && this.stopRequested) return;
       if (await this.contractStop()) return;
-      // Only bindings referenced by this immutable run are queried; no CLI scan.
-      for (const connection of this.state.connections) {
-        // Interrupt cancels metadata lookup as well as coding. Recheck the same
-        // connection with a fresh signal before executing its interrupt node.
-        while (true) {
-          const catalog = await queryModels(
-            connection,
-            this.state.targetProjectPath,
-            {
-              signal: this.abort.signal,
-              onPid: (pid) => {
-                this.activePid = pid;
-                this.owner.setChildPid(pid);
-              },
-            },
-          );
-          await this.store.cacheCatalog(catalog);
-          if (await this.poll()) {
-            if (this.stopRequested) return;
-            if (this.abort.signal.aborted) {
-              this.abort = new AbortController();
-              continue;
-            }
-          }
-          const assigned = Object.values(this.state.bindings).filter(
-            (b) => b.connectionId === connection.id,
-          );
-          if (
-            catalog.status !== "ready" ||
-            assigned.some(
-              (b) =>
-                !catalog.models.some(
-                  (m) =>
-                    m.id === b.modelId &&
-                    (!b.variant || m.variants.includes(b.variant)),
-                ),
-            )
-          ) {
-            this.state.status = "WAITING_USER";
-            this.state.statusReason = `[${this.state.graph.nodes.find((n) => n.id === this.state.currentNodeId)?.name ?? "모델 조회"} · ${connection.label}] ${catalog.error ?? "선택한 모델 또는 추론 강도를 조회할 수 없습니다. CLI의 모델 권한과 설정을 확인하고 재개하세요."}`;
-            await this.save();
-            return;
-          }
-          for (const [nodeId, binding] of Object.entries(this.state.bindings)) {
-            if (binding.connectionId !== connection.id) continue;
-            const model = catalog.models.find((m) => m.id === binding.modelId)!;
-            this.pricing.set(nodeId, model.pricing ?? modelPricing());
-          }
-          break;
-        }
-      }
+      if (!(await this.recheckModels())) return;
       this.abort = new AbortController();
-      if (
-        automaticRecoveryVisitId &&
-        this.state.activeVisitId === automaticRecoveryVisitId
-      ) {
-        if (
-          this.pricing.get(this.state.currentNodeId ?? "")?.status !== "free"
-        ) {
-          this.state.status = "PAUSED";
-          this.state.statusReason =
-            "자동 복구 전에 무료 모델임을 다시 확인하지 못했습니다. 추가 모델 호출 없이 정지했습니다.";
-          await this.save();
-          return;
-        }
-        const visit = this.state.visits.find(
-          (v) => v.id === automaticRecoveryVisitId,
-        )!;
-        // Scheduler latency and metadata lookup must not consume the next attempt's budget.
-        visit.cycleStartedAt = new Date().toISOString();
-        visit.cycleDeadlineAt = new Date(
-          Date.now() + settings.phaseRecoveryBudgetMs,
-        ).toISOString();
-      }
+      if (!(await this.renewAutomaticRecovery(automaticRecoveryVisitId)))
+        return;
       this.state.statusReason = null;
       await this.save();
-      while (this.state.status === "RUNNING" && !this.stopRequested) {
-        if (await this.poll()) {
-          if (this.stopRequested) return;
-        }
-        if (await this.contractStop()) return;
-        const id = this.state.currentNodeId;
-        if (id === "SUCCESS" || id === "PAUSED") {
-          const blockers = id === "SUCCESS" ? successBlockers(this.state) : [];
-          if (id === "SUCCESS") {
-            const problem = await deliverableProblem(this.state);
-            if (problem) blockers.push(problem);
-          }
-          this.state.status = blockers.length ? "PAUSED" : id;
-          this.state.statusReason = blockers.length
-            ? `성공 조건 미충족: ${blockers.join(" ")} 수정·테스트·최종 승인을 다시 수행하도록 수동 재개하세요.`
-            : id === "SUCCESS"
-              ? "모든 필수 요구사항, 실제 테스트 실행 증거와 최종 승인을 확인했습니다."
-              : (this.state.statusReason ??
-                "중단 분석을 완료했습니다. 계획과 근거를 검토한 뒤 재개하세요.");
-          if (blockers.length) {
-            this.state.currentNodeId = "PAUSED";
-            this.state.automaticRecovery = null;
-          }
-          this.state.activeVisitId = null;
-          await this.save();
-          return;
-        }
-        const node = this.state.graph.nodes.find((n) => n.id === id);
-        if (!node) throw new Error("실행 노드를 찾을 수 없습니다.");
-        let visit = this.state.visits.find(
-          (v) => v.id === this.state.activeVisitId,
-        );
-        if (visit?.nodeId !== node.id) visit = undefined;
-        if (visit && ["succeeded", "failed"].includes(visit.status)) {
-          await this.advance(node, visit);
-          continue;
-        }
-        if (!visit) {
-          if (
-            this.state.visits.length >= this.state.visitLimit ||
-            (this.state.completedIterations >= this.state.iterationLimit &&
-              node.id === this.state.graph.entrypoints.reentry)
-          ) {
-            this.state.status = "PAUSED";
-            this.state.statusReason =
-              "노드 방문 또는 반복 실행 예산을 소진했습니다. 그래프와 미해결 요구사항을 검토한 뒤 수동 재개하세요.";
-            await this.save();
-            return;
-          }
-          const now = new Date().toISOString();
-          visit = {
-            id: randomUUID(),
-            nodeId: node.id,
-            number:
-              this.state.visits.filter((v) => v.nodeId === node.id).length + 1,
-            status: "running",
-            startedAt: now,
-            completedAt: null,
-            attempts: [],
-            output: "",
-            verdict: null,
-            plans: [],
-            selectedPlanId: null,
-            cycleStartedAt: now,
-            cycleDeadlineAt: new Date(
-              Date.now() + settings.phaseRecoveryBudgetMs,
-            ).toISOString(),
-            recoveryCount: 0,
-            transitionCommitted: false,
-            automaticCycles: 0,
-          };
-          this.state.visits.push(visit);
-          this.state.activeVisitId = visit.id;
-          await this.save();
-        }
-        if (visit.status === "waiting_approval") {
-          this.state.status = "WAITING_USER";
-          this.state.statusReason = "이 방문의 계획 선택과 승인이 필요합니다.";
-          await this.save();
-          return;
-        }
-        if (visit.status === "paused") visit.status = "running";
-        if (
-          runPolicy(this.state.graph).reserveFinalizationBudget &&
-          !visit.stageDeadlineAt
-        ) {
-          const end = stageDeadline(this.state, node, visit);
-          if (end !== undefined) {
-            visit.stageDeadlineAt = new Date(end).toISOString();
-            await this.save();
-          }
-        }
-        if (!isReadOnly(node.type) && this.state.accessMode === "ask") {
-          const ref = this.state.approvedPlanRef;
-          const approved = ref
-            ? (this.state.visits
-                .find((v) => v.id === ref.visitId)
-                ?.plans.find((p) => p.id === ref.choiceId)?.body ?? "")
-            : "";
-          const extra = this.outside(
-            `${this.state.goal}\n${approved}\n${node.instructions}`,
-          );
-          if (extra.length) {
-            this.state.pendingAccess = {
-              paths: extra,
-              nodeId: node.id,
-              visitId: visit.id,
-            };
-            this.state.status = "WAITING_USER";
-            this.state.statusReason =
-              "프로젝트 밖의 경로에 대한 접근 승인이 필요합니다.";
-            await this.save();
-            return;
-          }
-        }
-        const completion = await this.execute(node, visit);
-        if (this.state.status !== "RUNNING") return;
-        if (this.state.activeVisitId !== visit.id) continue; // interrupt control changed traversal
-        if (!completion) continue;
-        visit.output =
-          completion.output +
-          (completion.reason ? `\n\n[ORCHESTRATOR] ${completion.reason}` : "");
-        visit.verdict = completion.verdict;
-        if (completion.researchBlocked) {
-          visit.status = "paused";
-          this.state.status = "WAITING_USER";
-          this.state.statusReason =
-            "필요한 인터넷 조사 기능을 CLI에서 설정한 뒤 재개하세요.";
-          await this.save();
-          return;
-        }
-        if (node.type === "planning") {
-          visit.plans = completion.plans;
-          await this.store.savePlans(this.state.id, visit.id, visit.plans);
-          if (node.planning?.requiresApproval !== false) {
-            visit.status = "waiting_approval";
-            this.state.pendingApproval = { nodeId: node.id, visitId: visit.id };
-            this.state.status = "WAITING_USER";
-            this.state.statusReason = "생성한 계획을 검토하고 선택·승인하세요.";
-            await this.save();
-            return;
-          }
-          const plan = visit.plans[0]!;
-          visit.selectedPlanId = plan.id;
-          this.state.approvedPlanRef = {
-            visitId: visit.id,
-            choiceId: plan.id,
-            revision: plan.revision,
-          };
-        }
-        visit.status = ["FAIL", "REJECTED"].includes(completion.verdict ?? "")
-          ? "failed"
-          : "succeeded";
-        visit.completedAt = new Date().toISOString();
-        this.recordEvidence(node, visit);
-        await this.advance(node, visit);
-      }
+      await this.visitLoop();
     } catch (error) {
-      if (error instanceof AppError && error.code === "stale_session") {
-        // A newer controller decision owns the persisted state; never overwrite it.
-        this.state = await this.store.readSession(this.sessionId);
-        return;
-      }
-      const budget = sessionBudgetReason(this.state);
-      if (
-        budget &&
-        (!this.activePid || checkProcessLiveness(this.activePid) === "dead")
-      ) {
-        await this.budgetStop(budget);
-        return;
-      }
-      this.state.status =
-        this.activePid && checkProcessLiveness(this.activePid) !== "dead"
-          ? "BLOCKED"
-          : "FAILED";
-      this.state.statusReason = messageOf(error);
-      await this.save();
+      await this.runFailed(error);
     } finally {
       clearTimeout(budgetTimer);
       this.abort.abort();
       await this.owner.release();
     }
+  }
+  /** Clear what a dead worker left behind; false once the session had to stop. */
+  private async recoverStaleOwner(
+    previousLease: Parameters<typeof collectRecoveredChildPids>[0],
+  ): Promise<boolean> {
+    const activeAttempt = this.state.visits
+      .find((v) => v.id === this.state.activeVisitId)
+      ?.attempts.at(-1);
+    for (const pid of collectRecoveredChildPids(
+      previousLease,
+      activeAttempt?.pid,
+    )) {
+      if (
+        checkProcessLiveness(pid) !== "dead" &&
+        (await terminateProcessTreeBounded(
+          pid,
+          this.state.settings.killTimeoutMs,
+        )) !== "dead"
+      ) {
+        this.state.status = "BLOCKED";
+        this.state.statusReason =
+          "이전 자식 프로세스 종료를 확인할 수 없습니다.";
+        await this.save();
+        return false;
+      }
+    }
+    if (activeAttempt?.status === "running") {
+      activeAttempt.status = "interrupted";
+      activeAttempt.failureKind = "worker_crash";
+      activeAttempt.message =
+        "이전 워커 종료 후 남은 자식 프로세스를 정리했습니다.";
+      activeAttempt.endedAt = new Date().toISOString();
+      activeAttempt.pid = null;
+    }
+    return true;
+  }
+  /** Only bindings referenced by this immutable run are queried; no CLI scan.
+   * False once the session had to stop. */
+  private async recheckModels(): Promise<boolean> {
+    for (const connection of this.state.connections) {
+      // Interrupt cancels metadata lookup as well as coding. Recheck the same
+      // connection with a fresh signal before executing its interrupt node.
+      while (true) {
+        const catalog = await queryModels(
+          connection,
+          this.state.targetProjectPath,
+          {
+            signal: this.abort.signal,
+            onPid: (pid) => {
+              this.activePid = pid;
+              this.owner.setChildPid(pid);
+            },
+          },
+        );
+        await this.store.cacheCatalog(catalog);
+        if (await this.poll()) {
+          if (this.stopRequested) return false;
+          if (this.abort.signal.aborted) {
+            this.abort = new AbortController();
+            continue;
+          }
+        }
+        const assigned = Object.values(this.state.bindings).filter(
+          (b) => b.connectionId === connection.id,
+        );
+        if (
+          catalog.status !== "ready" ||
+          assigned.some(
+            (b) =>
+              !catalog.models.some(
+                (m) =>
+                  m.id === b.modelId &&
+                  (!b.variant || m.variants.includes(b.variant)),
+              ),
+          )
+        ) {
+          this.state.status = "WAITING_USER";
+          this.state.statusReason = `[${this.state.graph.nodes.find((n) => n.id === this.state.currentNodeId)?.name ?? "모델 조회"} · ${connection.label}] ${catalog.error ?? "선택한 모델 또는 추론 강도를 조회할 수 없습니다. CLI의 모델 권한과 설정을 확인하고 재개하세요."}`;
+          await this.save();
+          return false;
+        }
+        for (const [nodeId, binding] of Object.entries(this.state.bindings)) {
+          if (binding.connectionId !== connection.id) continue;
+          const model = catalog.models.find((m) => m.id === binding.modelId)!;
+          this.pricing.set(nodeId, model.pricing ?? modelPricing());
+        }
+        break;
+      }
+    }
+    return true;
+  }
+  /** An automatic resume must still be free and gets a fresh recovery budget. */
+  private async renewAutomaticRecovery(
+    visitId: string | null,
+  ): Promise<boolean> {
+    if (!visitId || this.state.activeVisitId !== visitId) return true;
+    if (this.pricing.get(this.state.currentNodeId ?? "")?.status !== "free") {
+      this.state.status = "PAUSED";
+      this.state.statusReason =
+        "자동 복구 전에 무료 모델임을 다시 확인하지 못했습니다. 추가 모델 호출 없이 정지했습니다.";
+      await this.save();
+      return false;
+    }
+    const visit = this.state.visits.find((v) => v.id === visitId)!;
+    // Scheduler latency and metadata lookup must not consume the next attempt's budget.
+    visit.cycleStartedAt = new Date().toISOString();
+    visit.cycleDeadlineAt = new Date(
+      Date.now() + this.state.settings.phaseRecoveryBudgetMs,
+    ).toISOString();
+    return true;
+  }
+  private async visitLoop(): Promise<void> {
+    while (this.state.status === "RUNNING" && !this.stopRequested) {
+      if ((await this.poll()) && this.stopRequested) return;
+      if (await this.contractStop()) return;
+      const id = this.state.currentNodeId;
+      if (id === "SUCCESS" || id === "PAUSED") return this.finishRun(id);
+      const node = this.state.graph.nodes.find((n) => n.id === id);
+      if (!node) throw new Error("실행 노드를 찾을 수 없습니다.");
+      let visit = this.state.visits.find(
+        (v) => v.id === this.state.activeVisitId,
+      );
+      if (visit?.nodeId !== node.id) visit = undefined;
+      if (visit && ["succeeded", "failed"].includes(visit.status)) {
+        await this.advance(node, visit);
+        continue;
+      }
+      visit ??= await this.openVisit(node);
+      if (!visit || !(await this.readyToExecute(node, visit))) return;
+      const completion = await this.execute(node, visit);
+      if (this.state.status !== "RUNNING") return;
+      if (this.state.activeVisitId !== visit.id) continue; // interrupt control changed traversal
+      if (!completion) continue;
+      if (!(await this.applyCompletion(node, visit, completion))) return;
+    }
+  }
+  /** The terminal decision: SUCCESS has to prove itself again, or the run pauses. */
+  private async finishRun(id: "SUCCESS" | "PAUSED"): Promise<void> {
+    const blockers = id === "SUCCESS" ? successBlockers(this.state) : [];
+    if (id === "SUCCESS") {
+      const problem = await deliverableProblem(this.state);
+      if (problem) blockers.push(problem);
+    }
+    this.state.status = blockers.length ? "PAUSED" : id;
+    this.state.statusReason = blockers.length
+      ? `성공 조건 미충족: ${blockers.join(" ")} 수정·테스트·최종 승인을 다시 수행하도록 수동 재개하세요.`
+      : id === "SUCCESS"
+        ? "모든 필수 요구사항, 실제 테스트 실행 증거와 최종 승인을 확인했습니다."
+        : (this.state.statusReason ??
+          "중단 분석을 완료했습니다. 계획과 근거를 검토한 뒤 재개하세요.");
+    if (blockers.length) {
+      this.state.currentNodeId = "PAUSED";
+      this.state.automaticRecovery = null;
+    }
+    this.state.activeVisitId = null;
+    await this.save();
+  }
+  /** Start the node's next visit, or undefined once the run budget paused the session. */
+  private async openVisit(node: AgentNode): Promise<NodeVisit | undefined> {
+    if (
+      this.state.visits.length >= this.state.visitLimit ||
+      (this.state.completedIterations >= this.state.iterationLimit &&
+        node.id === this.state.graph.entrypoints.reentry)
+    ) {
+      this.state.status = "PAUSED";
+      this.state.statusReason =
+        "노드 방문 또는 반복 실행 예산을 소진했습니다. 그래프와 미해결 요구사항을 검토한 뒤 수동 재개하세요.";
+      await this.save();
+      return undefined;
+    }
+    const now = new Date().toISOString();
+    const visit: NodeVisit = {
+      id: randomUUID(),
+      nodeId: node.id,
+      number: this.state.visits.filter((v) => v.nodeId === node.id).length + 1,
+      status: "running",
+      startedAt: now,
+      completedAt: null,
+      attempts: [],
+      output: "",
+      verdict: null,
+      plans: [],
+      selectedPlanId: null,
+      cycleStartedAt: now,
+      cycleDeadlineAt: new Date(
+        Date.now() + this.state.settings.phaseRecoveryBudgetMs,
+      ).toISOString(),
+      recoveryCount: 0,
+      transitionCommitted: false,
+      automaticCycles: 0,
+    };
+    this.state.visits.push(visit);
+    this.state.activeVisitId = visit.id;
+    await this.save();
+    return visit;
+  }
+  /** Approvals this visit still waits on; false once the session stopped for one. */
+  private async readyToExecute(
+    node: AgentNode,
+    visit: NodeVisit,
+  ): Promise<boolean> {
+    if (visit.status === "waiting_approval") {
+      this.state.status = "WAITING_USER";
+      this.state.statusReason = "이 방문의 계획 선택과 승인이 필요합니다.";
+      await this.save();
+      return false;
+    }
+    if (visit.status === "paused") visit.status = "running";
+    if (
+      runPolicy(this.state.graph).reserveFinalizationBudget &&
+      !visit.stageDeadlineAt
+    ) {
+      const end = stageDeadline(this.state, node, visit);
+      if (end !== undefined) {
+        visit.stageDeadlineAt = new Date(end).toISOString();
+        await this.save();
+      }
+    }
+    if (isReadOnly(node.type) || this.state.accessMode !== "ask") return true;
+    const ref = this.state.approvedPlanRef;
+    const approved = ref
+      ? (this.state.visits
+          .find((v) => v.id === ref.visitId)
+          ?.plans.find((p) => p.id === ref.choiceId)?.body ?? "")
+      : "";
+    const extra = this.outside(
+      `${this.state.goal}\n${approved}\n${node.instructions}`,
+    );
+    if (!extra.length) return true;
+    this.state.pendingAccess = {
+      paths: extra,
+      nodeId: node.id,
+      visitId: visit.id,
+    };
+    this.state.status = "WAITING_USER";
+    this.state.statusReason =
+      "프로젝트 밖의 경로에 대한 접근 승인이 필요합니다.";
+    await this.save();
+    return false;
+  }
+  /** Record an accepted completion and move on; false once it needs the operator. */
+  private async applyCompletion(
+    node: AgentNode,
+    visit: NodeVisit,
+    completion: Completion,
+  ): Promise<boolean> {
+    visit.output =
+      completion.output +
+      (completion.reason ? `\n\n[ORCHESTRATOR] ${completion.reason}` : "");
+    visit.verdict = completion.verdict;
+    if (completion.researchBlocked) {
+      visit.status = "paused";
+      this.state.status = "WAITING_USER";
+      this.state.statusReason =
+        "필요한 인터넷 조사 기능을 CLI에서 설정한 뒤 재개하세요.";
+      await this.save();
+      return false;
+    }
+    if (node.type === "planning") {
+      visit.plans = completion.plans;
+      await this.store.savePlans(this.state.id, visit.id, visit.plans);
+      if (node.planning?.requiresApproval !== false) {
+        visit.status = "waiting_approval";
+        this.state.pendingApproval = { nodeId: node.id, visitId: visit.id };
+        this.state.status = "WAITING_USER";
+        this.state.statusReason = "생성한 계획을 검토하고 선택·승인하세요.";
+        await this.save();
+        return false;
+      }
+      const plan = visit.plans[0]!;
+      visit.selectedPlanId = plan.id;
+      this.state.approvedPlanRef = {
+        visitId: visit.id,
+        choiceId: plan.id,
+        revision: plan.revision,
+      };
+    }
+    visit.status = ["FAIL", "REJECTED"].includes(completion.verdict ?? "")
+      ? "failed"
+      : "succeeded";
+    visit.completedAt = new Date().toISOString();
+    this.recordEvidence(node, visit);
+    await this.advance(node, visit);
+    return true;
+  }
+  private async runFailed(error: unknown): Promise<void> {
+    if (error instanceof AppError && error.code === "stale_session") {
+      // A newer controller decision owns the persisted state; never overwrite it.
+      this.state = await this.store.readSession(this.sessionId);
+      return;
+    }
+    const budget = sessionBudgetReason(this.state);
+    if (
+      budget &&
+      (!this.activePid || checkProcessLiveness(this.activePid) === "dead")
+    ) {
+      await this.budgetStop(budget);
+      return;
+    }
+    this.state.status =
+      this.activePid && checkProcessLiveness(this.activePid) !== "dead"
+        ? "BLOCKED"
+        : "FAILED";
+    this.state.statusReason = messageOf(error);
+    await this.save();
   }
   private recordEvidence(node: AgentNode, visit: NodeVisit): void {
     const ids = new Set(this.state.requirements.items.map((r) => r.id));
