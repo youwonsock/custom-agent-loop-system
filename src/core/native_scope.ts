@@ -5,12 +5,10 @@ import { NativeScopeAudit, SessionState } from "../shared/domain";
 import { canonicalCommand, literalShellWords } from "./verification_evidence";
 import { inspectionSegments, stripInspectionStderr } from "./inspection_syntax";
 import { preExecutionDenied } from "./event_evidence";
+import { obj, Obj } from "./values";
 
 export const SCOPE_DENIED = "[AGENT_GRAPH_SCOPE_DENIED]";
 export const SCOPE_VIOLATION = "[AGENT_GRAPH_SCOPE_VIOLATION]";
-type Obj = Record<string, unknown>;
-const obj = (v: unknown): Obj =>
-  v && typeof v === "object" && !Array.isArray(v) ? (v as Obj) : {};
 const apiFor = (cwd: string) =>
   /^[A-Za-z]:[\\/]|^\\\\/.test(cwd) ? path.win32 : path.posix;
 function within(root: string, file: string, api: typeof path.posix): boolean {

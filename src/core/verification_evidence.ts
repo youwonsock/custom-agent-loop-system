@@ -8,10 +8,7 @@ import {
   parseRequirementEvidence,
   RequirementItem,
 } from "./requirement_ledger";
-
-type Obj = Record<string, unknown>;
-const obj = (v: unknown): Obj =>
-  v && typeof v === "object" && !Array.isArray(v) ? (v as Obj) : {};
+import { obj, Obj } from "./values";
 
 // Decode one literal argv layer; never evaluate substitutions or shell operators.
 export function literalShellWords(input: string): string[] | null {

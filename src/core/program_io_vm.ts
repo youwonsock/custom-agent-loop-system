@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 import { spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
+import { sha } from "./values";
 
 const unavailable = (message: string): Error =>
   Error(`[AGENT_GRAPH_IO_UNAVAILABLE] ${message}`);
@@ -22,8 +22,6 @@ export interface VmPolicy extends VmRuntime {
   uid: number;
   gid: number;
 }
-const sha = (v: string | Buffer) =>
-  createHash("sha256").update(v).digest("hex");
 export function containerHostEnvironment(
   vm: Pick<VmRuntime, "controlHome"> = {},
 ): Record<string, string> {

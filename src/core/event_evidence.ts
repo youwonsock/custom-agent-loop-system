@@ -4,6 +4,7 @@ import {
   NativeScopeAudit,
   ProgramIoAudit,
 } from "../shared/domain";
+import { obj as toObj } from "./values";
 type Event = Record<string, unknown>;
 export interface EventEvidence {
   programIoAudit?: ProgramIoAudit;
@@ -26,10 +27,7 @@ export const emptyEvidence = (): EventEvidence => ({
   assistantTextBytes: 0,
   actualModelId: null,
 });
-const obj = (value: unknown): Event =>
-  value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Event)
-    : {};
+const obj = (value: unknown): Event => toObj(value) as Event;
 export function preExecutionDenied(error: unknown, metadata: unknown): boolean {
   const approval = obj(obj(metadata).approval),
     rule = obj(approval.rule);

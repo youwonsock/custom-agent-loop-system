@@ -8,10 +8,8 @@ import {
 } from "./verification_contract";
 import { validSourceHashes } from "./test_source_guard";
 import { validNodeTestProof } from "./node_test_policy";
+import { isObj, Obj } from "./values";
 
-type Obj = Record<string, unknown>;
-const object = (v: unknown): v is Obj =>
-  !!v && typeof v === "object" && !Array.isArray(v);
 const text = (v: unknown): v is string => typeof v === "string";
 const nullableText = (v: unknown) => v === null || text(v);
 const count = (v: unknown) => Number.isSafeInteger(v) && (v as number) >= 0;
@@ -51,25 +49,21 @@ const failures = [
   "worker_crash",
 ];
 const receipt = (v: unknown): boolean =>
-  object(v) &&
+  isObj(v) &&
   text(v.id) &&
   text(v.command) &&
   (v.exitCode === null || Number.isSafeInteger(v.exitCode)) &&
   nullableText(v.environmentError);
 const binding = (v: unknown): boolean =>
-  object(v) &&
+  isObj(v) &&
   safeId(v.connectionId) &&
   text(v.modelId) &&
   (v.variant === undefined || text(v.variant));
 const plan = (v: unknown): boolean =>
-  object(v) &&
-  count(v.id) &&
-  count(v.revision) &&
-  text(v.body) &&
-  text(v.title);
+  isObj(v) && count(v.id) && count(v.revision) && text(v.body) && text(v.title);
 function attempt(v: unknown): boolean {
   return (
-    object(v) &&
+    isObj(v) &&
     safeId(v.id) &&
     count(v.number) &&
     member(v.status, [
@@ -109,12 +103,12 @@ function attempt(v: unknown): boolean {
         v.readFiles.every(text))) &&
     (v.fileMutation === undefined || typeof v.fileMutation === "boolean") &&
     (v.verificationInvalidation === undefined ||
-      (object(v.verificationInvalidation) &&
+      (isObj(v.verificationInvalidation) &&
         text(v.verificationInvalidation.at) &&
         text(v.verificationInvalidation.reason) &&
         array(v.verificationInvalidation.files, text))) &&
     (v.pricing === undefined ||
-      (object(v.pricing) &&
+      (isObj(v.pricing) &&
         member(v.pricing.status, ["free", "paid", "unknown"]) &&
         member(v.pricing.source, [
           "native_flag",
@@ -127,7 +121,7 @@ function attempt(v: unknown): boolean {
 }
 function visit(v: unknown): boolean {
   return (
-    object(v) &&
+    isObj(v) &&
     (v.stageDeadlineAt === undefined ||
       (text(v.stageDeadlineAt) &&
         Number.isFinite(Date.parse(v.stageDeadlineAt)))) &&
@@ -176,7 +170,7 @@ export function decodeSession(
   const require = (ok: boolean, field: string) => {
     if (!ok) invalid(field);
   };
-  if (!object(value)) return invalid("root");
+  if (!isObj(value)) return invalid("root");
   const s = value;
   require(s.stateVersion === 3, "stateVersion");
   require(s.id === expectedId &&
@@ -197,15 +191,15 @@ export function decodeSession(
   require(array(
     s.connections,
     (c) =>
-      object(c) &&
+      isObj(c) &&
       safeId(c.id) &&
       member(c.type, ["codex", "claude", "kilo", "opencode"]) &&
       text(c.label) &&
       text(c.binary),
   ), "connections");
-  require(object(s.bindings) &&
+  require(isObj(s.bindings) &&
     Object.values(s.bindings).every(binding), "bindings");
-  require(object(s.settings) &&
+  require(isObj(s.settings) &&
     Object.keys(executionSettings())
       .filter(
         (key) => !["sessionTimeoutMs", "maxSessionAttempts"].includes(key),
@@ -226,30 +220,29 @@ export function decodeSession(
   require(member(s.accessMode, ["ask", "full_access"]) &&
     array(s.additionalAllowedPaths, text) &&
     array(s.processedRequests, safeId), "access/requests");
-  const ref = (v: unknown) =>
-    object(v) && safeId(v.nodeId) && safeId(v.visitId);
+  const ref = (v: unknown) => isObj(v) && safeId(v.nodeId) && safeId(v.visitId);
   require(s.pendingApproval === null ||
     ref(s.pendingApproval), "pendingApproval");
   require(s.pendingAccess === null ||
     (ref(s.pendingAccess) &&
       array((s.pendingAccess as Obj).paths, text)), "pendingAccess");
   require(s.approvedPlanRef === null ||
-    (object(s.approvedPlanRef) &&
+    (isObj(s.approvedPlanRef) &&
       safeId(s.approvedPlanRef.visitId) &&
       count(s.approvedPlanRef.choiceId) &&
       count(s.approvedPlanRef.revision)), "approvedPlanRef");
   require(s.automaticRecovery === null ||
-    (object(s.automaticRecovery) &&
+    (isObj(s.automaticRecovery) &&
       count(s.automaticRecovery.count) &&
       text(s.automaticRecovery.resumeAt)), "automaticRecovery");
-  require(object(s.requirements), "requirements");
+  require(isObj(s.requirements), "requirements");
   const r = s.requirements as Obj;
   require(r.version === 1 &&
     text(r.derivedAt) &&
     array(
       r.items,
       (i) =>
-        object(i) &&
+        isObj(i) &&
         text(i.id) &&
         /^REQ-\d{3,}$/.test(i.id) &&
         text(i.text) &&
@@ -265,7 +258,7 @@ export function decodeSession(
   require(array(
     r.evidence,
     (e) =>
-      object(e) &&
+      isObj(e) &&
       text(e.requirementId) &&
       text(e.stageId) &&
       text(e.role) &&
@@ -274,12 +267,12 @@ export function decodeSession(
       nullableText(e.attemptId) &&
       text(e.recordedAt),
   ), "requirements.evidence");
-  require(object(s.convergence) &&
+  require(isObj(s.convergence) &&
     count(s.convergence.stagnantCycles) &&
     array(
       s.convergence.history,
       (h) =>
-        object(h) &&
+        isObj(h) &&
         count(h.loopCount) &&
         count(h.score) &&
         text(h.signature) &&
@@ -289,7 +282,7 @@ export function decodeSession(
   const state = value as unknown as SessionState;
   if (s.executionBudget !== undefined) {
     const b = s.executionBudget;
-    require(object(b) &&
+    require(isObj(b) &&
       text(b.startedAt) &&
       Number.isFinite(Date.parse(b.startedAt)) &&
       text(b.deadlineAt) &&

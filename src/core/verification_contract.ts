@@ -1,6 +1,5 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { createHash } from "node:crypto";
 import {
   CommandReceipt,
   SessionState,
@@ -17,9 +16,8 @@ import {
 } from "./verification_evidence";
 import { validateNodeTestPolicy, nodeTestScript } from "./node_test_policy";
 import { nodeTestVerificationCommand } from "./node_test_command";
+import { sha } from "./values";
 export const CONTRACT_FILE = ".agent-graph/verification.json";
-const sha = (data: string | Buffer) =>
-  createHash("sha256").update(data).digest("hex");
 const plain = (v: unknown): v is Record<string, unknown> =>
   !!v && typeof v === "object" && !Array.isArray(v);
 const relative = (v: unknown): v is string =>

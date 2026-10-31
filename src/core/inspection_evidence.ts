@@ -2,9 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { inspectionSegments } from "./inspection_syntax";
 import { canonicalCommand, literalShellWords } from "./verification_evidence";
-type Obj = Record<string, unknown>;
-const obj = (v: unknown): Obj =>
-  v && typeof v === "object" && !Array.isArray(v) ? (v as Obj) : {};
+import { obj, Obj } from "./values";
 /** Keep completed native reads outside the bounded recent-event ring. */
 export class InspectionTracker {
   private readonly seen = new Set<string>();

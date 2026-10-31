@@ -1,6 +1,4 @@
-type Obj = Record<string, unknown>;
-const object = (v: unknown): v is Obj =>
-  !!v && typeof v === "object" && !Array.isArray(v);
+import { isObj } from "./values";
 export interface ImplementationBlocker {
   kind: "external" | "product" | "test_setup";
   evidence: string;
@@ -43,7 +41,7 @@ export function implementationBlocker(
   if (body.startsWith("```"))
     body = body.replace(/^```(?:json)?\s*/, "").replace(/\s*```$/, "");
   const report: unknown = JSON.parse(body);
-  if (!object(report) || report.verdict !== "BLOCKED") return null;
+  if (!isObj(report) || report.verdict !== "BLOCKED") return null;
   if (report.role !== undefined && report.role !== "implementation")
     throw Error("구현 blocker의 역할이 잘못되었습니다.");
   if (report.version !== undefined && report.version !== 1)

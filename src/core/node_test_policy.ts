@@ -4,10 +4,9 @@ import {
   VerificationManifest,
 } from "../shared/domain";
 import { nodeTestVerificationCommand } from "./node_test_command";
-import { createHash } from "node:crypto";
+import { isObj } from "./values";
+import { sha } from "./values";
 
-const object = (v: unknown): v is Record<string, unknown> =>
-  !!v && typeof v === "object" && !Array.isArray(v);
 const strings = (v: unknown, max = 200): v is string[] =>
   Array.isArray(v) &&
   v.length > 0 &&
@@ -32,16 +31,14 @@ export function nodeTestPolicyDigest(policy: NodeTestPolicy): string {
   const canonical = (v: unknown): unknown =>
     Array.isArray(v)
       ? v.map(canonical)
-      : object(v)
+      : isObj(v)
         ? Object.fromEntries(
             Object.keys(v)
               .sort()
               .map((k) => [k, canonical(v[k])]),
           )
         : v;
-  return createHash("sha256")
-    .update(JSON.stringify(canonical(policy)))
-    .digest("hex");
+  return sha(JSON.stringify(canonical(policy)));
 }
 
 /** Optional for historical contracts; once supplied every scope is mandatory. */
@@ -50,7 +47,7 @@ export function validateNodeTestPolicy(
   manifest: VerificationManifest,
 ): NodeTestPolicy {
   if (
-    !object(value) ||
+    !isObj(value) ||
     typeof value.checkId !== "string" ||
     typeof value.suiteCheckId !== "string" ||
     value.checkId === value.suiteCheckId ||
@@ -77,7 +74,7 @@ export function validateNodeTestPolicy(
     challenges = new Set<string>();
   const scopes = value.scopes.map((raw) => {
     if (
-      !object(raw) ||
+      !isObj(raw) ||
       typeof raw.id !== "string" ||
       !/^[a-z][a-z0-9_-]{0,63}$/.test(raw.id) ||
       ids.has(raw.id) ||
@@ -103,7 +100,7 @@ export function validateNodeTestPolicy(
     files.add(raw.file);
     const probes = raw.challenges.map((probe) => {
       if (
-        !object(probe) ||
+        !isObj(probe) ||
         typeof probe.id !== "string" ||
         !/^[a-z][a-z0-9_-]{0,63}$/.test(probe.id) ||
         challenges.has(probe.id) ||
@@ -144,14 +141,14 @@ export function validateNodeTestPolicy(
 
 export function validNodeTestProof(v: unknown): v is NodeTestProof {
   if (
-    !object(v) ||
+    !isObj(v) ||
     v.version !== 1 ||
     typeof v.runId !== "string" ||
     !v.runId ||
     v.runId.length > 100 ||
     typeof v.reportDigest !== "string" ||
     !/^[a-f0-9]{64}$/.test(v.reportDigest) ||
-    !object(v.sourceHashes) ||
+    !isObj(v.sourceHashes) ||
     !Object.keys(v.sourceHashes).length ||
     Object.keys(v.sourceHashes).length > 10000 ||
     !Object.entries(v.sourceHashes).every(
@@ -166,7 +163,7 @@ export function validNodeTestProof(v: unknown): v is NodeTestProof {
   return (
     v.scopes.every(
       (s) =>
-        object(s) &&
+        isObj(s) &&
         typeof s.id === "string" &&
         relative(s.file) &&
         strings(s.cases, 100) &&

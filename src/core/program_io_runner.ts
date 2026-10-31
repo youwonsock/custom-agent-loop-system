@@ -3,7 +3,6 @@ import * as path from "node:path";
 import { spawn } from "node:child_process";
 import {
   ProgramIoPolicy,
-  ioDigest,
   ioSign,
   ioVerify,
   programEnvironment,
@@ -16,6 +15,7 @@ import {
   removeVm,
   containerHostEnvironment,
 } from "./program_io_vm";
+import { sha } from "./values";
 
 /** Trusted host broker. Model text executes only in the selected confined child. */
 async function main(): Promise<void> {
@@ -27,7 +27,7 @@ async function main(): Promise<void> {
     policy.version !== 1 ||
     !policy.preflightPassed ||
     Date.now() > policy.expiresAt ||
-    ioDigest(policy.profile) !== policy.profileDigest ||
+    sha(policy.profile) !== policy.profileDigest ||
     process.platform !== "darwin"
   )
     throw Error(`${IO_UNAVAILABLE} Missing/expired trusted program policy.`);

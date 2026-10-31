@@ -1,6 +1,6 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
 import {
   NodeTestPolicy,
@@ -17,9 +17,8 @@ import {
 import { atomicWriteJsonFile, checkProcessLiveness, delay } from "./resilience";
 import { terminateProcessTreeBounded } from "./process_lifecycle";
 import { StreamingRedactor } from "./process_output";
+import { sha } from "./values";
 
-const sha = (v: string | Buffer): string =>
-  createHash("sha256").update(v).digest("hex");
 const same = (a: Record<string, string>, b: Record<string, string>): boolean =>
   JSON.stringify(Object.entries(a).sort()) ===
   JSON.stringify(Object.entries(b).sort());

@@ -1,10 +1,6 @@
 import { FailureKind } from "./resilience";
+import { obj, Obj } from "./values";
 
-type Obj = Record<string, unknown>;
-const object = (value: unknown): Obj =>
-  value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Obj)
-    : {};
 const string = (value: unknown): string =>
   typeof value === "string" ? value : "";
 export const MAX_DIAGNOSTIC_MESSAGE_BYTES = 2048;
@@ -133,9 +129,9 @@ function kindOf(
   return "process_exit";
 }
 export function cliDiagnostic(error: unknown): CliDiagnostic {
-  const raw = object(error),
-    data = object(raw.data),
-    response = object(raw.response);
+  const raw = obj(error),
+    data = obj(raw.data),
+    response = obj(raw.response);
   const rawCode = raw.code ?? data.code ?? raw.name;
   const code =
     typeof rawCode === "string" || typeof rawCode === "number"

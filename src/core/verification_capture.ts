@@ -1,7 +1,6 @@
 import * as fs from "node:fs/promises";
 import { constants, Stats } from "node:fs";
 import * as path from "node:path";
-import { createHash } from "node:crypto";
 import { CommandReceipt } from "../shared/domain";
 import {
   canonicalCommand,
@@ -10,6 +9,7 @@ import {
   projectCommandKey,
 } from "./verification_evidence";
 import { diagnosticMessage } from "./cli_diagnostics";
+import { sha } from "./values";
 
 const MAX_BYTES = 2 * 1024 * 1024;
 type Snapshot = {
@@ -136,12 +136,12 @@ export async function addCapturedEnvironmentDiagnostics(
         continue;
       const data = buffer.subarray(0, bytes),
         text = data.toString("utf8"),
-        digest = createHash("sha256").update(data).digest("hex"),
+        digest = sha(data),
         relative = path.relative(b.root, b.file).split(path.sep).join("/");
       if (archiveDirectory) {
         try {
           await fs.mkdir(archiveDirectory, { recursive: true, mode: 0o700 });
-          const name = `${createHash("sha256").update(receipt.id).digest("hex").slice(0, 16)}-${digest}.log`;
+          const name = `${sha(receipt.id).slice(0, 16)}-${digest}.log`;
           await fs.writeFile(path.join(archiveDirectory, name), data, {
             mode: 0o600,
           });

@@ -6,9 +6,7 @@ import {
 import { RequirementItem } from "./requirement_ledger";
 import { projectCommandKey } from "./verification_evidence";
 import { isVerifierRole } from "../shared/node_roles";
-type Obj = Record<string, unknown>;
-const object = (v: unknown): v is Obj =>
-  !!v && typeof v === "object" && !Array.isArray(v);
+import { isObj } from "./values";
 /** Model-authored judgments; receipt facts are attached by the engine only. */
 export function renderStructuredReport(
   text: string,
@@ -27,7 +25,7 @@ export function renderStructuredReport(
     body = body.replace(/^```(?:json)?\s*/, "").replace(/\s*```$/, "");
   const report: unknown = JSON.parse(body);
   if (
-    !object(report) ||
+    !isObj(report) ||
     report.version !== 1 ||
     !Array.isArray(report.requirements) ||
     report.requirements.length > requirements.length
@@ -65,7 +63,7 @@ export function renderStructuredReport(
     ];
   for (const item of report.requirements) {
     if (
-      !object(item) ||
+      !isObj(item) ||
       typeof item.id !== "string" ||
       !requirements.some((r) => r.id === item.id) ||
       seen.has(item.id) ||
@@ -114,7 +112,7 @@ export function renderStructuredReport(
     const scopeSeen = new Set<string>();
     for (const row of Array.isArray(audits) ? audits : []) {
       if (
-        !object(row) ||
+        !isObj(row) ||
         typeof row.id !== "string" ||
         scopeSeen.has(row.id) ||
         !policy.scopes.some((s) => s.id === row.id) ||

@@ -1,13 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
-import {
-  createHash,
-  generateKeyPairSync,
-  randomUUID,
-  sign,
-  verify,
-} from "node:crypto";
+import { generateKeyPairSync, randomUUID, sign, verify } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
 import { literalShellWords } from "./verification_evidence";
@@ -21,6 +15,8 @@ import {
   cleanupPolicyVms,
   containerHostEnvironment,
 } from "./program_io_vm";
+import { obj, Obj } from "./values";
+import { sha } from "./values";
 
 export const IO_UNAVAILABLE = "[AGENT_GRAPH_IO_UNAVAILABLE]";
 export const IO_VIOLATION = "[AGENT_GRAPH_IO_VIOLATION]";
@@ -46,15 +42,10 @@ export interface ProgramIoPolicy {
   backend: "macos-seatbelt" | "apple-container-vm";
   vm?: VmPolicy;
 }
-type Obj = Record<string, unknown>;
 export type ProgramIoCommandPolicy = Pick<
   ProgramIoPolicy,
   "id" | "node" | "runner" | "publicKey"
 >;
-const obj = (v: unknown): Obj =>
-  v && typeof v === "object" && !Array.isArray(v) ? (v as Obj) : {};
-export const ioDigest = (v: string | Buffer): string =>
-  createHash("sha256").update(v).digest("hex");
 const quote = (s: string): string => "'" + s.replace(/'/g, "'\\''") + "'";
 const key = <T extends "pkcs8" | "spki">(data: string, type: T) => ({
   key: Buffer.from(data, "base64"),
@@ -384,7 +375,7 @@ export function prepareProgramIo(options: {
       runner: path.join(__dirname, "program_io_runner.js"),
       bootstrap: path.join(__dirname, "program_io_bootstrap.js"),
       profile,
-      profileDigest: ioDigest(profile),
+      profileDigest: sha(profile),
       publicKey: keys.publicKey
         .export({ format: "der", type: "spki" })
         .toString("base64"),
@@ -433,7 +424,7 @@ export function prepareProgramIo(options: {
       capabilities: [],
       scratch,
     });
-    policy.profileDigest = ioDigest(policy.profile);
+    policy.profileDigest = sha(policy.profile);
   }
   fs.writeFileSync(path.join(directory, "profile.sb"), policy.profile, {
     mode: 0o600,
@@ -676,9 +667,8 @@ export class ProgramIoTracker {
       if ([...starts.keys(), ...ends.keys()].some((id) => !this.calls.has(id)))
         audit.invalidReceipts++;
       if (
-        ioDigest(
-          fs.readFileSync(path.join(this.policy.directory, "profile.sb")),
-        ) !== this.policy.profileDigest
+        sha(fs.readFileSync(path.join(this.policy.directory, "profile.sb"))) !==
+        this.policy.profileDigest
       )
         audit.invalidReceipts++;
     } catch {
