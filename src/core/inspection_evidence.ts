@@ -1,4 +1,6 @@
+import * as fs from "node:fs";
 import * as path from "node:path";
+import { inspectionSegments } from "./inspection_syntax";
 import { canonicalCommand, literalShellWords } from "./verification_evidence";
 type Obj = Record<string, unknown>;
 const obj = (v: unknown): Obj =>
@@ -30,26 +32,47 @@ export class InspectionTracker {
   }
   private command(text: unknown): void {
     if (typeof text !== "string") return;
-    const segments = canonicalCommand(text).split(/\s*&&\s*/);
-    if (segments.length > 2) return;
-    if (segments.length === 2) {
-      const prefix = literalShellWords(segments[0]!);
-      if (
-        prefix?.length !== 2 ||
-        prefix[0] !== "cd" ||
-        path.resolve(this.cwd, prefix[1]!) !== path.resolve(this.cwd)
-      )
-        return;
+    const parts = inspectionSegments(canonicalCommand(text));
+    if (!parts || parts.some((p) => !["", "&&", ";"].includes(p.next))) return;
+    const reads: Array<{ files: string[]; lastExit: boolean }> = [];
+    for (const [at, part] of parts.entries()) {
+      const words = literalShellWords(part.text);
+      if (!words?.length) return;
+      const name = words.shift()!.split(/[\\/]/).at(-1)!.toLowerCase();
+      if (name === "cd") {
+        if (
+          at ||
+          words.length !== 1 ||
+          path.resolve(this.cwd, words[0]!) !== path.resolve(this.cwd)
+        )
+          return;
+        continue;
+      }
+      if (name === "echo" || name === "printf") continue;
+      if (!["cat", "type", "get-content"].includes(name)) return;
+      const files = words.filter(
+        (w) =>
+          !["--", "-path", "-literalpath", "-raw"].includes(w.toLowerCase()),
+      );
+      if (files.some((w) => w.startsWith("-"))) return;
+      reads.push({
+        files,
+        lastExit: !parts.slice(at).some((p) => p.next === ";"),
+      });
     }
-    const words = literalShellWords(segments.at(-1)!);
-    if (!words?.length) return;
-    const name = words.shift()!.split(/[\\/]/).at(-1)!.toLowerCase();
-    if (!["cat", "type", "get-content"].includes(name)) return;
-    const files = words.filter(
-      (w) => !["--", "-path", "-literalpath", "-raw"].includes(w.toLowerCase()),
-    );
-    if (files.some((w) => w.startsWith("-"))) return;
-    for (const file of files) this.add(file);
+    // The exit code covers only what follows the last `;`. An earlier read could
+    // have failed unseen, so it counts only for a file that is actually readable.
+    for (const read of reads)
+      for (const file of read.files)
+        if (read.lastExit || this.regularFile(file)) this.add(file);
+  }
+  private regularFile(file: string): boolean {
+    try {
+      fs.accessSync(path.resolve(this.cwd, file), fs.constants.R_OK);
+      return fs.statSync(path.resolve(this.cwd, file)).isFile();
+    } catch {
+      return false;
+    }
   }
   observe(event: Obj): void {
     const part = obj(event.part),

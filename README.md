@@ -8,7 +8,7 @@ Node.js 24 이상과 사용할 코딩 CLI의 설치·인증이 필요합니다.
 
 macOS에서는 프로젝트 폴더의 **Agent Graph Studio.app**을 더블클릭해 실행할 수 있습니다. 실행기가 lockfile·Node 실행 환경·설치된 패키지를 확인하고 필요하면 패키지를 다시 설치한 뒤 빌드하고 브라우저를 엽니다. 동시에 실행해도 프로젝트 초기화는 한 번에 하나씩 진행합니다. 실행기 창의 **종료** 버튼 또는 Cmd+Q로 서버를 종료합니다. 이미 터미널에서 실행한 서버가 있으면 그 서버를 재사용하며, 실행기를 종료해도 기존 서버는 중지하지 않습니다.
 
-앱 실행기를 재생성하려면 macOS에서 Xcode Command Line Tools를 설치하고 `npm run build:launcher:mac`을 실행합니다. 실행기 파일은 소스 프로젝트 폴더와 함께 사용하며 Node.js 런타임을 포함하지 않습니다. 실행 로그는 `~/Library/Logs/AgentGraphStudio/launcher.log`에 기록됩니다.
+이 앱은 저장소에 포함되지 않으므로 새로 내려받았다면 먼저 만들어야 합니다. 앱 실행기를 만들거나 재생성하려면 macOS에서 Xcode Command Line Tools를 설치하고 `npm run build:launcher:mac`을 실행합니다. 실행기 파일은 소스 프로젝트 폴더와 함께 사용하며 Node.js 런타임을 포함하지 않습니다. 실행 로그는 `~/Library/Logs/AgentGraphStudio/launcher.log`에 기록됩니다.
 
 터미널에서 실행할 때는:
 
@@ -148,7 +148,7 @@ npm run pack:smoke
 
 코드 스타일은 Prettier로 통일합니다(`npm run format`). 포맷만 바꾼 커밋은 `.git-blame-ignore-revs`에 등록하며 `git config blame.ignoreRevsFile .git-blame-ignore-revs`로 blame에서 제외합니다. 포맷 전후의 구문 동일성은 `node scripts/check-format-ast.js <기준 revision>`으로 확인합니다.
 
-`test/golden/`은 노드 프롬프트와 CLI 실행 인자·환경을 바이트 단위로 고정합니다. 의도한 변경일 때만 `UPDATE_GOLDEN=1 npm test`로 갱신하고 diff를 검토합니다. invocation 골든은 `win32`/`posix` 계열별로 두며, 해당 계열의 골든이 없으면 그 테스트를 건너뜁니다. 프로그램 I/O 분기는 `prepareProgramIo`만 대체해 VM 없이 posix 계열에서 비교합니다. `npm run verify:vm`은 macOS에서 실제 VM 테스트를 실행하며, 일반 테스트와 달리 런타임이 없거나 오래되면 건너뛰지 않고 실패합니다. CI는 VM을 준비하지 않으므로 격리 코드를 바꾸면 이 명령을 직접 실행합니다. 실제 CLI 회귀는 모델 사용량이 들어 테스트와 CI에 포함하지 않으며 `node scripts/real-cli-regression.js claude|kilo`로 실행합니다. 일반 테스트의 Seatbelt 검사는 Node 설치 폴더 안에서만 라이브러리를 읽는 공식 빌드를 전제로 하며, Homebrew Node에서는 사유를 표시하고 건너뜁니다. 실행 구조와 정지 경로는 [아키텍처](docs/ARCHITECTURE.md)에 정리했습니다.
+`test/golden/`은 노드 프롬프트와 CLI 실행 인자·환경을 바이트 단위로 고정합니다. 의도한 변경일 때만 `UPDATE_GOLDEN=1 npm test`로 갱신하고 diff를 검토합니다. invocation 골든은 `win32`/`posix` 계열별로 두며, 해당 계열의 골든이 없으면 그 테스트를 건너뜁니다. 프로그램 I/O 분기는 `prepareProgramIo`만 대체해 VM 없이 posix 계열에서 비교합니다. `npm run verify:vm`은 macOS에서 실제 VM 테스트를 실행하며, 일반 테스트와 달리 런타임이 없거나 오래되면 건너뛰지 않고 실패합니다. CI는 VM을 준비하지 않으므로 격리 코드를 바꾸면 이 명령을 직접 실행합니다. 실제 CLI 회귀는 모델 사용량이 들어 테스트와 CI에 포함하지 않으며 `node scripts/real-cli-regression.js claude|kilo`로 실행합니다. 일반 테스트의 Seatbelt 검사는 Node 설치 폴더 안에서만 라이브러리를 읽는 공식 빌드를 전제로 하며, Homebrew Node에서는 사유를 표시하고 건너뜁니다. 건너뜀 없이 검증하려면 nodejs.org의 Node 24 공식 빌드를 사용합니다. Homebrew의 `node@24`도 `libuv`를 외부에 두므로 해당하지 않습니다. 실행 구조와 정지 경로는 [아키텍처](docs/ARCHITECTURE.md)에 정리했습니다.
 
 구현 목표와 실제 증거는 [인수 기준](docs/IMPLEMENTATION_PLAN.md)과 [검증·수정 기록](docs/VERIFICATION.md)에, 끝낸 작업과 남은 과제는 [작업 현황](docs/STATUS.md)에 기록합니다. 세 문서는 개발 기록이므로 npm 패키지에는 포함하지 않습니다. CI는 Windows·Linux·macOS 코어 검사와 Linux 브라우저 시나리오를 수행합니다.
 

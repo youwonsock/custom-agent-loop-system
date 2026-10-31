@@ -1,5 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
 import * as path from "node:path";
 import { InspectionTracker } from "./inspection_evidence";
 const cwd = path.resolve("owned project"),
@@ -108,4 +110,54 @@ test("Kilo and OpenCode shell inspection needs a completed exit-zero standalone 
     ),
   );
   assert.deepEqual(t.files, [file, "verification/node-tests/report.json"]);
+});
+test("read bundles count each file only when the exit code or the file itself proves it", async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "inspection-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  await fs.writeFile(path.join(root, "README.md"), "docs");
+  await fs.writeFile(path.join(root, "slug.mjs"), "code");
+  await fs.mkdir(path.join(root, "folder"));
+  const read = (command: string, exit = 0) => {
+    const tracker = new InspectionTracker(root);
+    tracker.observe({
+      type: "tool_use",
+      part: {
+        tool: "bash",
+        state: {
+          status: "completed",
+          input: { command },
+          metadata: { exit },
+        },
+      },
+    });
+    return tracker.files;
+  };
+  const both = ["README.md", "slug.mjs"];
+  for (const command of [
+    "cat README.md; echo '---'; cat slug.mjs",
+    'cat README.md && echo "--- code ---" && cat slug.mjs',
+    "cat README.md; cat slug.mjs",
+    "cat README.md && printf '\\n' && cat slug.mjs",
+    `cd "${root}" && cat README.md slug.mjs`,
+  ])
+    assert.deepEqual(read(command), both, command);
+  // Only the exit code of the last part is known.
+  assert.deepEqual(read("cat gone.md; cat slug.mjs"), ["slug.mjs"]);
+  assert.deepEqual(read("cat folder; cat slug.mjs"), ["slug.mjs"]);
+  assert.deepEqual(read("cat gone.md && cat slug.mjs"), [
+    "gone.md",
+    "slug.mjs",
+  ]);
+  for (const command of [
+    "cat README.md | head -5; cat slug.mjs",
+    "cat README.md > copy; cat slug.mjs",
+    "cat README.md; rm slug.mjs; cat slug.mjs",
+    "cat README.md; echo $(rm slug.mjs)",
+    "cat README.md; cd other; cat slug.mjs",
+    "cat README.md || cat slug.mjs",
+    "cat -n README.md; cat slug.mjs",
+    "cat README.md\ncat slug.mjs",
+  ])
+    assert.deepEqual(read(command), [], command);
+  assert.deepEqual(read("cat README.md; cat slug.mjs", 1), []);
 });

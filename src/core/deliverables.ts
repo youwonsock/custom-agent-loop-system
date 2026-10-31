@@ -15,7 +15,7 @@ export function deliverableInspectionProblem(
       ?.filter((f) => !files.includes(f.path))
       .map((f) => f.path) ?? [];
   return missing.length
-    ? `독립 검토의 필수 산출물 읽기 증거가 없습니다: ${missing.join(", ")}. Inspect each with native read or standalone cat/Get-Content, then judge its actual content against the linked requirements. README must describe the actual launch, rules, controls and test commands when requested. Never repair files or rerun checks in this role.`
+    ? `독립 검토의 필수 산출물 읽기 증거가 없습니다: ${missing.join(", ")}. Inspect each with native read or cat/Get-Content; several reads may be chained with && or ;, without pipes or redirection. Then judge its actual content against the linked requirements. README must describe the actual launch, rules, controls and test commands when requested. Never repair files or rerun checks in this role.`
     : null;
 }
 

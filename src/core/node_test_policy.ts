@@ -230,6 +230,6 @@ export function nodeInspectionProblem(
     "verification/node-tests/report.json",
   ].filter((f) => !files.includes(f));
   return missing.length
-    ? `독립 검토의 완료된 네이티브 파일 읽기가 필요합니다: ${missing.join(", ")}. Use read(filePath) or a standalone cat/Get-Content command; inspect authored assertions and the actual quality report before judging. Do not run checks in a read-only role.`
+    ? `독립 검토의 완료된 네이티브 파일 읽기가 필요합니다: ${missing.join(", ")}. Use read(filePath) or cat/Get-Content; several reads may be chained with && or ;, without pipes or redirection. Inspect authored assertions and the actual quality report before judging. Do not run checks in a read-only role.`
     : null;
 }

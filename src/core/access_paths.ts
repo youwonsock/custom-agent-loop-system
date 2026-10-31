@@ -1,5 +1,11 @@
 import * as path from "node:path";
 
+// A plan quoting code: `/[^a-z0-9]+/g`, `/slugify\(/`. A character class may hold `/`.
+const REGEX_LITERAL =
+  /^\/((?:\\.|\[(?:\\.|[^\]\\\r\n])*\]|[^/\\[\r\n])+)\/([dgimsuvy]*)(?=\s|[),;.:"'`]|$)/;
+const REGEX_SYNTAX = /\\.|[[\]()^$+*?|{}]/;
+const REGEX_ARGUMENT = /\.(?:match(?:All)?|replace(?:All)?|split|search)\(\s*$/;
+
 /** Advisory prompt scan. Native CLI permissions remain the enforcement boundary. */
 export function outsidePaths(text: string, roots: string[]): string[] {
   const found: string[] = [];
@@ -40,18 +46,22 @@ export function outsidePaths(text: string, roots: string[]): string[] {
         /^\/(?:Users|home|tmp|private|var|etc|opt|usr|Volumes|mnt|srv|root|workspace|data)(?:\/|$)/.test(
           value,
         );
-      const tail = line.slice(
-        match.index! + match[0].indexOf(match[2] ?? match[3] ?? ""),
-      );
+      const start = match.index! + match[0].indexOf(match[2] ?? match[3] ?? "");
+      const before = line.slice(0, start);
       const regexContext =
         /\b(?:text|hasText|match(?:es)?|regex(?:p)?|RegExp|pattern)\b/i.test(
           line.slice(0, match.index),
         );
+      const literal = line.slice(start).match(REGEX_LITERAL);
+      // A bare /foo/g stays a path unless the line says it is a pattern, and a
+      // real path has a second separator, so it never reaches this literal shape.
       if (
         !explicit &&
         !knownFileRoot &&
-        regexContext &&
-        /^\/(?:\\.|[^/\\\r\n])+\/[dgimsuvy]+(?=\s|[),;.]|$)/.test(tail)
+        literal &&
+        (REGEX_SYNTAX.test(literal[1]!) ||
+          REGEX_ARGUMENT.test(before) ||
+          (regexContext && literal[2]))
       )
         continue;
       const httpContext =
@@ -59,15 +69,12 @@ export function outsidePaths(text: string, roots: string[]): string[] {
           line,
         );
       const urlOnly = /^\/(?:\?|%[\da-f]{2})/i.test(value);
-      const start = match.index! + match[0].indexOf(match[2] ?? match[3] ?? "");
       // A web root-to-index mapping is a route description even when the line
       // omits "HTTP". Match this token only; a second '/' or real file path on
       // the same line must still be reviewed. Explicit FILE_ACCESS always wins.
       const rootDocumentRoute =
         value === "/" &&
-        /\b(?:handle|serve|map)\s*$/i.test(
-          line.slice(0, start).replace(/["'`]$/, ""),
-        ) &&
+        /\b(?:handle|serve|map)\s*$/i.test(before.replace(/["'`]$/, "")) &&
         /^\s*(?:->|=>|→)\s*index\.html\b/i.test(
           line.slice(start + 1).replace(/^["'`]/, ""),
         );
