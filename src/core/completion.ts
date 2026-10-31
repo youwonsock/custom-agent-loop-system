@@ -32,6 +32,7 @@ import {
   nodeInspectionProblem,
 } from "./node_test_policy";
 import {
+  isAuditRole,
   isReadOnly,
   isResearchRole,
   isVerifierRole,
@@ -105,109 +106,123 @@ export interface CompletionContext {
   /** Files proven read; defaults to what this attempt observed. */
   inspectedFiles?: string[];
 }
-export function validateCompletion(
+interface Judging extends CompletionContext {
+  node: AgentNode;
+  result: SupervisorResult;
+  commands: CommandReceipt[];
+  priorTestProof: CommandReceipt[];
+  inspectedFiles: string[];
+  answer: Completion;
+}
+/** Returns the finished judgment, or nothing to let the next gate look. */
+type Judged = Completion | void;
+type Gate = (j: Judging) => Judged;
+
+const fail = (
+  { answer }: Judging,
+  reason: string,
+  failureKind: FailureKind = "incomplete_response",
+): Completion => ({ ...answer, valid: false, reason, failureKind });
+
+/** A terminal prose sentinel ends implementation, never approves the product.
+ * Canonicalize only the observed autonomous implementation variation; quoted,
+ * repeated, fenced or nonterminal markers and all audit roles stay strict. */
+function normalizedOutput(
   node: AgentNode,
-  result: SupervisorResult,
-  {
-    goal,
-    requirements,
-    commands = result.evidence.commands,
-    priorTestProof = [],
-    automation,
-    contract,
-    cwd,
-    nodeTestProof,
-    inspectedFiles = result.evidence.readFiles ?? [],
-  }: CompletionContext,
-): Completion {
-  let output = result.assistantText.replace(/\r\n/g, "\n").trim();
-  // A terminal prose sentinel ends implementation, never approves the product.
-  // Canonicalize only the observed autonomous implementation variation; quoted,
-  // repeated, fenced or nonterminal markers and all audit roles stay strict.
-  if (
-    automation &&
+  text: string,
+  automation: CompletionContext["automation"],
+): string {
+  const output = text.replace(/\r\n/g, "\n").trim();
+  return automation &&
     node.type === "implementation" &&
     (output.match(/\[PHASE_DONE\]/g) ?? []).length === 1 &&
     !output.includes("```") &&
     !output.includes("~~~") &&
     /[.!?。][\t ]+\[PHASE_DONE\]$/.test(output)
-  )
-    output = output.replace(/[\t ]+\[PHASE_DONE\]$/, "\n[PHASE_DONE]");
-  const answer: Completion = {
-    valid: true,
-    reason: null,
-    failureKind: null,
-    output,
-    verdict: null,
-    plans: [],
-    researchBlocked: /^RESEARCH_BLOCKED\s*$/im.test(output),
-    environmentBlocked: null,
-  };
-  const fail = (
-    reason: string,
-    failureKind: FailureKind = "incomplete_response",
-  ) => ({ ...answer, valid: false, reason, failureKind });
+    ? output.replace(/[\t ]+\[PHASE_DONE\]$/, "\n[PHASE_DONE]")
+    : output;
+}
+const cliFailure: Gate = (j): Judged => {
+  const { result, node } = j;
   if (result.exitCode !== 0 || result.outcome !== "succeeded")
     return fail(
+      j,
       result.failureMessage ?? `CLI 종료 코드 ${result.exitCode}`,
       result.failureKind ?? "process_exit",
     );
   if (result.diagnostics.terminalError)
     return fail(
+      j,
       result.diagnostics.terminalError.message,
       result.diagnostics.terminalError.kind,
     );
   if (isReadOnly(node.type) && result.evidence.fileMutation)
     return fail(
+      j,
       "읽기 전용 역할에서 파일 변경이 관측되었습니다.",
       "role_violation",
     );
-  if (node.type === "implementation") {
-    try {
-      const observed = commands.find((c) => c.environmentError),
-        reported = implementationBlocker(output);
-      if (observed || reported) {
-        if (!observed && reported?.kind !== "external")
-          return fail(
-            `구현이 ${reported?.kind} blocker를 보고했습니다. 같은 구현 역할에서 원인을 수정한 뒤 완료하세요: ${reported?.evidence}`,
-          );
-        answer.verdict = "BLOCKED";
-        answer.environmentBlocked = diagnosticMessage(
-          `구현 외부 환경 제약: ${observed ? `${observed.command} → ${observed.environmentError}` : reported?.evidence}. 제품 수정이나 테스트 호출로 반복하지 않습니다.`,
-        );
-        return answer;
-      }
-    } catch (error) {
+};
+const implementationHandoff: Gate = (j): Judged => {
+  const { answer } = j;
+  if (j.node.type !== "implementation") return;
+  try {
+    const observed = j.commands.find((c) => c.environmentError),
+      reported = implementationBlocker(answer.output);
+    if (!observed && !reported) return;
+    if (!observed && reported?.kind !== "external")
       return fail(
-        `구현 blocker 보고 보완 필요: ${error instanceof Error ? error.message : String(error)}`,
+        j,
+        `구현이 ${reported?.kind} blocker를 보고했습니다. 같은 구현 역할에서 원인을 수정한 뒤 완료하세요: ${reported?.evidence}`,
       );
-    }
+    answer.verdict = "BLOCKED";
+    answer.environmentBlocked = diagnosticMessage(
+      `구현 외부 환경 제약: ${observed ? `${observed.command} → ${observed.environmentError}` : reported?.evidence}. 제품 수정이나 테스트 호출로 반복하지 않습니다.`,
+    );
+    return answer;
+  } catch (error) {
+    return fail(
+      j,
+      `구현 blocker 보고 보완 필요: ${error instanceof Error ? error.message : String(error)}`,
+    );
   }
+};
+const structuredReport: Gate = (j): Judged => {
+  const { node, answer, contract } = j;
   try {
     const rendered = renderStructuredReport(
-      output,
+      answer.output,
       node,
-      requirements,
-      node.type === "test" ? commands : priorTestProof,
+      j.requirements,
+      node.type === "test" ? j.commands : j.priorTestProof,
       contract,
-      cwd,
+      j.cwd,
     );
     if (
-      automation?.verificationContract &&
+      j.automation?.verificationContract &&
       contract?.status === "locked" &&
       isVerifierRole(node.type) &&
       rendered === null
     )
-      return fail("고정 검증 계약은 AGENT_REPORT JSON v1 보고가 필요합니다.");
-    if (rendered !== null) {
-      output = rendered;
-      answer.output = rendered;
-    }
+      return fail(
+        j,
+        "고정 검증 계약은 AGENT_REPORT JSON v1 보고가 필요합니다.",
+      );
+    if (rendered !== null) answer.output = rendered;
   } catch (error) {
     return fail(
+      j,
       `구조화 보고 보완 필요: ${error instanceof Error ? error.message : String(error)}`,
     );
   }
+};
+const testRoleProductEdits: Gate = ({
+  node,
+  result,
+  automation,
+  commands,
+  answer,
+}): Judged => {
   const productionEdits = (result.evidence.changedFiles ?? []).filter(
     (file) =>
       !/^(?:test|tests|verification|\.agent-graph|artifacts|test-results|playwright-report)(?:\/|$)|(?:^|\/)[^/]+\.(?:test|spec)\.[cm]?[jt]sx?$|^playwright\.config\.[cm]?[jt]s$/.test(
@@ -224,190 +239,226 @@ export function validateCompletion(
     answer.reason = `테스트 역할의 제품 파일 변경을 반려했습니다: ${productionEdits.join(", ")}. 구현 역할에서 수정하고 전체 검증을 다시 수행해야 합니다.`;
     return answer;
   }
-  const repairableBlocker =
-    Boolean(automation) &&
-    /^BLOCKED_KIND:\s*(?:product|test_setup)\s*$/im.test(output);
-  if (isVerifierRole(node.type)) {
-    const blocked = commands.find((c) => c.environmentError);
-    const reportedBlocked = parseRequirementEvidence(output).some(
-      (r) => r.status === "BLOCKED",
-    );
-    if (
-      blocked ||
-      (!repairableBlocker &&
-        (reportedBlocked || /^(?:\*\*|__)?VERDICT:\s*BLOCKED\b/im.test(output)))
-    ) {
-      answer.verdict = "BLOCKED";
-      answer.environmentBlocked = blocked
-        ? `검증 환경 제약: ${blocked.command} → ${blocked.environmentError}. 환경을 해결한 뒤 같은 방문을 수동 재개하세요.`
-        : "테스트 역할이 필수 검사를 BLOCKED로 보고했습니다. 실제 명령 로그와 환경을 확인한 뒤 수동 재개하세요.";
-      return answer;
-    }
+};
+const repairableBlocker = ({ automation, answer }: Judging): boolean =>
+  Boolean(automation) &&
+  /^BLOCKED_KIND:\s*(?:product|test_setup)\s*$/im.test(answer.output);
+const verifierBlocked: Gate = (j): Judged => {
+  const { answer } = j;
+  if (!isVerifierRole(j.node.type)) return;
+  const blocked = j.commands.find((c) => c.environmentError);
+  const reportedBlocked = parseRequirementEvidence(answer.output).some(
+    (r) => r.status === "BLOCKED",
+  );
+  if (
+    blocked ||
+    (!repairableBlocker(j) &&
+      (reportedBlocked ||
+        /^(?:\*\*|__)?VERDICT:\s*BLOCKED\b/im.test(answer.output)))
+  ) {
+    answer.verdict = "BLOCKED";
+    answer.environmentBlocked = blocked
+      ? `검증 환경 제약: ${blocked.command} → ${blocked.environmentError}. 환경을 해결한 뒤 같은 방문을 수동 재개하세요.`
+      : "테스트 역할이 필수 검사를 BLOCKED로 보고했습니다. 실제 명령 로그와 환경을 확인한 뒤 수동 재개하세요.";
+    return answer;
   }
+};
+const phaseDoneMarker: Gate = (j): Judged => {
+  const { output } = j.answer;
   if (
     !/^\[PHASE_DONE\]\s*$/m.test(output) ||
     output.split("\n").at(-1)?.trim() !== "[PHASE_DONE]"
   )
-    return fail("assistant 응답 마지막에 독립 행 [PHASE_DONE]이 필요합니다.");
-  if (requiresResearch(goal) && isResearchRole(node.type)) {
-    if (answer.researchBlocked) return answer;
-    if (
-      !result.evidence.completedSearches ||
-      !/^SOURCE:\s*https?:\/\/\S+/im.test(output) ||
-      !/^(?:VERIFIED_FACT|LIMITATION):\s*\S+/im.test(output)
-    )
-      return fail(
-        "인터넷 조사에 대한 완료된 검색 이벤트와 SOURCE·VERIFIED_FACT 근거가 필요합니다.",
-      );
-  }
-  const coverage = evaluateRequirementCoverage(output, requirements);
-  const missingOnly =
-    coverage.missing.length > 0 &&
-    coverage.unresolved.length === coverage.missing.length;
-  if (node.type === "planning") {
-    answer.plans = parsePlans(output);
-    const count = node.planning?.optionsCount ?? 3;
-    if (
-      answer.plans.length !== count ||
-      !answer.plans.every((p, i) => p.id === i + 1 && p.body.length > 0)
-    )
-      return fail(`완전한 계획 선택지 ${count}개가 순서대로 필요합니다.`);
-    const missing = answer.plans.flatMap((p) => {
-      const ids = planReferences(p.body, requirements);
-      const absent = requirements.filter((r) => !ids.has(r.id));
-      return absent.length
-        ? [`OPTION ${p.id}: ${absent.map((r) => r.id).join(", ")}`]
-        : [];
-    });
-    if (missing.length)
-      return fail(
-        `계획별 필수 REQ ID 누락: ${missing.join("; ")}. 해결되지 않은 각 ID를 전체 표기로 작성하세요 (예: REQ-006, REQ-007). 알려진 ID의 명확한 목록·범위만 참조로 해석합니다. 구현이나 도구 재실행 없이 전체 계획 보고만 보완하세요.`,
-      );
-  }
-  if (node.type === "test") {
-    const testOutput = repairableBlocker
-      ? output.replace(/^VERDICT:\s*BLOCKED\b.*$/gim, "VERDICT: FAIL")
-      : output;
-    const lines = [
-      ...testOutput.matchAll(/^(?:\*\*|__)?VERDICT:\s*(PASS|FAIL)\b.*$/gim),
-    ];
-    if (!lines.length) return fail("VERDICT: PASS 또는 FAIL 행이 필요합니다.");
-    answer.verdict =
-      lines.at(-1)![1]!.toUpperCase() === "PASS" && coverage.allSatisfied
-        ? "PASS"
-        : "FAIL";
-    if (lines.at(-1)![1]!.toUpperCase() === "PASS" && !coverage.allSatisfied)
-      answer.reason = `요구사항 증거가 부족합니다: ${coverage.unresolved.join(", ")}`;
-    if (lines.at(-1)![1]!.toUpperCase() === "PASS" && missingOnly)
-      return fail(
-        `요구사항 증거 형식이 누락되었거나 잘못되었습니다: ${coverage.missing.join(", ")}. 기존 결과를 보존하고 모든 REQ의 올바른 증거 블록과 VERDICT를 포함한 전체 최종 보고를 다시 반환하세요.`,
-      );
-  }
-  if (node.type === "review" || node.type === "approval") {
-    const auditOutput = repairableBlocker
-      ? output.replace(/^VERDICT:\s*BLOCKED\b.*$/gim, "REJECTED")
-      : output;
-    const lines = [
-      ...auditOutput.matchAll(/^(?:\*\*|__)?(APPROVED|REJECTED)\b.*$/gim),
-    ];
-    if (!lines.length) return fail("APPROVED 또는 REJECTED 행이 필요합니다.");
-    answer.verdict =
-      lines.at(-1)![1]!.toUpperCase() === "APPROVED" && coverage.allSatisfied
-        ? "APPROVED"
-        : "REJECTED";
-    if (
-      lines.at(-1)![1]!.toUpperCase() === "APPROVED" &&
-      !coverage.allSatisfied
-    )
-      answer.reason = `요구사항 증거가 부족합니다: ${coverage.unresolved.join(", ")}`;
-    if (lines.at(-1)![1]!.toUpperCase() === "APPROVED" && missingOnly)
-      return fail(
-        `요구사항 증거 형식이 누락되었거나 잘못되었습니다: ${coverage.missing.join(", ")}. 기존 결과를 보존하고 모든 REQ의 올바른 증거 블록과 승인 판정을 포함한 전체 최종 보고를 다시 반환하세요.`,
-      );
-  }
-  if (answer.verdict === "PASS" || answer.verdict === "APPROVED") {
-    if (answer.verdict === "APPROVED") {
-      const inspection = deliverableInspectionProblem(
-        contract?.manifest,
-        inspectedFiles,
-      );
-      if (inspection) return fail(inspection);
-    }
-    if (answer.verdict === "APPROVED" && contract?.manifest?.nodeTests) {
-      const inspection = nodeInspectionProblem(
-        contract.manifest.nodeTests,
-        inspectedFiles,
-      );
-      if (inspection) return fail(inspection);
-    }
-    const problem =
-      nodeTestProofProblem(contract?.manifest?.nodeTests, nodeTestProof) ??
-      nodeScopeAuditProblem(contract?.manifest?.nodeTests, output);
-    if (problem) {
-      answer.verdict = node.type === "test" ? "FAIL" : "REJECTED";
-      answer.reason = problem;
-      return answer;
-    }
-    const failed = failedVerificationCommand(commands);
-    if (failed) {
-      answer.verdict = node.type === "test" ? "FAIL" : "REJECTED";
-      answer.reason = `관측된 검증 명령이 성공하지 않았습니다: ${failed.command} (exit ${failed.exitCode ?? "unknown"}).`;
-      return answer;
-    }
-  }
-  if (answer.verdict === "PASS" || answer.verdict === "APPROVED") {
-    const missing = missingContractReceipts(
-      contract,
-      node.type === "test" ? commands : priorTestProof,
-      !!automation?.verificationContract,
-      cwd,
+    return fail(
+      j,
+      "assistant 응답 마지막에 독립 행 [PHASE_DONE]이 필요합니다.",
     );
-    if (missing.length) {
-      if (node.type === "test")
-        return fail(
-          `검증 계약의 실제 성공 기록이 필요합니다: ${missing.join(", ")}. 계약의 해당 명령만 단독 foreground 호출로 실행하세요. Missing native receipts: execute EVERY missing registry command literally, without | tail, | head, semicolon, echo, status wrappers or extra flags; read saved reports separately. Native tools may truncate displayed output without changing exit status.`,
-        );
-      answer.verdict = "REJECTED";
-      answer.reason = `검증 계약의 테스트 기록이 부족합니다: ${missing.join(", ")}`;
-      return answer;
-    }
+};
+const researchEvidence: Gate = (j): Judged => {
+  const { answer, result } = j;
+  if (!requiresResearch(j.goal) || !isResearchRole(j.node.type)) return;
+  if (answer.researchBlocked) return answer;
+  if (
+    !result.evidence.completedSearches ||
+    !/^SOURCE:\s*https?:\/\/\S+/im.test(answer.output) ||
+    !/^(?:VERIFIED_FACT|LIMITATION):\s*\S+/im.test(answer.output)
+  )
+    return fail(
+      j,
+      "인터넷 조사에 대한 완료된 검색 이벤트와 SOURCE·VERIFIED_FACT 근거가 필요합니다.",
+    );
+};
+function planningChoices(j: Judging): Judged {
+  const { answer, node, requirements } = j;
+  answer.plans = parsePlans(answer.output);
+  const count = node.planning?.optionsCount ?? 3;
+  if (
+    answer.plans.length !== count ||
+    !answer.plans.every((p, i) => p.id === i + 1 && p.body.length > 0)
+  )
+    return fail(j, `완전한 계획 선택지 ${count}개가 순서대로 필요합니다.`);
+  const missing = answer.plans.flatMap((p) => {
+    const ids = planReferences(p.body, requirements);
+    const absent = requirements.filter((r) => !ids.has(r.id));
+    return absent.length
+      ? [`OPTION ${p.id}: ${absent.map((r) => r.id).join(", ")}`]
+      : [];
+  });
+  if (missing.length)
+    return fail(
+      j,
+      `계획별 필수 REQ ID 누락: ${missing.join("; ")}. 해결되지 않은 각 ID를 전체 표기로 작성하세요 (예: REQ-006, REQ-007). 알려진 ID의 명확한 목록·범위만 참조로 해석합니다. 구현이나 도구 재실행 없이 전체 계획 보고만 보완하세요.`,
+    );
+}
+interface VerdictRules {
+  /** What a repairable BLOCKED line counts as. */
+  blockedAs: string;
+  line: RegExp;
+  positive: NodeVerdict;
+  negative: NodeVerdict;
+  absent: string;
+  /** Names the verdict the model has to send again. */
+  verdictName: string;
+}
+const TEST_VERDICT: VerdictRules = {
+  blockedAs: "VERDICT: FAIL",
+  line: /^(?:\*\*|__)?VERDICT:\s*(PASS|FAIL)\b.*$/gim,
+  positive: "PASS",
+  negative: "FAIL",
+  absent: "VERDICT: PASS 또는 FAIL 행이 필요합니다.",
+  verdictName: "VERDICT",
+};
+const AUDIT_VERDICT: VerdictRules = {
+  blockedAs: "REJECTED",
+  line: /^(?:\*\*|__)?(APPROVED|REJECTED)\b.*$/gim,
+  positive: "APPROVED",
+  negative: "REJECTED",
+  absent: "APPROVED 또는 REJECTED 행이 필요합니다.",
+  verdictName: "승인 판정",
+};
+function reportedVerdict(
+  j: Judging,
+  coverage: ReturnType<typeof evaluateRequirementCoverage>,
+  rules: VerdictRules,
+): Judged {
+  const { answer } = j;
+  const text = repairableBlocker(j)
+    ? answer.output.replace(/^VERDICT:\s*BLOCKED\b.*$/gim, rules.blockedAs)
+    : answer.output;
+  const lines = [...text.matchAll(rules.line)];
+  if (!lines.length) return fail(j, rules.absent);
+  const positive = lines.at(-1)![1]!.toUpperCase() === rules.positive;
+  answer.verdict =
+    positive && coverage.allSatisfied ? rules.positive : rules.negative;
+  if (!positive) return;
+  if (!coverage.allSatisfied)
+    answer.reason = `요구사항 증거가 부족합니다: ${coverage.unresolved.join(", ")}`;
+  if (
+    coverage.missing.length > 0 &&
+    coverage.unresolved.length === coverage.missing.length
+  )
+    return fail(
+      j,
+      `요구사항 증거 형식이 누락되었거나 잘못되었습니다: ${coverage.missing.join(", ")}. 기존 결과를 보존하고 모든 REQ의 올바른 증거 블록과 ${rules.verdictName}를 포함한 전체 최종 보고를 다시 반환하세요.`,
+    );
+}
+const roleVerdict: Gate = (j): Judged => {
+  const coverage = evaluateRequirementCoverage(j.answer.output, j.requirements);
+  if (j.node.type === "planning") return planningChoices(j);
+  if (j.node.type === "test") return reportedVerdict(j, coverage, TEST_VERDICT);
+  if (isAuditRole(j.node.type))
+    return reportedVerdict(j, coverage, AUDIT_VERDICT);
+};
+const positive = ({ answer }: Judging) =>
+  answer.verdict === "PASS" || answer.verdict === "APPROVED";
+const negativeVerdict = ({ node }: Judging): NodeVerdict =>
+  node.type === "test" ? "FAIL" : "REJECTED";
+const approvalInspections: Gate = (j): Judged => {
+  if (j.answer.verdict !== "APPROVED") return;
+  const nodeTests = j.contract?.manifest?.nodeTests;
+  const problem =
+    deliverableInspectionProblem(j.contract?.manifest, j.inspectedFiles) ??
+    (nodeTests ? nodeInspectionProblem(nodeTests, j.inspectedFiles) : null);
+  if (problem) return fail(j, problem);
+};
+const noFailedEvidence: Gate = (j): Judged => {
+  const { answer, contract } = j;
+  if (!positive(j)) return;
+  const problem =
+    nodeTestProofProblem(contract?.manifest?.nodeTests, j.nodeTestProof) ??
+    nodeScopeAuditProblem(contract?.manifest?.nodeTests, answer.output);
+  if (problem) {
+    answer.verdict = negativeVerdict(j);
+    answer.reason = problem;
+    return answer;
   }
-  if (answer.verdict === "PASS") {
-    if (
-      automation?.browserVerification &&
+  const failed = failedVerificationCommand(j.commands);
+  if (failed) {
+    answer.verdict = negativeVerdict(j);
+    answer.reason = `관측된 검증 명령이 성공하지 않았습니다: ${failed.command} (exit ${failed.exitCode ?? "unknown"}).`;
+    return answer;
+  }
+};
+const contractReceipts: Gate = (j): Judged => {
+  const { answer, node } = j;
+  if (!positive(j)) return;
+  const missing = missingContractReceipts(
+    j.contract,
+    node.type === "test" ? j.commands : j.priorTestProof,
+    !!j.automation?.verificationContract,
+    j.cwd,
+  );
+  if (!missing.length) return;
+  if (node.type === "test")
+    return fail(
+      j,
+      `검증 계약의 실제 성공 기록이 필요합니다: ${missing.join(", ")}. 계약의 해당 명령만 단독 foreground 호출로 실행하세요. Missing native receipts: execute EVERY missing registry command literally, without | tail, | head, semicolon, echo, status wrappers or extra flags; read saved reports separately. Native tools may truncate displayed output without changing exit status.`,
+    );
+  answer.verdict = "REJECTED";
+  answer.reason = `검증 계약의 테스트 기록이 부족합니다: ${missing.join(", ")}`;
+  return answer;
+};
+const testPassReceipts: Gate = (j): Judged => {
+  const { commands, cwd, requirements } = j;
+  if (j.answer.verdict !== "PASS") return;
+  if (
+    j.automation?.browserVerification &&
+    !commands.some(
+      (c) =>
+        commandSucceeded(c) && isBrowserVerificationCommand(c.command, cwd),
+    )
+  )
+    return fail(
+      j,
+      "자율 웹 검증에는 플랫폼 verify-browser 명령의 실제 성공 기록이 필요합니다. 브라우저 보고서만 작성하거나 npm test로 대체할 수 없습니다.",
+    );
+  const records = new Map(
+    parseRequirementEvidence(j.answer.output).map((r) => [r.requirementId, r]),
+  );
+  const unverified = requirements.filter((r) => {
+    const command = records.get(r.id)?.checkCommand;
+    return (
+      !command ||
       !commands.some(
         (c) =>
-          commandSucceeded(c) && isBrowserVerificationCommand(c.command, cwd),
+          checkCommandKey(c.command) === checkCommandKey(command) &&
+          commandSucceeded(c) &&
+          isVerificationCommand(c.command, cwd),
       )
-    )
-      return fail(
-        "자율 웹 검증에는 플랫폼 verify-browser 명령의 실제 성공 기록이 필요합니다. 브라우저 보고서만 작성하거나 npm test로 대체할 수 없습니다.",
-      );
-    const records = new Map(
-      parseRequirementEvidence(output).map((r) => [r.requirementId, r]),
     );
-    const unverified = requirements.filter((r) => {
-      const command = records.get(r.id)?.checkCommand;
-      return (
-        !command ||
-        !commands.some(
-          (c) =>
-            checkCommandKey(c.command) === checkCommandKey(command) &&
-            commandSucceeded(c) &&
-            isVerificationCommand(c.command, cwd),
-        )
-      );
-    });
-    if (
-      !commands.some(
-        (c) => commandSucceeded(c) && isVerificationCommand(c.command, cwd),
-      ) ||
-      unverified.length
-    )
-      return fail(
-        `관측된 성공 검증 명령이 필요합니다 (${unverified.map((r) => r.id).join(", ")}). 각 요구사항 블록에 CHECK_COMMAND: 실제 실행 명령을 적으세요. 설명이나 저장된 로그 파일만으로 PASS를 판정할 수 없습니다.`,
-      );
-  }
+  });
+  if (
+    !commands.some(
+      (c) => commandSucceeded(c) && isVerificationCommand(c.command, cwd),
+    ) ||
+    unverified.length
+  )
+    return fail(
+      j,
+      `관측된 성공 검증 명령이 필요합니다 (${unverified.map((r) => r.id).join(", ")}). 각 요구사항 블록에 CHECK_COMMAND: 실제 실행 명령을 적으세요. 설명이나 저장된 로그 파일만으로 PASS를 판정할 수 없습니다.`,
+    );
+};
+const approvalTestProof: Gate = ({ answer, priorTestProof, cwd }): Judged => {
   if (
     answer.verdict === "APPROVED" &&
     !priorTestProof.some(
@@ -417,6 +468,56 @@ export function validateCompletion(
     answer.verdict = "REJECTED";
     answer.reason =
       "현재 구현에 대한 테스트 역할의 관측된 PASS 기록이 없습니다. 검증을 실행한 뒤 승인해야 합니다.";
+  }
+};
+/** Order matters: a later gate relies on what an earlier one already ruled out. */
+const GATES: Gate[] = [
+  cliFailure,
+  implementationHandoff,
+  structuredReport,
+  testRoleProductEdits,
+  verifierBlocked,
+  phaseDoneMarker,
+  researchEvidence,
+  roleVerdict,
+  approvalInspections,
+  noFailedEvidence,
+  contractReceipts,
+  testPassReceipts,
+  approvalTestProof,
+];
+export function validateCompletion(
+  node: AgentNode,
+  result: SupervisorResult,
+  context: CompletionContext,
+): Completion {
+  const output = normalizedOutput(
+    node,
+    result.assistantText,
+    context.automation,
+  );
+  const answer: Completion = {
+    valid: true,
+    reason: null,
+    failureKind: null,
+    output,
+    verdict: null,
+    plans: [],
+    researchBlocked: /^RESEARCH_BLOCKED\s*$/im.test(output),
+    environmentBlocked: null,
+  };
+  const judging: Judging = {
+    ...context,
+    node,
+    result,
+    answer,
+    commands: context.commands ?? result.evidence.commands,
+    priorTestProof: context.priorTestProof ?? [],
+    inspectedFiles: context.inspectedFiles ?? result.evidence.readFiles ?? [],
+  };
+  for (const gate of GATES) {
+    const finished = gate(judging);
+    if (finished) return finished;
   }
   return answer;
 }
