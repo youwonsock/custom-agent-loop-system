@@ -79,6 +79,12 @@ export function outsidePaths(text: string, roots: string[]): string[] {
           (regexContext && literal[2]))
       )
         continue;
+      // A plan quoting code: `f(x); // result`, `/** docs */`. A bare comment
+      // marker names nothing, and a path after it is its own token.
+      const commentMarker =
+        /^\/{2,3}$/.test(value) ||
+        (/^\/\*{1,2}$/.test(value) && line.slice(start).includes("*/"));
+      if (!explicit && commentMarker) continue;
       const httpContext =
         /\b(?:HTTP|GET|HEAD|POST|URL|endpoint|request|route|traversal)\b/i.test(
           line,

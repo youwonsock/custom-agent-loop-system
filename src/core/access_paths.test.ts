@@ -45,6 +45,21 @@ test("regex literals quoted in a plan are not filesystem paths", () => {
   ])
     assert.deepEqual(outsidePaths(text, ["/workspace/game"]), [], text);
 });
+test("comment markers quoted in a plan are not filesystem paths", () => {
+  const paths = (text: string) => outsidePaths(text, ["/workspace/game"]);
+  for (const text of [
+    '   slugify("Hello World!"); // → "hello-world"',
+    "// a comment",
+    "/// docs",
+    "/** slugify text */ export function slugify",
+    "/* note */",
+  ])
+    assert.deepEqual(paths(text), [], text);
+  assert.deepEqual(paths("code(); // see /etc/passwd"), ["/etc/passwd"]);
+  assert.equal(paths("Read //etc/passwd").length, 1);
+  assert.equal(paths("FILE_ACCESS: //").length, 1);
+  assert.equal(paths("List /*").length, 1);
+});
 test("regex-shaped text cannot conceal a real path", () => {
   const paths = (text: string) => outsidePaths(text, ["/workspace/game"]);
   assert.deepEqual(paths("Read /foo/g"), ["/foo/g"]);
