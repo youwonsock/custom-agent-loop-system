@@ -39,11 +39,28 @@ export function vmRuntimeFile(): string {
     path.join(os.homedir(), ".cache/agent-graph/program-io/runtime.json")
   );
 }
+/** A cheap check without starting anything; prepareVmPolicy still verifies the image. */
+export function vmRuntimeStatus(): "ready" | "missing" | "stale" {
+  if (
+    !fs.existsSync(vmRuntimeFile()) ||
+    !fs.existsSync("/opt/homebrew/bin/container")
+  )
+    return "missing";
+  try {
+    const prepared = JSON.parse(fs.readFileSync(vmRuntimeFile(), "utf8")),
+      metadata = JSON.parse(
+        fs.readFileSync(
+          path.resolve(__dirname, "../../program_io_dependencies.json"),
+          "utf8",
+        ),
+      );
+    return prepared.lockDigest === metadata.lockDigest ? "ready" : "stale";
+  } catch {
+    return "stale";
+  }
+}
 export function vmRuntimeAvailable(): boolean {
-  return (
-    fs.existsSync(vmRuntimeFile()) &&
-    fs.existsSync("/opt/homebrew/bin/container")
-  );
+  return vmRuntimeStatus() === "ready";
 }
 function cli(binary: string, args: string[], timeout = 15000, home?: string) {
   const p = spawnSync(binary, args, {
