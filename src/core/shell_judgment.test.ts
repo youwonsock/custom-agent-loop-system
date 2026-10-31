@@ -210,7 +210,7 @@ const table: Array<{
     segments: 1,
     key: "cat <(rm x)",
     verification: false,
-    mutation: false,
+    mutation: true,
   },
   {
     command: "cat a > b",
@@ -322,7 +322,7 @@ const table: Array<{
     segments: 2,
     key: "{ rm x; }",
     verification: false,
-    mutation: false,
+    mutation: true,
   },
   {
     command: "env rm x",
@@ -354,7 +354,7 @@ const table: Array<{
     segments: 1,
     key: "time rm x",
     verification: false,
-    mutation: false,
+    mutation: true,
   },
   {
     command: "sed -i s/a/b/ f",
@@ -370,7 +370,7 @@ const table: Array<{
     segments: 1,
     key: "rm x",
     verification: false,
-    mutation: false,
+    mutation: true,
   },
   {
     command: "bash -lc 'rm x'",
@@ -378,7 +378,7 @@ const table: Array<{
     segments: 1,
     key: "rm x",
     verification: false,
-    mutation: false,
+    mutation: true,
   },
   {
     command: "bash -l -c 'rm x'",
@@ -386,7 +386,7 @@ const table: Array<{
     segments: 1,
     key: "bash -l -c 'rm x'",
     verification: false,
-    mutation: false,
+    mutation: true,
   },
   {
     command: "/bin/bash -lc 'rm x'",
@@ -394,7 +394,7 @@ const table: Array<{
     segments: 1,
     key: "rm x",
     verification: false,
-    mutation: false,
+    mutation: true,
   },
   {
     command: "/bin/zsh -lc 'rm x'",
@@ -402,7 +402,7 @@ const table: Array<{
     segments: 1,
     key: "rm x",
     verification: false,
-    mutation: false,
+    mutation: true,
   },
   {
     command: "sh -c 'echo a > b'",
@@ -410,7 +410,7 @@ const table: Array<{
     segments: 1,
     key: "echo a",
     verification: false,
-    mutation: false,
+    mutation: true,
   },
   {
     command: 'sh -c "rm x"',
@@ -418,7 +418,7 @@ const table: Array<{
     segments: 1,
     key: "rm x",
     verification: false,
-    mutation: false,
+    mutation: true,
   },
   {
     command: "bash -c 'cat a'",
@@ -437,12 +437,68 @@ const table: Array<{
     mutation: false,
   },
   {
+    command: "bash -euo pipefail -c 'rm x'",
+    words: 5,
+    segments: 1,
+    key: "bash -euo pipefail -c 'rm x'",
+    verification: false,
+    mutation: true,
+  },
+  {
+    command: "bash -o pipefail -c 'rm x'",
+    words: 5,
+    segments: 1,
+    key: "bash -o pipefail -c 'rm x'",
+    verification: false,
+    mutation: true,
+  },
+  {
+    command: "xargs -I {} sh -c 'rm x'",
+    words: 6,
+    segments: 1,
+    key: "xargs -I {} sh -c 'rm x'",
+    verification: false,
+    mutation: false,
+  },
+  {
+    command: "find . -type f -exec cat {} +",
+    words: 8,
+    segments: 1,
+    key: "find . -type f -exec cat {} +",
+    verification: false,
+    mutation: false,
+  },
+  {
+    command: "git clean -nd",
+    words: 3,
+    segments: 1,
+    key: "git clean -nd",
+    verification: false,
+    mutation: false,
+  },
+  {
+    command: "git clean --dry-run",
+    words: 3,
+    segments: 1,
+    key: "git clean --dry-run",
+    verification: false,
+    mutation: false,
+  },
+  {
+    command: "if true; then rm x; fi",
+    words: null,
+    segments: 3,
+    key: "if true; then rm x; fi",
+    verification: false,
+    mutation: true,
+  },
+  {
     command: "eval rm x",
     words: 3,
     segments: 1,
     key: "eval rm x",
     verification: false,
-    mutation: false,
+    mutation: true,
   },
   {
     command: "eval 'echo a > b'",
@@ -450,7 +506,7 @@ const table: Array<{
     segments: 1,
     key: "eval 'echo a",
     verification: false,
-    mutation: false,
+    mutation: true,
   },
   {
     command: "eval cat a",
@@ -466,7 +522,7 @@ const table: Array<{
     segments: 1,
     key: "xargs rm",
     verification: false,
-    mutation: false,
+    mutation: true,
   },
   {
     command: "xargs -n 1 rm",
@@ -474,7 +530,7 @@ const table: Array<{
     segments: 1,
     key: "xargs -n 1 rm",
     verification: false,
-    mutation: false,
+    mutation: true,
   },
   {
     command: "xargs cat",
@@ -490,7 +546,7 @@ const table: Array<{
     segments: 1,
     key: "find . -delete",
     verification: false,
-    mutation: false,
+    mutation: true,
   },
   {
     command: "find . -exec rm {} ;",
@@ -498,7 +554,7 @@ const table: Array<{
     segments: null,
     key: "find . -exec rm {} ;",
     verification: false,
-    mutation: false,
+    mutation: true,
   },
   {
     command: "find . -name a",
@@ -514,7 +570,7 @@ const table: Array<{
     segments: 1,
     key: "git clean -fd",
     verification: false,
-    mutation: false,
+    mutation: true,
   },
   {
     command: "git clean -n",

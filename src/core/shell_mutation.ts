@@ -2,6 +2,15 @@ interface Token {
   text: string;
   operator: boolean;
 }
+const FILE_COMMANDS = [
+  "rm",
+  "mv",
+  "cp",
+  "mkdir",
+  "touch",
+  "truncate",
+  "install",
+];
 
 // A conservative command-input scanner, not a shell executor or a sandbox.
 // Quoted/escaped operators are words. Substitutions are scanned independently.
@@ -117,7 +126,10 @@ export function shellMutation(command: string, depth = 0): boolean {
       const head = words[0]!.split(/[\\/]/).at(-1)!;
       if (
         /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[0]!) ||
-        ["!", "if", "while", "until", "do", "then"].includes(head)
+        ["!", "if", "while", "until", "do", "then", "else", "elif"].includes(
+          head,
+        ) ||
+        ["{", "time"].includes(head)
       ) {
         words = words.slice(1);
         continue;
@@ -137,13 +149,39 @@ export function shellMutation(command: string, depth = 0): boolean {
           words = words.slice(1);
       }
     }
-    const binary = (words[0] ?? "").split(/[\\/]/).at(-1) ?? "";
+    const binary = (words[0] ?? "").split(/[\\/]/).at(-1) ?? "",
+      rest = words.slice(1);
+    // Commands that run another command: judge what they run, as canonicalCommand does.
+    if (/^(?:ba|z|da|k)?sh$/.test(binary)) {
+      for (let at = 0; rest[at]?.startsWith("-"); at++) {
+        if (/^-[a-z]*c$/i.test(rest[at]!))
+          return shellMutation(rest[at + 1] ?? "", depth + 1);
+        if (/^-[a-z]*o$/i.test(rest[at]!)) at++;
+      }
+      return false;
+    }
+    if (binary === "eval") return shellMutation(rest.join(" "), depth + 1);
+    if (binary === "xargs")
+      return rest.some((w) =>
+        FILE_COMMANDS.includes(w.split(/[\\/]/).at(-1) ?? ""),
+      );
+    if (binary === "find") {
+      if (rest.includes("-delete")) return true;
+      const at = rest.findIndex((w) => /^-(?:exec|execdir|ok|okdir)$/.test(w));
+      if (at < 0) return false;
+      const end = rest.findIndex((w, i) => i > at && (w === ";" || w === "+"));
+      return shellMutation(
+        rest.slice(at + 1, end < 0 ? undefined : end).join(" "),
+        depth + 1,
+      );
+    }
     if (
-      ["rm", "mv", "cp", "mkdir", "touch", "truncate", "install"].includes(
-        binary,
-      )
+      binary === "git" &&
+      rest[0] === "clean" &&
+      !rest.some((w) => w === "--dry-run" || /^-[a-zA-Z]*n[a-zA-Z]*$/.test(w))
     )
       return true;
+    if (FILE_COMMANDS.includes(binary)) return true;
     if (
       binary === "tee" &&
       words.slice(1).some((w) => !w.startsWith("-") && w !== "/dev/null")
@@ -179,6 +217,12 @@ export function shellMutation(command: string, depth = 0): boolean {
       if (/^\d+$/.test(segment.at(-1) ?? "")) segment.pop();
     } else if ([">&", "<&", "<", "<<", "<<-", "<<<"].includes(token.text)) {
       const target = tokens[++i];
+      // Process substitution: "<(" starts a command of its own.
+      if (token.text === "<" && target?.operator && target.text === "(") {
+        if (mutatingSegment()) return true;
+        segment = [];
+        continue;
+      }
       if (
         token.text === ">&" &&
         target &&
