@@ -13,6 +13,8 @@ export interface EventEvidence {
   commands: CommandReceipt[];
   fileMutation: boolean;
   changedFiles?: string[];
+  /** Files the CLI's own permission check refused to let a write tool change. */
+  deniedWrites?: string[];
   completedSearches: number;
   maxTokens: number;
   assistantTextBytes: number;
@@ -64,6 +66,7 @@ export class MutationTracker {
   private confirmed = false;
   private readonly files = new Set<string>();
   private readonly pendingFiles = new Map<string, string[]>();
+  readonly deniedWrites: string[] = [];
   get changedFiles(): string[] {
     const files = [
       ...new Set([...this.files, ...this.pendingFiles.values()].flat()),
@@ -238,8 +241,14 @@ export class MutationTracker {
     } else if (type === "system" && e.subtype === "permission_denied") {
       this.tool(e.tool_use_id, "", null, "denied", true);
     } else if (type === "result" && Array.isArray(e.permission_denials)) {
-      for (const denied of e.permission_denials)
-        this.tool(obj(denied).tool_use_id, "", null, "denied", true);
+      for (const denied of e.permission_denials) {
+        const { tool_use_id, tool_name, tool_input } = obj(denied);
+        this.tool(tool_use_id, "", null, "denied", true);
+        if (mutatingTool(String(tool_name ?? ""), tool_input))
+          this.deniedWrites.push(
+            String(obj(tool_input).file_path ?? tool_name),
+          );
+      }
     }
   }
 }

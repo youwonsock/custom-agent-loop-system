@@ -431,6 +431,8 @@ class SupervisedAttempt {
       evidence.changedFiles = this.mutations.changedFiles.map((file) =>
         path.relative(options.cwd, path.resolve(options.cwd, file)),
       );
+    if (this.mutations.deniedWrites.length)
+      evidence.deniedWrites = [...new Set(this.mutations.deniedWrites)];
     const terminal = this.diagnosticCollector.diagnostics.terminalError;
     if (
       terminal &&

@@ -1604,6 +1604,17 @@ export class GraphRuntime {
     const { node, visit } = stage;
     attempt.completionAccepted = false;
     const failure = classifyFailure(result, completion!);
+    // A retry meets the same refusal, and the missing-format reason would hide it.
+    const denied = result.evidence.deniedWrites ?? [];
+    if (
+      denied.length &&
+      !isReadOnly(node.type) &&
+      failure.kind === "incomplete_response"
+    ) {
+      failure.kind = "permission";
+      failure.retryable = false;
+      failure.message = `CLI가 파일 쓰기 권한을 거부했습니다: ${denied.join(", ")}. CLI의 권한 설정과 프로젝트 신뢰 여부를 확인한 뒤 재개하세요.`;
+    }
     failure.message = contextMessage(stage, failure.message);
     failure.attemptId = attempt.id;
     failure.role = node.roleName;

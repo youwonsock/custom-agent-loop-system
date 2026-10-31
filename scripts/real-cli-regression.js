@@ -76,20 +76,17 @@ const PROFILES = {
     binary: "claude",
     pick: (m) => /haiku/i.test(m.id),
     automation: {},
-    // Headless Claude asks for nothing, so the target allows exactly what this scenario needs.
-    claudeSettings: {
-      permissions: {
-        allow: [
-          "Edit",
-          "Write",
-          "Bash(npm test)",
-          "Bash(npm test:*)",
-          "Bash(node --test:*)",
-          "Bash(ls:*)",
-          "Bash(cat:*)",
-        ],
-      },
-    },
+    // Headless Claude cannot ask, and it ignores a project's allow list until the
+    // folder is trusted. The wrapper grants exactly this list without changing trust.
+    allowedTools: [
+      "Edit",
+      "Write",
+      "Bash(npm test)",
+      "Bash(npm test:*)",
+      "Bash(node --test:*)",
+      "Bash(ls:*)",
+      "Bash(cat:*)",
+    ],
   },
   kilo: {
     binary: "kilo",
@@ -155,6 +152,15 @@ function passed(profile, scenario, summary) {
     summary.status !== "BLOCKED"
   );
 }
+function allowListWrapper(output, installed, tools) {
+  const wrapper = path.join(output, "claude-allow-list.sh");
+  fs.writeFileSync(
+    wrapper,
+    `#!/bin/sh\nexec ${JSON.stringify(installed)} "$@" --allowedTools ${JSON.stringify(tools.join(","))}\n`,
+    { mode: 0o755 },
+  );
+  return wrapper;
+}
 async function main() {
   const profile = process.argv[2],
     config = PROFILES[profile],
@@ -180,29 +186,17 @@ async function main() {
   fs.cpSync(path.join(repository, "test/real-cli", scenarioName), target, {
     recursive: true,
   });
-  if (config.claudeSettings) {
-    fs.mkdirSync(path.join(target, ".claude"));
-    fs.writeFileSync(
-      path.join(target, ".claude/settings.json"),
-      JSON.stringify(
-        {
-          permissions: {
-            allow: [
-              ...config.claudeSettings.permissions.allow,
-              ...scenario.claudeAllow,
-            ],
-          },
-        },
-        null,
-        2,
-      ),
-    );
-  }
   const store = new StudioStore(path.join(output, "root"));
   await store.init();
-  const binary = execFileSync("/usr/bin/which", [config.binary], {
+  const installed = execFileSync("/usr/bin/which", [config.binary], {
     encoding: "utf8",
   }).trim();
+  const binary = config.allowedTools
+    ? allowListWrapper(output, installed, [
+        ...config.allowedTools,
+        ...scenario.claudeAllow,
+      ])
+    : installed;
   const connection = await store.saveConnection({
     id: profile,
     label: `Regression ${profile}`,
