@@ -1,7 +1,10 @@
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
 import test from "node:test";
 import assert from "node:assert/strict";
 import * as path from "node:path";
 import { isWithin, outsidePaths } from "./access_paths";
+import { inside } from "./verification_sources";
 
 test("web root document mappings do not request filesystem root access", () => {
   for (const text of [
@@ -67,4 +70,25 @@ test("containment treats the root, sibling prefixes and dot names correctly on b
   assert.ok(win("c:\\WORK\\game\\a"));
   assert.ok(!win("C:\\work\\game-other\\a"));
   assert.ok(!win("D:\\work\\game\\a"));
+});
+test("verification paths stay inside the target, including through symlinks", async (t) => {
+  const base = await fs.realpath(
+    await fs.mkdtemp(path.join(os.tmpdir(), "inside-")),
+  );
+  t.after(() => fs.rm(base, { recursive: true, force: true }));
+  const root = path.join(base, "game");
+  await fs.mkdir(path.join(root, "..hidden"), { recursive: true });
+  await fs.mkdir(path.join(base, "game-other"));
+  assert.equal(await inside(root, "."), root);
+  assert.equal(await inside(root, "..hidden"), path.join(root, "..hidden"));
+  assert.equal(await inside(root, "new/dir", true), path.join(root, "new/dir"));
+  await assert.rejects(inside(root, "../game-other"), /must stay/);
+  await assert.rejects(
+    inside(root, path.join(base, "game-other")),
+    /must stay/,
+  );
+  if (process.platform === "win32") return;
+  await fs.symlink(path.join(base, "game-other"), path.join(root, "link"));
+  await assert.rejects(inside(root, "link"), /symlink leaves/);
+  await assert.rejects(inside(root, "link/below", true), /symlink leaves/);
 });

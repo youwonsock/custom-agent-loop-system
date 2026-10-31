@@ -2,13 +2,14 @@ import * as fs from "node:fs/promises";
 import { createReadStream } from "node:fs";
 import * as path from "node:path";
 import { createHash } from "node:crypto";
+import { isWithin } from "./access_paths";
 export async function inside(
   root: string,
   file: string,
   create = false,
 ): Promise<string> {
   const resolved = path.resolve(root, file);
-  if (resolved !== root && !resolved.startsWith(root + path.sep))
+  if (!isWithin(root, resolved))
     throw new Error("Verification path must stay in target project.");
   if (create) {
     let ancestor = resolved;
@@ -24,12 +25,12 @@ export async function inside(
       }
     }
     const realAncestor = await fs.realpath(ancestor);
-    if (realAncestor !== root && !realAncestor.startsWith(root + path.sep))
+    if (!isWithin(root, realAncestor))
       throw new Error("Verification symlink leaves target project.");
     await fs.mkdir(resolved, { recursive: true });
   }
   const real = await fs.realpath(resolved);
-  if (real !== root && !real.startsWith(root + path.sep))
+  if (!isWithin(root, real))
     throw new Error("Verification symlink leaves target project.");
   return real;
 }
