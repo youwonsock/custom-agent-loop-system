@@ -149,7 +149,7 @@ npm run pack:smoke
 
 `test/golden/`은 노드 프롬프트와 CLI 실행 인자·환경을 바이트 단위로 고정합니다. 의도한 변경일 때만 `UPDATE_GOLDEN=1 npm test`로 갱신하고 diff를 검토합니다. invocation 골든은 `win32`/`posix` 계열별로 두며, 해당 계열의 골든이 없으면 그 테스트를 건너뜁니다. 실행 구조와 정지 경로는 [아키텍처](docs/ARCHITECTURE.md)에 정리했습니다.
 
-구현 목표와 실제 증거는 [인수 기준](docs/IMPLEMENTATION_PLAN.md)과 [검증·수정 기록](docs/VERIFICATION.md)에 기록합니다. 두 문서는 개발 기록이므로 npm 패키지에는 포함하지 않습니다. CI는 Windows·Linux·macOS 코어 검사와 Linux 브라우저 시나리오를 수행합니다.
+구현 목표와 실제 증거는 [인수 기준](docs/IMPLEMENTATION_PLAN.md)과 [검증·수정 기록](docs/VERIFICATION.md)에, 끝낸 작업과 남은 과제는 [작업 현황](docs/STATUS.md)에 기록합니다. 세 문서는 개발 기록이므로 npm 패키지에는 포함하지 않습니다. CI는 Windows·Linux·macOS 코어 검사와 Linux 브라우저 시나리오를 수행합니다.
 
 ## 자율 제작·검증
 
