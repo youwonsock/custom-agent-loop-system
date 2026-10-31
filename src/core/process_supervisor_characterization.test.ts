@@ -7,7 +7,7 @@ import {
   ProcessSupervisor,
   ProcessSupervisorOptions,
 } from "./process_supervisor";
-import { ClaimedControlRequest } from "./resilience";
+import { ClaimedControlRequest } from "./control_queue";
 
 // Pins the supervisor paths process_supervisor.test.ts does not reach, so its
 // decomposition can be compared. Pipe transport runs the same on every OS.

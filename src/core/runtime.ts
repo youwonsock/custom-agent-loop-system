@@ -18,19 +18,21 @@ import {
   SessionStatus,
 } from "../shared/domain";
 import { StudioStore } from "./store";
+import { SessionOwnership } from "./session_ownership";
 import {
-  SessionOwnership,
   checkProcessLiveness,
   collectRecoveredChildPids,
+  delay,
+  AttemptFailure,
+} from "./resilience";
+import {
   claimNextControlRequest,
   completeControlRequest,
   ensureControlQueue,
   getControlQueuePaths,
   recoverClaimedControlRequests,
-  delay,
-  AttemptFailure,
   ClaimedControlRequest,
-} from "./resilience";
+} from "./control_queue";
 import {
   ProcessSupervisor,
   SupervisorResult,

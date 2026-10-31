@@ -16,7 +16,7 @@ flowchart LR
   App --> Store
 ```
 
-세션마다 워커 프로세스 하나가 `GraphRuntime.run()`을 실행한다. 워커는 `owner.lock`/`lease.json`으로 세션을 소유하고, Stop·Interrupt는 파일 제어 큐(`resilience.ts`)로 전달된다. 상태는 저장할 때마다 `revision`이 증가하고 IPC로 서버에 전달된다.
+세션마다 워커 프로세스 하나가 `GraphRuntime.run()`을 실행한다. 워커는 `owner.lock`/`lease.json`으로 세션을 소유하고(`session_ownership.ts`), Stop·Interrupt는 파일 제어 큐(`control_queue.ts`)로 전달된다. 상태는 저장할 때마다 `revision`이 증가하고 IPC로 서버에 전달된다.
 
 ## 방문 실행 (`GraphRuntime.execute`)
 

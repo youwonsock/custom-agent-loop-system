@@ -19,11 +19,11 @@ import {
 } from "./event_evidence";
 import {
   AttemptStatus,
-  ClaimedControlRequest,
   FailureKind,
   checkProcessLiveness,
   delay,
 } from "./resilience";
+import { ClaimedControlRequest } from "./control_queue";
 import {
   CliDiagnostics,
   CliDiagnosticCollector,
