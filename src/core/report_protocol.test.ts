@@ -79,16 +79,14 @@ test("JSON judgments bind to actual contract receipts without model-authored com
     evidence: "actual assertion",
     CHECK_COMMAND: "invented command",
   };
-  const c = validateCompletion(
-    node,
-    result(framed([row])),
-    "goal",
+  const c = validateCompletion(node, result(framed([row])), {
+    goal: "goal",
     requirements,
-    [receipt],
-    [],
-    graph.automation,
-    state.verificationContract,
-  );
+    commands: [receipt],
+    priorTestProof: [],
+    automation: graph.automation,
+    contract: state.verificationContract,
+  });
   assert.equal(c.valid, true);
   assert.equal(c.verdict, "PASS");
   assert.match(c.output, /native-observed \(exit 0\)/);
@@ -104,69 +102,59 @@ test("JSON judgments bind to actual contract receipts without model-authored com
     "VERDICT: PASS\n[PHASE_DONE]",
   ]) {
     assert.equal(
-      validateCompletion(
-        node,
-        result(bad),
-        "goal",
+      validateCompletion(node, result(bad), {
+        goal: "goal",
         requirements,
-        [receipt],
-        [],
-        graph.automation,
-        state.verificationContract,
-      ).valid,
+        commands: [receipt],
+        priorTestProof: [],
+        automation: graph.automation,
+        contract: state.verificationContract,
+      }).valid,
       false,
       bad,
     );
   }
   const cdReceipt = { ...receipt, command: `cd '${root}' && ${cmd}` };
-  const cd = validateCompletion(
-    node,
-    result(framed([row])),
-    "goal",
+  const cd = validateCompletion(node, result(framed([row])), {
+    goal: "goal",
     requirements,
-    [cdReceipt],
-    [],
-    graph.automation,
-    state.verificationContract,
-    root,
-  );
+    commands: [cdReceipt],
+    priorTestProof: [],
+    automation: graph.automation,
+    contract: state.verificationContract,
+    cwd: root,
+  });
   assert.equal(cd.valid, true);
   assert.equal(cd.verdict, "PASS");
   assert.match(cd.output, /cd '/);
-  const other = validateCompletion(
-    node,
-    result(framed([row])),
-    "goal",
+  const other = validateCompletion(node, result(framed([row])), {
+    goal: "goal",
     requirements,
-    [cdReceipt],
-    [],
-    graph.automation,
-    state.verificationContract,
-    root + "-other",
-  );
+    commands: [cdReceipt],
+    priorTestProof: [],
+    automation: graph.automation,
+    contract: state.verificationContract,
+    cwd: root + "-other",
+  });
   assert.equal(other.valid, false);
-  const missing = validateCompletion(
-    node,
-    result(framed([row])),
-    "goal",
+  const missing = validateCompletion(node, result(framed([row])), {
+    goal: "goal",
     requirements,
-    [],
-    [],
-    graph.automation,
-    state.verificationContract,
-  );
+    commands: [],
+    priorTestProof: [],
+    automation: graph.automation,
+    contract: state.verificationContract,
+  });
   assert.equal(missing.valid, false);
   assert.match(missing.reason!, /acceptance/);
-  const failed = validateCompletion(
-    node,
-    result(framed([row])),
-    "goal",
+  const failed = validateCompletion(node, result(framed([row])), {
+    goal: "goal",
     requirements,
-    [{ ...receipt, exitCode: 1 }],
-    [],
-    graph.automation,
-    state.verificationContract,
-  );
+    commands: [{ ...receipt, exitCode: 1 }],
+    priorTestProof: [],
+    automation: graph.automation,
+    contract: state.verificationContract,
+  });
   assert.equal(failed.verdict, "FAIL");
   assert.notEqual(failed.verdict, "PASS");
   const visit = {

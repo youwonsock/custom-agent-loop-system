@@ -6,7 +6,7 @@
 
 | 항목 | 상태 |
 | --- | --- |
-| 기준 커밋 | 브랜치 `stage3/shared-rules` |
+| 기준 커밋 | 브랜치 `stage4/judge-and-runtime` |
 | 원격 CI | PR #16, #17 병합 전 3개 OS와 브라우저 통과. 이 표의 브랜치는 PR CI에서 확인한다 |
 | 로컬 검사 (macOS 26 arm64, 공식 Node 24.22.2) | `verify:platform` 10단계 통과: 단위 346개 중 344 통과·0 실패·Windows 전용 2 건너뜀, tooling 10/10, audit high 이상 0건(moderate 3건은 아래 "수용한 위험"). `verify:browser` 25/25. `verify:vm` 17/17 |
 | 실제 모델 호출 | G4 기준선 통과. Claude Haiku는 145초에 `SUCCESS`, Kilo 무료 모델은 VM 명령 25/25 정상(자세한 내용은 VERIFICATION.md). 두 실행이 드러낸 제품 결함은 2단계에서 고쳤다. 고친 뒤의 재실행은 5단계 G4에서 한다 |
@@ -54,6 +54,15 @@
 | 셸 파서 | 인용·이스케이프 처리를 `shell_scan.ts`로 통합. 판단 규칙은 파서별 유지. 판정표 diff 0, 무작위 명령 40만 개에서 이전 파서와 결과 동일 | `592b358` |
 | 격리 오류 | 프로세스 내부 판정을 `IoUnavailable` 타입으로 변경. 메시지의 문자열 표식은 프로세스 경계를 위해 유지 | `6ba3c95` |
 
+2026-10-31 (브랜치 `stage4/judge-and-runtime`, 통합 계획 4단계):
+
+| 영역 | 내용 | 비고 |
+| --- | --- | --- |
+| 도달 불가 분기 | `failure`의 고아 프로세스 분기 제거. `classifyFailure`는 유지 | 정지 경로 표와 특성 테스트 주석 수정 |
+| 판정 | `validateCompletion`을 옵션 객체와 순서 있는 게이트 13개로 분리. 복잡도 102 → 15 미만 | 무작위 입력 30만 건에서 이전 판정과 결과 동일 |
+| 실행 루프 | `GraphRuntime.run`을 소유자 복구, 모델 재조회, 자동 복구 갱신, 방문 루프, 종단 판정으로 분리. 복잡도 79 → 15 미만 | 서버 시나리오와 특성 테스트 통과 |
+| 상태 쓰기 | `status` 직접 쓰기를 `settle`로 통합(`GraphRuntime` 안). `Completion \| null \| undefined`를 `stopped`·`completed`·`undecided`로 교체 | `session_transitions.ts`의 상태 전이 함수는 그대로 |
+
 수용한 위험: `npm audit`의 moderate 3건(`@fastify/static` → `glob` → `minimatch`). `@fastify/static`은 `wildcard: false`일 때만 `glob`을 호출하고 이 앱은 그 옵션을 쓰지 않는다. `audit fix --force`는 주 버전을 낮추므로 적용하지 않는다.
 
 유지하기로 결정한 것: stateVersion 3 스냅샷 읽기와 수동 그래프의 평문 보고 형식은 현재 기능이다. 마이그레이션 코드는 없었다.
@@ -82,13 +91,6 @@
 | `.git/config`의 빈 `user.name` 항목 정리. 전역 설정을 가려 `git commit`이 실패하며, 이 브랜치는 `-c user.name=SC_Logan`으로 커밋했다 | 옵션 없이 커밋 가능 |
 
 Codex는 사용자 결정으로 G4에서 제외했다. Codex 경로는 가짜 이벤트로만 검증되었고, 실제 Codex가 명령을 셸로 감싸는지도 확인하지 못했다.
-
-### 4단계: 판정·실행 엔진 분해
-
-- 도달 불가 분기 제거: `failure`의 고아 프로세스 분기(`classifyFailure` 자체는 유지). 특성 테스트 주석과 `ARCHITECTURE.md`도 수정.
-- `validateCompletion`(복잡도 102, 인자 11개)을 옵션 객체로 전환 후 역할별 분리. 복잡도 30 이하.
-- `GraphRuntime.run`(복잡도 79, 323행)을 소유자 복구, 모델 재조회, 자동 복구 예약, 종단 판정, 방문 루프로 분리. 복잡도 30 이하.
-- `status` 직접 쓰기(15곳)를 공통 경로로 통합, `Completion | null | undefined` 반환을 명명된 결과로 교체.
 
 ### 5단계: 호출·프롬프트·감독기 분해
 

@@ -23,8 +23,8 @@ import { delay } from "../core/resilience";
 //   evidenceGates   orphaned process (uncovered), control request, VM receipts (macOS only),
 //                   scope, protected writes, frozen-test policy, stage budget (uncovered)
 //   evidenceGates   product hash diff for automation without testSourceGuard            this file
-//   failure         classifyFailure orphaned_process: unreachable, the supervisor always
-//                   sets outcome and failureKind together (handled in evidenceGates)
+//   classifyFailure still names orphaned_process, but no failure reaches it: the supervisor
+//                   sets outcome and failureKind together, and evidenceGates stops on that outcome
 const origin = "http://127.0.0.1:4317";
 const binary = path.resolve(__dirname, "../../../test/fixture_cli.cjs");
 const sessionWaitMs = process.platform === "win32" ? 45_000 : 10_000;
