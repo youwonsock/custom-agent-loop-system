@@ -86,7 +86,7 @@ export function outsidePaths(text: string, roots: string[]): string[] {
         (/^\/\*{1,2}$/.test(value) && line.slice(start).includes("*/"));
       if (!explicit && commentMarker) continue;
       const httpContext =
-        /\b(?:HTTP|GET|HEAD|POST|URL|endpoint|request|route|traversal)\b/i.test(
+        /\b(?:HTTP|GET|HEAD|POST|URL|endpoint|request|route|traversal|fetch(?:es|ed|ing)?)\b/i.test(
           line,
         );
       const urlOnly = /^\/(?:\?|%[\da-f]{2})/i.test(value);
