@@ -36,15 +36,13 @@ test("implementation external blockers cannot hand off successfully with PHASE_D
     'Before\nAGENT_REPORT\n{"role":"implementation","verdict":"BLOCKED","blocked_kind":"external","handoff":"listen EPERM"}\n[PHASE_DONE]',
     '[AGENT_REPORT]\n{"version":1,"verdict":"BLOCKED","blockedKind":"external","handoff":"listen EPERM"}\n[/AGENT_REPORT]\n[PHASE_DONE]',
   ]) {
-    const c = validateCompletion(
-      node,
-      result(output),
-      "goal",
-      req,
-      [],
-      [],
-      createAutonomousGraph().automation,
-    );
+    const c = validateCompletion(node, result(output), {
+      goal: "goal",
+      requirements: req,
+      commands: [],
+      priorTestProof: [],
+      automation: createAutonomousGraph().automation,
+    });
     assert.equal(c.verdict, "BLOCKED");
     assert.ok(c.environmentBlocked);
   }
@@ -53,11 +51,13 @@ test("implementation external blockers cannot hand off successfully with PHASE_D
     result(
       'AGENT_REPORT\n{"verdict":"BLOCKED","blockedKind":"product","handoff":"fix validation"}\n[PHASE_DONE]',
     ),
-    "goal",
-    req,
-    [],
-    [],
-    createAutonomousGraph().automation,
+    {
+      goal: "goal",
+      requirements: req,
+      commands: [],
+      priorTestProof: [],
+      automation: createAutonomousGraph().automation,
+    },
   );
   assert.equal(product.valid, false);
   assert.equal(product.environmentBlocked, null);
@@ -66,11 +66,13 @@ test("implementation external blockers cannot hand off successfully with PHASE_D
     result(
       'Example only:\n```\nAGENT_REPORT\n{"verdict":"BLOCKED"}\n```\nImplemented.\n[PHASE_DONE]',
     ),
-    "goal",
-    req,
-    [],
-    [],
-    createAutonomousGraph().automation,
+    {
+      goal: "goal",
+      requirements: req,
+      commands: [],
+      priorTestProof: [],
+      automation: createAutonomousGraph().automation,
+    },
   );
   assert.equal(example.environmentBlocked, null);
 });
@@ -84,15 +86,13 @@ test("autonomous implementation accepts only an unambiguous terminal prose marke
     "구현을 완료했습니다.\r\n검사 결과를 확인했습니다. [PHASE_DONE]",
   ]) {
     const original = result(text);
-    const c = validateCompletion(
-      implementation,
-      original,
-      "goal",
+    const c = validateCompletion(implementation, original, {
+      goal: "goal",
       requirements,
-      [],
-      [],
-      graph.automation,
-    );
+      commands: [],
+      priorTestProof: [],
+      automation: graph.automation,
+    });
     assert.equal(c.valid, true);
     assert.equal(c.verdict, null);
     assert.ok(c.output.endsWith("\n[PHASE_DONE]"));
@@ -102,7 +102,10 @@ test("autonomous implementation accepts only an unambiguous terminal prose marke
       "raw assistant evidence is preserved",
     );
     assert.equal(
-      validateCompletion(implementation, original, "goal", requirements).valid,
+      validateCompletion(implementation, original, {
+        goal: "goal",
+        requirements,
+      }).valid,
       false,
       "manual profiles remain strict",
     );
@@ -117,15 +120,13 @@ test("autonomous implementation accepts only an unambiguous terminal prose marke
     "Done. [PHASE_DONE]\nAgain. [PHASE_DONE]",
   ]) {
     assert.equal(
-      validateCompletion(
-        implementation,
-        result(text),
-        "goal",
+      validateCompletion(implementation, result(text), {
+        goal: "goal",
         requirements,
-        [],
-        [],
-        graph.automation,
-      ).valid,
+        commands: [],
+        priorTestProof: [],
+        automation: graph.automation,
+      }).valid,
       false,
       text,
     );
@@ -133,15 +134,13 @@ test("autonomous implementation accepts only an unambiguous terminal prose marke
   for (const type of ["test", "review", "approval"] as const) {
     const node = graph.nodes.find((n) => n.type === type)!;
     assert.equal(
-      validateCompletion(
-        node,
-        result("Done. [PHASE_DONE]"),
-        "goal",
+      validateCompletion(node, result("Done. [PHASE_DONE]"), {
+        goal: "goal",
         requirements,
-        [],
-        [],
-        graph.automation,
-      ).valid,
+        commands: [],
+        priorTestProof: [],
+        automation: graph.automation,
+      }).valid,
       false,
     );
   }
@@ -154,15 +153,13 @@ test("autonomous implementation accepts only an unambiguous terminal prose marke
     },
   ])
     assert.equal(
-      validateCompletion(
-        implementation,
-        changed,
-        "goal",
+      validateCompletion(implementation, changed, {
+        goal: "goal",
         requirements,
-        [],
-        [],
-        graph.automation,
-      ).valid,
+        commands: [],
+        priorTestProof: [],
+        automation: graph.automation,
+      }).valid,
       false,
     );
 });
@@ -170,36 +167,31 @@ test("assistant completion and requirement gates reject weak PASS or APPROVED", 
   const g = createGraph(),
     requirements = deriveRequirementLedger("build acceptance").items;
   assert.equal(
-    validateCompletion(
-      g.nodes[1]!,
-      result("echo [PHASE_DONE]"),
-      "goal",
+    validateCompletion(g.nodes[1]!, result("echo [PHASE_DONE]"), {
+      goal: "goal",
       requirements,
-    ).valid,
+    }).valid,
     false,
   );
   assert.equal(
-    validateCompletion(
-      g.nodes[2]!,
-      result("VERDICT: PASS\n[PHASE_DONE]"),
-      "goal",
+    validateCompletion(g.nodes[2]!, result("VERDICT: PASS\n[PHASE_DONE]"), {
+      goal: "goal",
       requirements,
-    ).verdict,
+    }).verdict,
     "FAIL",
   );
   assert.equal(
-    validateCompletion(
-      g.nodes[4]!,
-      result("APPROVED\n[PHASE_DONE]"),
-      "goal",
+    validateCompletion(g.nodes[4]!, result("APPROVED\n[PHASE_DONE]"), {
+      goal: "goal",
       requirements,
-    ).verdict,
+    }).verdict,
     "REJECTED",
   );
   const changed = result("APPROVED\n[PHASE_DONE]");
   changed.evidence.fileMutation = true;
   assert.equal(
-    validateCompletion(g.nodes[4]!, changed, "goal", requirements).valid,
+    validateCompletion(g.nodes[4]!, changed, { goal: "goal", requirements })
+      .valid,
     false,
   );
 });
@@ -208,12 +200,10 @@ test("planning options are complete, sequential and scoped to fixed REQ IDs", ()
     "## OPTION 1: A\nREQ-001 first strategy\n## OPTION 2: B\nREQ-001 second strategy\n## OPTION 3: C\nREQ-001 third strategy\n[PHASE_DONE]";
   assert.equal(parsePlans(plans).length, 3);
   assert.equal(
-    validateCompletion(
-      createGraph().nodes[0]!,
-      result(plans),
-      "goal",
-      deriveRequirementLedger("goal").items,
-    ).valid,
+    validateCompletion(createGraph().nodes[0]!, result(plans), {
+      goal: "goal",
+      requirements: deriveRequirementLedger("goal").items,
+    }).valid,
     true,
   );
 });
@@ -223,17 +213,26 @@ test("required web research relies on observed completion, independent of native
       "SOURCE: https://example.com/source\nVERIFIED_FACT: observed\nAPPROVED\n[PHASE_DONE]",
     );
   assert.equal(
-    validateCompletion(g.nodes[4]!, r, "인터넷 검색", []).valid,
+    validateCompletion(g.nodes[4]!, r, {
+      goal: "인터넷 검색",
+      requirements: [],
+    }).valid,
     false,
   );
   r.evidence.completedSearches = 1;
   assert.equal(
-    validateCompletion(g.nodes[4]!, r, "인터넷 검색", []).valid,
+    validateCompletion(g.nodes[4]!, r, {
+      goal: "인터넷 검색",
+      requirements: [],
+    }).valid,
     true,
   );
   const blocked = result("RESEARCH_BLOCKED\n[PHASE_DONE]");
   assert.equal(
-    validateCompletion(g.nodes[0]!, blocked, "인터넷 검색", []).researchBlocked,
+    validateCompletion(g.nodes[0]!, blocked, {
+      goal: "인터넷 검색",
+      requirements: [],
+    }).researchBlocked,
     true,
   );
 });
@@ -244,7 +243,10 @@ test("a terminal provider failure rejects otherwise complete output even with CL
     statusCode: 401,
     message: "Unauthorized",
   });
-  const completion = validateCompletion(createGraph().nodes[4]!, r, "goal", []);
+  const completion = validateCompletion(createGraph().nodes[4]!, r, {
+    goal: "goal",
+    requirements: [],
+  });
   assert.equal(completion.valid, false);
   assert.equal(completion.failureKind, "auth");
 });
@@ -252,13 +254,17 @@ test("a terminal provider failure rejects otherwise complete output even with CL
 test("missing markers and read-only mutations expose typed failure causes", () => {
   const node = createGraph().nodes[3]!;
   assert.equal(
-    validateCompletion(node, result("unfinished"), "goal", []).failureKind,
+    validateCompletion(node, result("unfinished"), {
+      goal: "goal",
+      requirements: [],
+    }).failureKind,
     "incomplete_response",
   );
   const changed = result("unfinished");
   changed.evidence.fileMutation = true;
   assert.equal(
-    validateCompletion(node, changed, "goal", []).failureKind,
+    validateCompletion(node, changed, { goal: "goal", requirements: [] })
+      .failureKind,
     "role_violation",
   );
 });
@@ -274,8 +280,7 @@ test("missing or malformed positive evidence uses bounded report recovery while 
       result(
         `${block("REQ-001")}\n${block("REQ_ID: REQ-002")}\n${verdict}\n[PHASE_DONE]`,
       ),
-      "goal",
-      requirements,
+      { goal: "goal", requirements },
     );
     assert.equal(malformed.valid, false);
     assert.equal(malformed.failureKind, "incomplete_response");
@@ -286,14 +291,12 @@ test("missing or malformed positive evidence uses bounded report recovery while 
     const receipts = [
       { id: "check", command: "npm test", exitCode: 0, environmentError: null },
     ];
-    const repaired = validateCompletion(
-      node,
-      repairedResult,
-      "goal",
+    const repaired = validateCompletion(node, repairedResult, {
+      goal: "goal",
       requirements,
-      receipts,
-      receipts,
-    );
+      commands: receipts,
+      priorTestProof: receipts,
+    });
     assert.equal(repaired.valid, true);
     assert.equal(repaired.verdict, type === "test" ? "PASS" : "APPROVED");
     const negative = validateCompletion(
@@ -301,16 +304,14 @@ test("missing or malformed positive evidence uses bounded report recovery while 
       result(
         `${block("REQ-001")}\n${block("REQ-002", "FAILED")}\n${verdict}\n[PHASE_DONE]`,
       ),
-      "goal",
-      requirements,
+      { goal: "goal", requirements },
     );
     assert.equal(negative.valid, true);
     assert.equal(negative.verdict, type === "test" ? "FAIL" : "REJECTED");
     const mixed = validateCompletion(
       node,
       result(`${block("REQ-001", "FAILED")}\n${verdict}\n[PHASE_DONE]`),
-      "goal",
-      requirements,
+      { goal: "goal", requirements },
     );
     assert.equal(mixed.valid, true);
     assert.equal(mixed.verdict, type === "test" ? "FAIL" : "REJECTED");
@@ -324,35 +325,39 @@ test("prose PASS cannot replace native command execution and approval needs curr
     "[REQUIREMENT_EVIDENCE]\nREQ_ID: REQ-001\nSTATUS: SATISFIED\nEVIDENCE: pointer swipes are implemented\nCHECK_COMMAND: npm test\n[/REQUIREMENT_EVIDENCE]\n";
   const r = result(report + "VERDICT: PASS\n[PHASE_DONE]");
   assert.equal(
-    validateCompletion(graph.nodes[2]!, r, "goal", requirements).valid,
+    validateCompletion(graph.nodes[2]!, r, { goal: "goal", requirements })
+      .valid,
     false,
   );
   r.evidence.commands = [
     { id: "real", command: "npm test", exitCode: 1, environmentError: null },
   ];
   assert.equal(
-    validateCompletion(graph.nodes[2]!, r, "goal", requirements).verdict,
+    validateCompletion(graph.nodes[2]!, r, { goal: "goal", requirements })
+      .verdict,
     "FAIL",
   );
   r.evidence.commands[0]!.exitCode = 0;
   assert.equal(
-    validateCompletion(graph.nodes[2]!, r, "goal", requirements).verdict,
+    validateCompletion(graph.nodes[2]!, r, { goal: "goal", requirements })
+      .verdict,
     "PASS",
   );
   const approval = result(report + "APPROVED\n[PHASE_DONE]");
   assert.equal(
-    validateCompletion(graph.nodes[4]!, approval, "goal", requirements).verdict,
+    validateCompletion(graph.nodes[4]!, approval, {
+      goal: "goal",
+      requirements,
+    }).verdict,
     "REJECTED",
   );
   assert.equal(
-    validateCompletion(
-      graph.nodes[4]!,
-      approval,
-      "goal",
+    validateCompletion(graph.nodes[4]!, approval, {
+      goal: "goal",
       requirements,
-      [],
-      r.evidence.commands,
-    ).verdict,
+      commands: [],
+      priorTestProof: r.evidence.commands,
+    }).verdict,
     "APPROVED",
   );
 });
@@ -367,7 +372,10 @@ test("observed environment failure holds even a claimed PASS without retrying re
       environmentError: "listen EPERM",
     },
   ];
-  const completion = validateCompletion(createGraph().nodes[2]!, r, "goal", []);
+  const completion = validateCompletion(createGraph().nodes[2]!, r, {
+    goal: "goal",
+    requirements: [],
+  });
   assert.equal(completion.verdict, "BLOCKED");
   assert.match(completion.environmentBlocked!, /listen EPERM/);
   assert.equal(completion.valid, true);
@@ -388,7 +396,7 @@ test("real CLI markdown reports and redirected checks retain verdicts without fa
     },
   ];
   assert.equal(
-    validateCompletion(node, r, "goal", requirements).verdict,
+    validateCompletion(node, r, { goal: "goal", requirements }).verdict,
     "PASS",
   );
   const blocked = result(
@@ -396,7 +404,10 @@ test("real CLI markdown reports and redirected checks retain verdicts without fa
       .replace("STATUS: SATISFIED", "STATUS: BLOCKED")
       .replace("VERDICT: PASS", "VERDICT: FAIL"),
   );
-  const held = validateCompletion(node, blocked, "goal", requirements);
+  const held = validateCompletion(node, blocked, {
+    goal: "goal",
+    requirements,
+  });
   assert.equal(held.verdict, "BLOCKED");
   assert.match(held.environmentBlocked!, /테스트 역할이/);
 });
@@ -416,24 +427,22 @@ for (const type of ["review", "approval"] as const)
       },
     ];
     for (const exitCode of [1, null]) {
-      const completion = validateCompletion(
-        node,
-        result(output),
-        "goal",
+      const completion = validateCompletion(node, result(output), {
+        goal: "goal",
         requirements,
-        [{ ...prior[0]!, exitCode }],
-        prior,
-      );
+        commands: [{ ...prior[0]!, exitCode }],
+        priorTestProof: prior,
+      });
       assert.equal(completion.verdict, "REJECTED");
     }
-    const blocked = validateCompletion(
-      node,
-      result(output),
-      "goal",
+    const blocked = validateCompletion(node, result(output), {
+      goal: "goal",
       requirements,
-      [{ ...prior[0]!, exitCode: 1, environmentError: "listen EPERM" }],
-      prior,
-    );
+      commands: [
+        { ...prior[0]!, exitCode: 1, environmentError: "listen EPERM" },
+      ],
+      priorTestProof: prior,
+    });
     assert.equal(blocked.verdict, "BLOCKED");
     assert.ok(blocked.environmentBlocked);
   });
@@ -446,8 +455,7 @@ test("planning recovery identifies unresolved IDs per option without accepting n
     const c = validateCompletion(
       node,
       result(`## OPTION 1: Plan\n${text}\n[PHASE_DONE]`),
-      "goal",
-      requirements,
+      { goal: "goal", requirements },
     );
     assert.equal(c.valid, false);
     assert.match(c.reason!, /OPTION 1: REQ-002/);
@@ -459,8 +467,7 @@ test("planning recovery identifies unresolved IDs per option without accepting n
       result(
         "## OPTION 1: Plan\nREQ-001 first check\nREQ-002 second check\n[PHASE_DONE]",
       ),
-      "goal",
-      requirements,
+      { goal: "goal", requirements },
     ).valid,
     true,
   );
@@ -477,7 +484,10 @@ test("plan-only reference normalization accepts known lists and ranges without r
     "REQ-001–REQ-003",
   ]) {
     const text = `## OPTION 1: Strategy\n${refs}: implement and verify the original goal\n[PHASE_DONE]`;
-    const c = validateCompletion(node, result(text), "goal", requirements);
+    const c = validateCompletion(node, result(text), {
+      goal: "goal",
+      requirements,
+    });
     assert.equal(c.valid, true, refs);
     assert.equal(c.output, text);
   }
@@ -491,8 +501,7 @@ test("plan-only reference normalization accepts known lists and ranges without r
       validateCompletion(
         node,
         result(`## OPTION 1: Strategy\n${refs}\n[PHASE_DONE]`),
-        "goal",
-        requirements,
+        { goal: "goal", requirements },
       ).valid,
       false,
       refs,
@@ -506,12 +515,10 @@ test("plan abbreviation support never expands test evidence or permits success w
   r.evidence.commands = [
     { id: "test", command: "npm test", exitCode: 0, environmentError: null },
   ];
-  const c = validateCompletion(
-    createGraph().nodes[2]!,
-    r,
-    "goal",
+  const c = validateCompletion(createGraph().nodes[2]!, r, {
+    goal: "goal",
     requirements,
-  );
+  });
   assert.equal(c.valid, false);
   assert.notEqual(c.verdict, "PASS");
 });

@@ -1441,19 +1441,19 @@ export class GraphRuntime {
         nodeProofError = messageOf(error);
       }
     }
-    const completion = validateCompletion(
-      node,
-      result,
-      this.state.goal,
-      this.state.requirements.items,
-      visit.verifiedCommands ?? result.evidence.commands,
-      currentTestProof(this.state, visit),
-      this.state.graph.automation,
-      this.state.verificationContract,
-      this.state.targetProjectPath,
-      nodeProof,
-      [...new Set(visit.attempts.flatMap((a) => a.readFiles ?? []))],
-    );
+    const completion = validateCompletion(node, result, {
+      goal: this.state.goal,
+      requirements: this.state.requirements.items,
+      commands: visit.verifiedCommands ?? result.evidence.commands,
+      priorTestProof: currentTestProof(this.state, visit),
+      automation: this.state.graph.automation,
+      contract: this.state.verificationContract,
+      cwd: this.state.targetProjectPath,
+      nodeTestProof: nodeProof,
+      inspectedFiles: [
+        ...new Set(visit.attempts.flatMap((a) => a.readFiles ?? [])),
+      ],
+    });
     run.completion = completion;
     if (
       completion.valid &&

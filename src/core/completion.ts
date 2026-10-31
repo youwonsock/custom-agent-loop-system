@@ -91,18 +91,34 @@ export interface Completion {
   researchBlocked: boolean;
   environmentBlocked: string | null;
 }
+export interface CompletionContext {
+  goal: string;
+  requirements: RequirementItem[];
+  /** Receipts to judge; defaults to what this attempt observed. */
+  commands?: CommandReceipt[];
+  /** Receipts of the accepted test visit that review and approval rely on. */
+  priorTestProof?: CommandReceipt[];
+  automation?: AgentGraphDocument["automation"];
+  contract?: VerificationContract;
+  cwd?: string;
+  nodeTestProof?: NodeTestProof;
+  /** Files proven read; defaults to what this attempt observed. */
+  inspectedFiles?: string[];
+}
 export function validateCompletion(
   node: AgentNode,
   result: SupervisorResult,
-  goal: string,
-  requirements: RequirementItem[],
-  commands: CommandReceipt[] = result.evidence.commands,
-  priorTestProof: CommandReceipt[] = [],
-  automation?: AgentGraphDocument["automation"],
-  contract?: VerificationContract,
-  cwd?: string,
-  nodeTestProof?: NodeTestProof,
-  inspectedFiles: string[] = result.evidence.readFiles ?? [],
+  {
+    goal,
+    requirements,
+    commands = result.evidence.commands,
+    priorTestProof = [],
+    automation,
+    contract,
+    cwd,
+    nodeTestProof,
+    inspectedFiles = result.evidence.readFiles ?? [],
+  }: CompletionContext,
 ): Completion {
   let output = result.assistantText.replace(/\r\n/g, "\n").trim();
   // A terminal prose sentinel ends implementation, never approves the product.

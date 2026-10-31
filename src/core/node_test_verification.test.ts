@@ -285,81 +285,74 @@ test("JSON PASS and read-only approvals require current own-suite proof and sepa
   }));
   const node = graph.nodes.find((n) => n.type === "test")!;
   assert.equal(
-    validateCompletion(
-      node,
-      result(text()),
-      "goal",
+    validateCompletion(node, result(text()), {
+      goal: "goal",
       requirements,
-      receipts,
-      [],
-      graph.automation,
+      commands: receipts,
+      priorTestProof: [],
+      automation: graph.automation,
       contract,
-      s.root,
-    ).verdict,
+      cwd: s.root,
+    }).verdict,
     "FAIL",
   );
   assert.equal(
-    validateCompletion(
-      node,
-      result(text(false)),
-      "goal",
+    validateCompletion(node, result(text(false)), {
+      goal: "goal",
       requirements,
-      receipts,
-      [],
-      graph.automation,
+      commands: receipts,
+      priorTestProof: [],
+      automation: graph.automation,
       contract,
-      s.root,
-      proof,
-    ).valid,
+      cwd: s.root,
+      nodeTestProof: proof,
+    }).valid,
     false,
   );
-  const good = validateCompletion(
-    node,
-    result(text()),
-    "goal",
+  const good = validateCompletion(node, result(text()), {
+    goal: "goal",
     requirements,
-    receipts,
-    [],
-    graph.automation,
+    commands: receipts,
+    priorTestProof: [],
+    automation: graph.automation,
     contract,
-    s.root,
-    proof,
-  );
+    cwd: s.root,
+    nodeTestProof: proof,
+  });
   assert.equal(good.valid, true);
   assert.equal(good.verdict, "PASS");
   assert.match(good.output, /NODE_TEST_SCOPE/);
   const approval = graph.nodes.find((n) => n.type === "approval")!,
     approvalText = text().replace('"PASS"', '"APPROVED"');
   assert.equal(
-    validateCompletion(
-      approval,
-      result(approvalText),
-      "goal",
+    validateCompletion(approval, result(approvalText), {
+      goal: "goal",
       requirements,
-      [],
-      receipts,
-      graph.automation,
+      commands: [],
+      priorTestProof: receipts,
+      automation: graph.automation,
       contract,
-      s.root,
-      proof,
-    ).valid,
+      cwd: s.root,
+      nodeTestProof: proof,
+    }).valid,
     false,
     "approval prose is not inspection evidence",
   );
   assert.equal(
-    validateCompletion(
-      approval,
-      result(approvalText),
-      "goal",
+    validateCompletion(approval, result(approvalText), {
+      goal: "goal",
       requirements,
-      [],
-      receipts,
-      graph.automation,
+      commands: [],
+      priorTestProof: receipts,
+      automation: graph.automation,
       contract,
-      s.root,
-      proof,
-      ["test/value.test.mjs", "verification/node-tests/report.json"],
-    ).verdict,
+      cwd: s.root,
+      nodeTestProof: proof,
+      inspectedFiles: [
+        "test/value.test.mjs",
+        "verification/node-tests/report.json",
+      ],
+    }).verdict,
     "APPROVED",
   );
   const state = {

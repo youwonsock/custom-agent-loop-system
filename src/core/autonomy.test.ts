@@ -92,12 +92,17 @@ test("repairable BLOCKED follows FAIL while permission and explicit external evi
   const node = g.nodes.find((n) => n.type === "test")!,
     r = result(report("BLOCKED", "BLOCKED", "BLOCKED_KIND: product"));
   assert.equal(
-    validateCompletion(node, r, "goal", requirements, [], [], g.automation)
-      .verdict,
+    validateCompletion(node, r, {
+      goal: "goal",
+      requirements,
+      commands: [],
+      priorTestProof: [],
+      automation: g.automation,
+    }).verdict,
     "FAIL",
   );
   assert.equal(
-    validateCompletion(node, r, "goal", requirements).verdict,
+    validateCompletion(node, r, { goal: "goal", requirements }).verdict,
     "BLOCKED",
     "legacy manual behavior remains",
   );
@@ -107,26 +112,26 @@ test("repairable BLOCKED follows FAIL while permission and explicit external evi
     environmentError: "listen EPERM",
   };
   assert.match(
-    validateCompletion(
-      node,
-      r,
-      "goal",
+    validateCompletion(node, r, {
+      goal: "goal",
       requirements,
-      [permission],
-      [],
-      g.automation,
-    ).environmentBlocked!,
+      commands: [permission],
+      priorTestProof: [],
+      automation: g.automation,
+    }).environmentBlocked!,
     /EPERM/,
   );
   assert.equal(
     validateCompletion(
       node,
       result(report("BLOCKED", "BLOCKED", "BLOCKED_KIND: external")),
-      "goal",
-      requirements,
-      [],
-      [],
-      g.automation,
+      {
+        goal: "goal",
+        requirements,
+        commands: [],
+        priorTestProof: [],
+        automation: g.automation,
+      },
     ).verdict,
     "BLOCKED",
   );
@@ -139,11 +144,13 @@ test("repairable BLOCKED follows FAIL while permission and explicit external evi
           "",
         ),
       ),
-      "goal",
-      requirements,
-      [],
-      [],
-      g.automation,
+      {
+        goal: "goal",
+        requirements,
+        commands: [],
+        priorTestProof: [],
+        automation: g.automation,
+      },
     ).valid,
     false,
   );
@@ -152,15 +159,13 @@ test("browser evidence requires the exact installed helper's actual successful r
   const node = g.nodes.find((n) => n.type === "test")!,
     r = result(report());
   assert.equal(
-    validateCompletion(
-      node,
-      r,
-      "goal",
+    validateCompletion(node, r, {
+      goal: "goal",
       requirements,
-      [receipt],
-      [],
-      g.automation,
-    ).valid,
+      commands: [receipt],
+      priorTestProof: [],
+      automation: g.automation,
+    }).valid,
     false,
   );
   const browser = {
@@ -169,15 +174,13 @@ test("browser evidence requires the exact installed helper's actual successful r
     command: browserVerificationCommand(),
   };
   assert.equal(
-    validateCompletion(
-      node,
-      r,
-      "goal",
+    validateCompletion(node, r, {
+      goal: "goal",
       requirements,
-      [receipt, browser],
-      [],
-      g.automation,
-    ).verdict,
+      commands: [receipt, browser],
+      priorTestProof: [],
+      automation: g.automation,
+    }).verdict,
     "PASS",
   );
   assert.equal(isVerificationCommand(browser.command), true);
@@ -189,15 +192,13 @@ test("browser evidence requires the exact installed helper's actual successful r
   ])
     assert.equal(isBrowserVerificationCommand(command), false, command);
   assert.equal(
-    validateCompletion(
-      node,
-      r,
-      "goal",
+    validateCompletion(node, r, {
+      goal: "goal",
       requirements,
-      [receipt, { ...browser, exitCode: 1 }],
-      [],
-      g.automation,
-    ).verdict,
+      commands: [receipt, { ...browser, exitCode: 1 }],
+      priorTestProof: [],
+      automation: g.automation,
+    }).verdict,
     "FAIL",
   );
 });
@@ -235,11 +236,13 @@ test("test production edits are rejected and changed-file evidence survives even
   const verdict = validateCompletion(
     g.nodes.find((n) => n.type === "test")!,
     r,
-    "goal",
-    requirements,
-    [receipt],
-    [],
-    g.automation,
+    {
+      goal: "goal",
+      requirements,
+      commands: [receipt],
+      priorTestProof: [],
+      automation: g.automation,
+    },
   );
   assert.equal(verdict.verdict, "FAIL");
   assert.match(verdict.reason!, /제품 파일 변경/);
@@ -248,11 +251,13 @@ test("test production edits are rejected and changed-file evidence survives even
     validateCompletion(
       g.nodes.find((n) => n.type === "test")!,
       r,
-      "goal",
-      requirements,
-      [receipt],
-      [],
-      { ...g.automation!, browserVerification: false },
+      {
+        goal: "goal",
+        requirements,
+        commands: [receipt],
+        priorTestProof: [],
+        automation: { ...g.automation!, browserVerification: false },
+      },
     ).verdict,
     "PASS",
   );
