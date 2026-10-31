@@ -6,6 +6,7 @@ import {
   VerificationContract,
   VerificationManifest,
 } from "../shared/domain";
+import { browserVerificationCommand } from "./browser_command";
 import { inside } from "./verification_sources";
 import {
   isVerificationCommand,
@@ -82,15 +83,17 @@ export function validateManifest(
   const missing = requirements.filter((id) => !covered.has(id));
   if (missing.length)
     throw Error(`검증 계약에 검사 연결이 없습니다: ${missing.join(", ")}`);
-  if (
-    browser &&
-    !(value.protectedFiles as string[]).includes(".agent-graph/browser.json")
-  )
-    throw Error("자율 웹 계약에는 browser spec을 보호 파일로 등록해야 합니다.");
-  if (browser && !checks.some((c) => isBrowserVerificationCommand(c.command)))
-    throw Error(
-      "자율 웹 계약에는 설치된 플랫폼 browser verifier 검사가 필요합니다.",
-    );
+  if (browser) {
+    // Name every gap at once: each round trip costs a whole implementation attempt.
+    const gaps = [
+      !(value.protectedFiles as string[]).includes(
+        ".agent-graph/browser.json",
+      ) && "protectedFiles에 .agent-graph/browser.json을 등록해야 합니다.",
+      !checks.some((c) => isBrowserVerificationCommand(c.command)) &&
+        `checks에 설치된 플랫폼 browser verifier를 다음 명령 그대로 등록해야 합니다: ${browserVerificationCommand()}`,
+    ].filter(Boolean);
+    if (gaps.length) throw Error(`자율 웹 계약: ${gaps.join(" ")}`);
+  }
   if (
     !checks.some(
       (c) =>

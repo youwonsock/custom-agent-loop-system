@@ -205,22 +205,39 @@ function contractSections({ state }: PromptContext): string[] {
       "=== FROZEN VERIFICATION CONTRACT ===",
       state.verificationContract?.status === "locked"
         ? JSON.stringify(state.verificationContract.manifest)
-        : JSON.stringify({
-            version: 1,
-            protectedFiles: ["tests/verify-acceptance.mjs"],
-            checks: [
-              {
-                id: "acceptance",
-                command: "node tests/verify-acceptance.mjs",
-                requirements: state.requirements.items.map((r) => r.id),
-              },
-            ],
-          }),
+        : JSON.stringify(exampleManifest(state)),
       state.verificationContract?.status === "locked"
         ? "This supplied/frozen manifest and every protected file must stay byte-for-byte unchanged, even in implementation repairs. All registered checks require actual exit-zero receipts in the test role. Never weaken or bypass a protected check, change npm scripts to replace it, or author its result. Refer to check IDs in plans rather than copying installed absolute paths."
         : "Implementation must prepare .agent-graph/verification.json before entering test. This is its schema/example; author meaningful acceptance tests, map EVERY fixed REQ ID to one or more check IDs, and list their files as protectedFiles. Declare every required product/documentation file in requiredFiles:[{path:'README.md',requirements:['REQ-001']}], using the actual fixed requirement IDs. Required files are mutable deliverables, separate from frozen protected checks. Commands must be single foreground verification runners, not reports or masked scripts. At least one protected acceptance runner must run directly; web contracts must also register the exact installed browser verifier. The engine freezes this contract at the test boundary; later repairs change production, never the protected checks. If the user supplied acceptance files, protect and preserve them. Planning is read-only: describe the contract without writing it.",
     );
   return lines;
+}
+function exampleManifest(state: PromptContext["state"]) {
+  const requirements = state.requirements.items.map((r) => r.id);
+  const browser = state.graph.automation?.browserVerification;
+  return {
+    version: 1,
+    protectedFiles: [
+      "tests/verify-acceptance.mjs",
+      ...(browser ? [".agent-graph/browser.json"] : []),
+    ],
+    checks: [
+      {
+        id: "acceptance",
+        command: "node tests/verify-acceptance.mjs",
+        requirements,
+      },
+      ...(browser
+        ? [
+            {
+              id: "browser",
+              command: browserVerificationCommand(),
+              requirements,
+            },
+          ]
+        : []),
+    ],
+  };
 }
 function autonomousSections({
   state,

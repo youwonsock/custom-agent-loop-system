@@ -101,7 +101,7 @@ interface Stage {
   connection: LocalConnection;
   policy: RunPolicy;
   /** Source hashes taken before an automated test role runs. */
-  testInputs: Record<string, string> | null;
+  sourceInputs: Record<string, string> | null;
   deadline: number;
   normalLimit: number;
   completionLimit: number;
@@ -734,7 +734,7 @@ export class GraphRuntime {
   ): Promise<Stopped | Completed> {
     const preflight = await this.preflight(node, visit);
     if (preflight.step !== "ready") return preflight;
-    const stage = this.stage(node, visit, preflight.testInputs);
+    const stage = this.stage(node, visit, preflight.sourceInputs);
     const runner = new AgentAttemptRunner({
       maxAttempts: stage.normalLimit,
       retryBackoffMs: this.state.settings.retryBackoffMs,
@@ -844,7 +844,7 @@ export class GraphRuntime {
   ): Promise<
     | Stopped
     | Completed
-    | { step: "ready"; testInputs: Record<string, string> | null }
+    | { step: "ready"; sourceInputs: Record<string, string> | null }
   > {
     const policy = runPolicy(this.state.graph),
       sourceGuard = policy.testSourceGuard;
@@ -857,10 +857,7 @@ export class GraphRuntime {
             "현재 테스트 역할의 고정 소스 snapshot이 없습니다. 구현과 전체 테스트를 다시 수행해야 합니다.",
           ),
         );
-      const changed = sourceDifference(
-        expected,
-        await testSources(this.state.targetProjectPath),
-      );
+      const changed = await this.sourceChanges(expected);
       if (changed.length)
         return completed(
           this.verificationFailure(
@@ -903,14 +900,18 @@ export class GraphRuntime {
       const problem = await deliverableProblem(this.state);
       if (problem) return completed(this.verificationFailure(node, problem));
     }
-    if (!policy.automated || node.type !== "test")
-      return { step: "ready", testInputs: null };
+    // Audit roles under the source guard are compared with the test role's snapshot.
+    const watchReadOnly =
+      isReadOnly(node.type) && !(sourceGuard && isAuditRole(node.type));
+    if (!policy.automated || (node.type !== "test" && !watchReadOnly))
+      return { step: "ready", sourceInputs: null };
     try {
       return {
         step: "ready",
-        testInputs: sourceGuard
-          ? await testSources(this.state.targetProjectPath)
-          : await productionHashes(this.state.targetProjectPath),
+        sourceInputs:
+          sourceGuard || watchReadOnly
+            ? await testSources(this.state.targetProjectPath)
+            : await productionHashes(this.state.targetProjectPath),
       };
     } catch (error) {
       return this.halt(
@@ -924,7 +925,7 @@ export class GraphRuntime {
   private stage(
     node: AgentNode,
     visit: NodeVisit,
-    testInputs: Record<string, string> | null,
+    sourceInputs: Record<string, string> | null,
   ): Stage {
     const s = this.state.settings,
       binding = this.state.bindings[node.id]!,
@@ -938,7 +939,7 @@ export class GraphRuntime {
       binding,
       connection,
       policy,
-      testInputs,
+      sourceInputs,
       deadline: Math.min(
         Date.parse(visit.cycleDeadlineAt),
         policy.reserveFinalizationBudget && visit.stageDeadlineAt
@@ -1081,7 +1082,7 @@ export class GraphRuntime {
   }
   /** Run the CLI under the supervisor; guard callbacks report into the returned run. */
   private async supervise(
-    { node, visit, policy, testInputs, deadline }: Stage,
+    { node, visit, policy, sourceInputs, deadline }: Stage,
     attempt: AttemptRecord,
     invocation: Invocation,
   ): Promise<AttemptRun> {
@@ -1152,13 +1153,13 @@ export class GraphRuntime {
           }
         : {}),
       // Spread last: the frozen test role's policy also covers process ownership.
-      ...(sourceGuard && node.type === "test" && testInputs
+      ...(sourceGuard && node.type === "test" && sourceInputs
         ? {
             sourcesGuarded: true,
             pollPolicy: async () => {
               try {
                 run.sourceChanges = sourceDifference(
-                  testInputs,
+                  sourceInputs,
                   await testSources(this.state.targetProjectPath),
                 );
               } catch (error) {
@@ -1269,11 +1270,23 @@ export class GraphRuntime {
    * Evidence checks between the CLI exit and completion parsing. `undefined`
    * continues; null means the session stopped; a Completion ends the stage.
    */
+  private async sourceChanges(
+    expected: Record<string, string>,
+  ): Promise<string[]> {
+    try {
+      return sourceDifference(
+        expected,
+        await testSources(this.state.targetProjectPath),
+      );
+    } catch (error) {
+      return [`소스 snapshot 읽기 실패: ${messageOf(error)}`];
+    }
+  }
   private async evidenceGates(
     stage: Stage,
     run: AttemptRun,
   ): Promise<Stopped | Completed | Undecided> {
-    const { node, visit, policy, testInputs } = stage,
+    const { node, visit, policy, sourceInputs } = stage,
       { attempt, result } = run,
       sourceGuard = policy.testSourceGuard;
     if (result.outcome === "orphaned_process") {
@@ -1327,13 +1340,13 @@ export class GraphRuntime {
         clearRecovery: true,
       });
     }
-    if (sourceGuard && node.type === "test" && testInputs) {
+    if (sourceGuard && node.type === "test" && sourceInputs) {
       try {
         run.guardedInputs = await testSources(this.state.targetProjectPath);
         run.sourceChanges = [
           ...new Set([
             ...run.sourceChanges,
-            ...sourceDifference(testInputs, run.guardedInputs),
+            ...sourceDifference(sourceInputs, run.guardedInputs),
           ]),
         ];
       } catch (error) {
@@ -1426,13 +1439,20 @@ export class GraphRuntime {
       await this.stageStop(stageAfter, visit);
       return STOPPED;
     }
-    if (testInputs && !sourceGuard && result.outcome === "succeeded") {
+    const readOnly = isReadOnly(node.type);
+    if (
+      sourceInputs &&
+      (!sourceGuard || readOnly) &&
+      result.outcome === "succeeded"
+    ) {
       let changed: string[];
       try {
-        const after = await productionHashes(this.state.targetProjectPath);
+        const after = readOnly
+          ? await testSources(this.state.targetProjectPath)
+          : await productionHashes(this.state.targetProjectPath);
         changed = [
-          ...new Set([...Object.keys(testInputs), ...Object.keys(after)]),
-        ].filter((file) => testInputs[file] !== after[file]);
+          ...new Set([...Object.keys(sourceInputs), ...Object.keys(after)]),
+        ].filter((file) => sourceInputs[file] !== after[file]);
       } catch (error) {
         changed = [`소스 검사 차단: ${messageOf(error)}`];
       }
@@ -1451,10 +1471,7 @@ export class GraphRuntime {
     ) {
       const expected = currentVerificationSources(this.state, visit);
       const changes = expected
-        ? sourceDifference(
-            expected,
-            await testSources(this.state.targetProjectPath),
-          )
+        ? await this.sourceChanges(expected)
         : ["missing test source snapshot"];
       if (changes.length) {
         attempt.verificationInvalidation = {
