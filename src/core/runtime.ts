@@ -1021,6 +1021,7 @@ export class GraphRuntime implements GateHost {
       ...(policy.kiloScopeGuard ? { scopeRoots: this.scopeRoots() } : {}),
       ...(policy.guardOwnedProcesses
         ? {
+            reapDescendants: true,
             eventPolicy: (event: Record<string, unknown>) => {
               run.policyReason = unscopedTerminationEvent(event);
               return run.policyReason;
@@ -1104,6 +1105,8 @@ export class GraphRuntime implements GateHost {
     { attempt, result, captures }: AttemptRun,
   ): Promise<void> {
     const orphaned = result.outcome === "orphaned_process";
+    if (result.evidence.reapedProcesses?.length)
+      attempt.message ||= `CLI가 남긴 백그라운드 프로세스를 종료했습니다: ${result.evidence.reapedProcesses.join(", ")}`;
     if (!orphaned)
       await addCapturedEnvironmentDiagnostics(
         result.evidence.commands,

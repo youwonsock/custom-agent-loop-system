@@ -15,6 +15,8 @@ export interface EventEvidence {
   changedFiles?: string[];
   /** Files the CLI's own permission check refused to let a write tool change. */
   deniedWrites?: string[];
+  /** Background processes the CLI left running, ended after it exited. */
+  reapedProcesses?: number[];
   completedSearches: number;
   maxTokens: number;
   assistantTextBytes: number;
@@ -291,11 +293,8 @@ export class MutationTracker {
     for (const call of EVENT_CALLS.get(e.type)?.(e) ?? []) this.tool(call);
     if (e.type === "result" && Array.isArray(e.permission_denials))
       for (const denied of e.permission_denials) {
-        const { tool_name, tool_input } = obj(denied);
-        if (mutatingTool(String(tool_name ?? ""), tool_input))
-          this.deniedWrites.push(
-            String(obj(tool_input).file_path ?? tool_name),
-          );
+        const file = obj(obj(denied).tool_input).file_path;
+        if (typeof file === "string") this.deniedWrites.push(file);
       }
   }
 }

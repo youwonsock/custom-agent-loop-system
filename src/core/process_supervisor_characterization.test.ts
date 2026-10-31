@@ -183,3 +183,52 @@ test("sensitive values never reach the log, output or events", async (t) => {
   assert.ok(!result.output.includes("secret-value"));
   assert.ok(!JSON.stringify(result.events).includes("secret-value"));
 });
+
+const leakServer = `
+const { spawn } = require("node:child_process");
+const leaked = spawn(process.execPath, ["-e", "setInterval(()=>{},1000)"], {
+  detached: true,
+  stdio: "ignore",
+});
+leaked.unref();
+console.log("leaked:" + leaked.pid);
+setTimeout(() => process.exit(0), 1500);
+`;
+const leakedPid = (output: string) => Number(/leaked:(\d+)/.exec(output)![1]);
+const alive = (pid: number) => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+};
+test(
+  "a background process the CLI leaves behind is ended only when reaping is on",
+  { skip: process.platform === "win32" ? "POSIX only" : false },
+  async (t) => {
+    const kept = await supervise(t, leakServer);
+    const keptPid = leakedPid(kept.result.output);
+    t.after(() => {
+      if (alive(keptPid)) process.kill(keptPid, "SIGKILL");
+    });
+    assert.equal(alive(keptPid), true, "off by default");
+    assert.equal(kept.result.evidence.reapedProcesses, undefined);
+
+    const reaped = await supervise(t, leakServer, { reapDescendants: true });
+    const pid = leakedPid(reaped.result.output);
+    assert.equal(alive(pid), false);
+    assert.deepEqual(reaped.result.evidence.reapedProcesses, [pid]);
+    assert.equal(reaped.result.outcome, "succeeded");
+  },
+);
+
+test("reaping leaves nothing to report when the CLI cleans up after itself", async (t) => {
+  const { result } = await supervise(
+    t,
+    "console.log('done');setTimeout(()=>process.exit(0),700);",
+    { reapDescendants: true },
+  );
+  assert.equal(result.outcome, "succeeded");
+  assert.equal(result.evidence.reapedProcesses, undefined);
+});
