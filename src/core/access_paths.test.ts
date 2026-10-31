@@ -28,3 +28,26 @@ test("route descriptions cannot conceal explicit or adjacent filesystem access",
     ["/etc/passwd"],
   );
 });
+test("regex literals quoted in a plan are not filesystem paths", () => {
+  for (const text of [
+    "- slugify replaces /[^a-z0-9]+/g with one hyphen",
+    "Assert the export exists with `/slugify\\(/`",
+    'Uses text.replace(/-+/g, "-")',
+    "Trim with `/^-+|-+$/g`",
+    "Reject characters /[^/a-z]/ in names",
+    "Use '/a b\\(c/' in the check",
+    "text.split(/x/)",
+    "value.replace(/foo/g, bar)",
+  ])
+    assert.deepEqual(outsidePaths(text, ["/workspace/game"]), [], text);
+});
+test("regex-shaped text cannot conceal a real path", () => {
+  const paths = (text: string) => outsidePaths(text, ["/workspace/game"]);
+  assert.deepEqual(paths("Read /foo/g"), ["/foo/g"]);
+  assert.equal(paths("Read /secret/a(1)/").length, 1);
+  assert.deepEqual(paths("Read /tmp/a+b/"), ["/tmp/a+b/"]);
+  assert.equal(paths("Read /tmp(1)/key").length, 1);
+  assert.deepEqual(paths("FILE_ACCESS: /a+b/"), ["/a+b/"]);
+  assert.deepEqual(paths("text.replace(/etc/g, bar)"), ["/etc/g"]);
+  assert.deepEqual(paths("text.replace(/etc/passwd, bar)"), ["/etc/passwd"]);
+});
