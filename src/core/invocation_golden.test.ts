@@ -6,6 +6,7 @@ import * as path from "node:path";
 import { pathToFileURL } from "node:url";
 import { createAutonomousGraph } from "./graph";
 import { buildInvocation } from "./invocation";
+import programIo = require("./program_io");
 import { LocalConnection, NODE_TYPES } from "../shared/domain";
 
 // Golden invocations pin each CLI's argv and the environment the app adds,
@@ -31,8 +32,12 @@ const parsedEnv = new Set([
   "KILO_CONFIG_CONTENT",
   "OPENCODE_CONFIG_CONTENT",
   "AGENT_GRAPH_KILO_CHECKS",
+  "AGENT_GRAPH_PROGRAM_IO",
 ]);
-function normalizer(target: string, extra: string) {
+// Set by the app for some variants; a developer's own values would hide them from the diff.
+const inheritedConfig =
+  /^(?:XDG_|KILO_|OPENCODE_CONFIG|GIT_|DYLD_|LD_)|^(?:SHELL|ENV|BASH_ENV|NODE_OPTIONS|NODE_PATH)$/;
+function normalizer(root: string, target: string, extra: string) {
   const tokens: Array<[string, string]> = [
     [appPath, "<PATH>"],
     [plugin, "<PLUGIN_URL>"],
@@ -41,6 +46,9 @@ function normalizer(target: string, extra: string) {
     [__dirname, "<DIST_CORE>"],
     [target, "<TARGET>"],
     [extra, "<EXTRA>"],
+    [root, "<ROOT>"],
+    [fs.realpathSync(root), "<ROOT>"],
+    [os.homedir(), "<USER_HOME>"],
   ];
   const forms = tokens
     .flatMap(([value, token]) => {
@@ -113,7 +121,9 @@ const variants: Array<{
   name: string;
   services: LocalConnection["type"][];
   variant?: string;
-  opts: (target: string, extra: string) => Partial<Options>;
+  posixOnly?: boolean;
+  env?: Record<string, string>;
+  opts: (target: string, extra: string, root: string) => Partial<Options>;
 }> = [
   {
     name: "base",
@@ -152,6 +162,32 @@ const variants: Array<{
     services: ["kilo"],
     opts: () => ({ disableWrite: true }),
   },
+  {
+    // The argv and config around program isolation. prepareProgramIo is replaced,
+    // so no VM is needed; the VM itself is covered by program_io.test.ts on macOS.
+    name: "program-io",
+    services: ["kilo"],
+    posixOnly: true,
+    env: {
+      KILO_CONFIG_CONTENT: JSON.stringify({
+        model: "native-model",
+        provider: { native: {} },
+        mcp: { dropped: {} },
+        plugin: ["dropped"],
+      }),
+    },
+    opts: (target, _extra, root) => ({
+      scopeRoots: [target],
+      verificationCommands: ["npm test"],
+      guardOwnedProcesses: true,
+      testSourcesReadOnly: true,
+      programIoGuard: {
+        directory: path.join(root, "program-io"),
+        protectedFiles: ["verification/contract.json"],
+        expiresAt: 1,
+      },
+    }),
+  },
 ];
 
 test(
@@ -170,16 +206,42 @@ test(
     fs.mkdirSync(extra);
     t.after(() => fs.rmSync(root, { recursive: true, force: true }));
     // A developer's own native CLI config would otherwise leak into the merged config goldens.
-    for (const key of parsedEnv)
-      if (key in process.env) {
+    for (const key of Object.keys(process.env))
+      if (parsedEnv.has(key) || inheritedConfig.test(key)) {
         const saved = process.env[key]!;
         delete process.env[key];
         t.after(() => {
           process.env[key] = saved;
         });
       }
-    const normalize = normalizer(target, extra);
-    for (const v of variants)
+    t.mock.method(programIo, "prepareProgramIo", ((options) => {
+      fs.mkdirSync(options.directory, { recursive: true });
+      return {
+        version: 1,
+        id: "golden-policy",
+        cwd: options.cwd,
+        directory: options.directory,
+        node: "/golden/node",
+        runner: "/golden/program_io_runner.js",
+        bootstrap: "/golden/program_io_bootstrap.js",
+        profile: "{}",
+        profileDigest: "golden-digest",
+        publicKey: "golden-public-key",
+        privateKey: "golden-private-key",
+        expiresAt: options.expiresAt,
+        writableRoots: [options.cwd],
+        runtimeReadRoots: [],
+        scratch: path.join(options.directory, "scratch"),
+        preflightPassed: true,
+        browserPath: "/ms-playwright",
+        backend: "apple-container-vm",
+      };
+    }) as typeof programIo.prepareProgramIo);
+    const normalize = normalizer(root, target, extra);
+    for (const v of variants) {
+      if (v.posixOnly && family !== "posix") continue;
+      for (const [key, value] of Object.entries(v.env ?? {}))
+        process.env[key] = value;
       for (const type of v.services) {
         const connection: LocalConnection = {
           id: "conn",
@@ -201,7 +263,7 @@ test(
             cwd: target,
             fullAccess: false,
             allowedPaths: [],
-            ...v.opts(target, extra),
+            ...v.opts(target, extra, root),
           });
           byRole[node.type] = normalize({
             binary: invocation.binary,
@@ -212,5 +274,7 @@ test(
         }
         matchGolden(`${type}-${v.name}.json`, byRole);
       }
+      for (const key of Object.keys(v.env ?? {})) delete process.env[key];
+    }
   },
 );

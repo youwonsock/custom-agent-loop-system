@@ -1,0 +1,864 @@
+{
+  "planning": {
+    "binary": "<NODE>",
+    "args": [
+      "<FIXTURE>",
+      "--print-logs",
+      "--log-level",
+      "INFO",
+      "run",
+      "--format",
+      "json",
+      "--model",
+      "golden-model",
+      "--dir",
+      "<TARGET>",
+      "GOLDEN PROMPT\n\nNative tool protocol: use the exact schema supplied by this CLI. Never send an empty tool input. After a schema error, correct the missing fields before trying again; do not repeat the same invalid call. Kernel-isolated tool protocol: commands execute in a Linux VM with Node 24 and preinstalled Chromium/Playwright, regardless of the provider CLI host platform. Each bash command gets a fresh VM, destroyed before its result is accepted. Start, use and close any server in the same foreground check; no background server or PID survives to a later call. Use bash(command, description) for ALL project file operations. Native read/glob/grep/write/edit/task/skill/MCP tools are disabled. Use target-relative paths, shell cat/ls/grep for inspection and small quoted heredocs for implementation writes. This role is READ ONLY: only inspection commands (cat/ls/head/tail/sed/grep) are permitted; do not execute tests, Node programs, mkdir or writes. Review/approval must read each own test file and the canonical quality report using standalone cat commands. The VM confines every command and its children; HOME/cache/temp are private under verification/.agent-io. Host network, home, sockets and credentials are unavailable. Never use /tmp output paths, host credentials/configuration or unregistered execution tools. Emit AGENT_REPORT only in final assistant text.\nTarget scope: native filesystem tools may inspect only these approved roots: [\"<TARGET>\"]. Default glob/grep path is the target project. Never inspect parent directories, global configuration, credentials or orchestrator sessions. A scope denial happened before execution; correct the path and continue using target-relative files. Registered platform verifiers may be executed as supplied; do not read/search their installation. Emit AGENT_REPORT directly in the final assistant response, never write AGENT_REPORT.json in read-only/test roles."
+    ],
+    "env": {
+      "AGENT_GRAPH_KILO_CHECKS": {
+        "cwd": "<TARGET>",
+        "commands": [],
+        "testSourcesReadOnly": true,
+        "guardOwnedProcesses": true,
+        "scopeRoots": [
+          "<TARGET>"
+        ],
+        "programIo": {
+          "version": 1,
+          "id": "golden-policy",
+          "cwd": "<TARGET>",
+          "directory": "<ROOT>/program-io",
+          "node": "/golden/node",
+          "runner": "/golden/program_io_runner.js",
+          "bootstrap": "/golden/program_io_bootstrap.js",
+          "profile": "{}",
+          "profileDigest": "golden-digest",
+          "publicKey": "golden-public-key",
+          "privateKey": "golden-private-key",
+          "expiresAt": 1,
+          "writableRoots": [
+            "<TARGET>"
+          ],
+          "runtimeReadRoots": [],
+          "scratch": "<ROOT>/program-io/scratch",
+          "preflightPassed": true,
+          "browserPath": "/ms-playwright",
+          "backend": "apple-container-vm"
+        },
+        "readOnlyRole": true
+      },
+      "AGENT_GRAPH_PROGRAM_IO": {
+        "version": 1,
+        "id": "golden-policy",
+        "cwd": "<TARGET>",
+        "directory": "<ROOT>/program-io",
+        "node": "/golden/node",
+        "runner": "/golden/program_io_runner.js",
+        "bootstrap": "/golden/program_io_bootstrap.js",
+        "profile": "{}",
+        "profileDigest": "golden-digest",
+        "publicKey": "golden-public-key",
+        "privateKey": "golden-private-key",
+        "expiresAt": 1,
+        "writableRoots": [
+          "<TARGET>"
+        ],
+        "runtimeReadRoots": [],
+        "scratch": "<ROOT>/program-io/scratch",
+        "preflightPassed": true,
+        "browserPath": "/ms-playwright",
+        "backend": "apple-container-vm"
+      },
+      "BASH_ENV": "/dev/null",
+      "DYLD_INSERT_LIBRARIES": "",
+      "DYLD_LIBRARY_PATH": "",
+      "ENV": "/dev/null",
+      "GIT_CONFIG_GLOBAL": "/dev/null",
+      "GIT_CONFIG_NOSYSTEM": "1",
+      "GIT_DIR": "/dev/null",
+      "GIT_OPTIONAL_LOCKS": "0",
+      "GIT_WORK_TREE": "<TARGET>",
+      "HOME": "<ROOT>/program-io/provider-home",
+      "KILO_CONFIG_CONTENT": {
+        "model": "native-model",
+        "provider": {
+          "native": {}
+        },
+        "snapshot": false,
+        "lsp": false,
+        "formatter": false,
+        "mcp": {},
+        "tools": {
+          "*": false,
+          "bash": true,
+          "todowrite": true,
+          "read": false,
+          "glob": false,
+          "grep": false,
+          "write": false,
+          "edit": false,
+          "apply_patch": false,
+          "task": false,
+          "skill": false
+        },
+        "plugin": [
+          "<PLUGIN_URL>"
+        ],
+        "permission": {
+          "edit": "deny",
+          "bash": "allow",
+          "*": "deny",
+          "todowrite": "allow",
+          "external_directory": {
+            "*": "deny",
+            "<TARGET>": "allow",
+            "<TARGET>/**": "allow"
+          }
+        }
+      },
+      "KILO_CONFIG_DIR": "<ROOT>/program-io/provider-home/.config/kilo",
+      "KILO_DISABLE_AUTOUPDATE": "true",
+      "KILO_DISABLE_CLAUDE_CODE": "true",
+      "KILO_DISABLE_CLAUDE_CODE_PROMPT": "true",
+      "KILO_DISABLE_CLAUDE_CODE_SKILLS": "true",
+      "KILO_DISABLE_CODEBASE_INDEXING": "true",
+      "KILO_DISABLE_DEFAULT_PLUGINS": "true",
+      "KILO_DISABLE_EXTERNAL_SKILLS": "true",
+      "KILO_DISABLE_FFF": "true",
+      "KILO_DISABLE_LSP_DOWNLOAD": "true",
+      "KILO_DISABLE_PROJECT_CONFIG": "true",
+      "KILO_DISABLE_SKILL_SHELL": "true",
+      "LD_LIBRARY_PATH": "",
+      "LD_PRELOAD": "",
+      "NODE_OPTIONS": "",
+      "NODE_PATH": "",
+      "PATH": "<PATH>",
+      "SHELL": "/bin/sh",
+      "XDG_CACHE_HOME": "<ROOT>/program-io/provider-home/.cache",
+      "XDG_CONFIG_HOME": "<ROOT>/program-io/provider-home/.config",
+      "XDG_DATA_HOME": "<USER_HOME>/.local/share",
+      "XDG_STATE_HOME": "<ROOT>/program-io/provider-home/.local/state"
+    },
+    "transport": null
+  },
+  "implementation": {
+    "binary": "<NODE>",
+    "args": [
+      "<FIXTURE>",
+      "--print-logs",
+      "--log-level",
+      "INFO",
+      "run",
+      "--format",
+      "json",
+      "--model",
+      "golden-model",
+      "--dir",
+      "<TARGET>",
+      "GOLDEN PROMPT\n\nNative tool protocol: use the exact schema supplied by this CLI. Never send an empty tool input. After a schema error, correct the missing fields before trying again; do not repeat the same invalid call. Kernel-isolated tool protocol: commands execute in a Linux VM with Node 24 and preinstalled Chromium/Playwright, regardless of the provider CLI host platform. Each bash command gets a fresh VM, destroyed before its result is accepted. Start, use and close any server in the same foreground check; no background server or PID survives to a later call. Use bash(command, description) for ALL project file operations. Native read/glob/grep/write/edit/task/skill/MCP tools are disabled. Use target-relative paths, shell cat/ls/grep for inspection and small quoted heredocs for implementation writes. Test role: exact registered foreground checks, inspection and verification output preparation only. Never edit product/tests/config; return FAIL on a failure. Review/approval must read each own test file and the canonical quality report using standalone cat commands. The VM confines every command and its children; HOME/cache/temp are private under verification/.agent-io. Host network, home, sockets and credentials are unavailable. Never use /tmp output paths, host credentials/configuration or unregistered execution tools. Emit AGENT_REPORT only in final assistant text.\nTarget scope: native filesystem tools may inspect only these approved roots: [\"<TARGET>\"]. Default glob/grep path is the target project. Never inspect parent directories, global configuration, credentials or orchestrator sessions. A scope denial happened before execution; correct the path and continue using target-relative files. Registered platform verifiers may be executed as supplied; do not read/search their installation. Emit AGENT_REPORT directly in the final assistant response, never write AGENT_REPORT.json in read-only/test roles."
+    ],
+    "env": {
+      "AGENT_GRAPH_KILO_CHECKS": {
+        "cwd": "<TARGET>",
+        "commands": [
+          "npm test"
+        ],
+        "testSourcesReadOnly": true,
+        "guardOwnedProcesses": true,
+        "scopeRoots": [
+          "<TARGET>"
+        ],
+        "programIo": {
+          "version": 1,
+          "id": "golden-policy",
+          "cwd": "<TARGET>",
+          "directory": "<ROOT>/program-io",
+          "node": "/golden/node",
+          "runner": "/golden/program_io_runner.js",
+          "bootstrap": "/golden/program_io_bootstrap.js",
+          "profile": "{}",
+          "profileDigest": "golden-digest",
+          "publicKey": "golden-public-key",
+          "privateKey": "golden-private-key",
+          "expiresAt": 1,
+          "writableRoots": [
+            "<TARGET>"
+          ],
+          "runtimeReadRoots": [],
+          "scratch": "<ROOT>/program-io/scratch",
+          "preflightPassed": true,
+          "browserPath": "/ms-playwright",
+          "backend": "apple-container-vm"
+        },
+        "readOnlyRole": false
+      },
+      "AGENT_GRAPH_PROGRAM_IO": {
+        "version": 1,
+        "id": "golden-policy",
+        "cwd": "<TARGET>",
+        "directory": "<ROOT>/program-io",
+        "node": "/golden/node",
+        "runner": "/golden/program_io_runner.js",
+        "bootstrap": "/golden/program_io_bootstrap.js",
+        "profile": "{}",
+        "profileDigest": "golden-digest",
+        "publicKey": "golden-public-key",
+        "privateKey": "golden-private-key",
+        "expiresAt": 1,
+        "writableRoots": [
+          "<TARGET>"
+        ],
+        "runtimeReadRoots": [],
+        "scratch": "<ROOT>/program-io/scratch",
+        "preflightPassed": true,
+        "browserPath": "/ms-playwright",
+        "backend": "apple-container-vm"
+      },
+      "BASH_ENV": "/dev/null",
+      "DYLD_INSERT_LIBRARIES": "",
+      "DYLD_LIBRARY_PATH": "",
+      "ENV": "/dev/null",
+      "GIT_CONFIG_GLOBAL": "/dev/null",
+      "GIT_CONFIG_NOSYSTEM": "1",
+      "GIT_DIR": "/dev/null",
+      "GIT_OPTIONAL_LOCKS": "0",
+      "GIT_WORK_TREE": "<TARGET>",
+      "HOME": "<ROOT>/program-io/provider-home",
+      "KILO_CONFIG_CONTENT": {
+        "model": "native-model",
+        "provider": {
+          "native": {}
+        },
+        "snapshot": false,
+        "lsp": false,
+        "formatter": false,
+        "mcp": {},
+        "tools": {
+          "*": false,
+          "bash": true,
+          "todowrite": true,
+          "read": false,
+          "glob": false,
+          "grep": false,
+          "write": false,
+          "edit": false,
+          "apply_patch": false,
+          "task": false,
+          "skill": false
+        },
+        "plugin": [
+          "<PLUGIN_URL>"
+        ],
+        "permission": {
+          "edit": "deny",
+          "*": "deny",
+          "bash": "allow",
+          "todowrite": "allow",
+          "external_directory": {
+            "*": "deny",
+            "<TARGET>": "allow",
+            "<TARGET>/**": "allow"
+          }
+        }
+      },
+      "KILO_CONFIG_DIR": "<ROOT>/program-io/provider-home/.config/kilo",
+      "KILO_DISABLE_AUTOUPDATE": "true",
+      "KILO_DISABLE_CLAUDE_CODE": "true",
+      "KILO_DISABLE_CLAUDE_CODE_PROMPT": "true",
+      "KILO_DISABLE_CLAUDE_CODE_SKILLS": "true",
+      "KILO_DISABLE_CODEBASE_INDEXING": "true",
+      "KILO_DISABLE_DEFAULT_PLUGINS": "true",
+      "KILO_DISABLE_EXTERNAL_SKILLS": "true",
+      "KILO_DISABLE_FFF": "true",
+      "KILO_DISABLE_LSP_DOWNLOAD": "true",
+      "KILO_DISABLE_PROJECT_CONFIG": "true",
+      "KILO_DISABLE_SKILL_SHELL": "true",
+      "LD_LIBRARY_PATH": "",
+      "LD_PRELOAD": "",
+      "NODE_OPTIONS": "",
+      "NODE_PATH": "",
+      "PATH": "<PATH>",
+      "SHELL": "/bin/sh",
+      "XDG_CACHE_HOME": "<ROOT>/program-io/provider-home/.cache",
+      "XDG_CONFIG_HOME": "<ROOT>/program-io/provider-home/.config",
+      "XDG_DATA_HOME": "<USER_HOME>/.local/share",
+      "XDG_STATE_HOME": "<ROOT>/program-io/provider-home/.local/state"
+    },
+    "transport": null
+  },
+  "test": {
+    "binary": "<NODE>",
+    "args": [
+      "<FIXTURE>",
+      "--print-logs",
+      "--log-level",
+      "INFO",
+      "run",
+      "--format",
+      "json",
+      "--model",
+      "golden-model",
+      "--dir",
+      "<TARGET>",
+      "GOLDEN PROMPT\n\nNative tool protocol: use the exact schema supplied by this CLI. Never send an empty tool input. After a schema error, correct the missing fields before trying again; do not repeat the same invalid call. Kernel-isolated tool protocol: commands execute in a Linux VM with Node 24 and preinstalled Chromium/Playwright, regardless of the provider CLI host platform. Each bash command gets a fresh VM, destroyed before its result is accepted. Start, use and close any server in the same foreground check; no background server or PID survives to a later call. Use bash(command, description) for ALL project file operations. Native read/glob/grep/write/edit/task/skill/MCP tools are disabled. Use target-relative paths, shell cat/ls/grep for inspection and small quoted heredocs for implementation writes. Test role: exact registered foreground checks, inspection and verification output preparation only. Never edit product/tests/config; return FAIL on a failure. Review/approval must read each own test file and the canonical quality report using standalone cat commands. The VM confines every command and its children; HOME/cache/temp are private under verification/.agent-io. Host network, home, sockets and credentials are unavailable. Never use /tmp output paths, host credentials/configuration or unregistered execution tools. Emit AGENT_REPORT only in final assistant text.\nTarget scope: native filesystem tools may inspect only these approved roots: [\"<TARGET>\"]. Default glob/grep path is the target project. Never inspect parent directories, global configuration, credentials or orchestrator sessions. A scope denial happened before execution; correct the path and continue using target-relative files. Registered platform verifiers may be executed as supplied; do not read/search their installation. Emit AGENT_REPORT directly in the final assistant response, never write AGENT_REPORT.json in read-only/test roles."
+    ],
+    "env": {
+      "AGENT_GRAPH_KILO_CHECKS": {
+        "cwd": "<TARGET>",
+        "commands": [
+          "npm test"
+        ],
+        "testSourcesReadOnly": true,
+        "guardOwnedProcesses": true,
+        "scopeRoots": [
+          "<TARGET>"
+        ],
+        "programIo": {
+          "version": 1,
+          "id": "golden-policy",
+          "cwd": "<TARGET>",
+          "directory": "<ROOT>/program-io",
+          "node": "/golden/node",
+          "runner": "/golden/program_io_runner.js",
+          "bootstrap": "/golden/program_io_bootstrap.js",
+          "profile": "{}",
+          "profileDigest": "golden-digest",
+          "publicKey": "golden-public-key",
+          "privateKey": "golden-private-key",
+          "expiresAt": 1,
+          "writableRoots": [
+            "<TARGET>"
+          ],
+          "runtimeReadRoots": [],
+          "scratch": "<ROOT>/program-io/scratch",
+          "preflightPassed": true,
+          "browserPath": "/ms-playwright",
+          "backend": "apple-container-vm"
+        },
+        "readOnlyRole": false
+      },
+      "AGENT_GRAPH_PROGRAM_IO": {
+        "version": 1,
+        "id": "golden-policy",
+        "cwd": "<TARGET>",
+        "directory": "<ROOT>/program-io",
+        "node": "/golden/node",
+        "runner": "/golden/program_io_runner.js",
+        "bootstrap": "/golden/program_io_bootstrap.js",
+        "profile": "{}",
+        "profileDigest": "golden-digest",
+        "publicKey": "golden-public-key",
+        "privateKey": "golden-private-key",
+        "expiresAt": 1,
+        "writableRoots": [
+          "<TARGET>"
+        ],
+        "runtimeReadRoots": [],
+        "scratch": "<ROOT>/program-io/scratch",
+        "preflightPassed": true,
+        "browserPath": "/ms-playwright",
+        "backend": "apple-container-vm"
+      },
+      "BASH_ENV": "/dev/null",
+      "DYLD_INSERT_LIBRARIES": "",
+      "DYLD_LIBRARY_PATH": "",
+      "ENV": "/dev/null",
+      "GIT_CONFIG_GLOBAL": "/dev/null",
+      "GIT_CONFIG_NOSYSTEM": "1",
+      "GIT_DIR": "/dev/null",
+      "GIT_OPTIONAL_LOCKS": "0",
+      "GIT_WORK_TREE": "<TARGET>",
+      "HOME": "<ROOT>/program-io/provider-home",
+      "KILO_CONFIG_CONTENT": {
+        "model": "native-model",
+        "provider": {
+          "native": {}
+        },
+        "snapshot": false,
+        "lsp": false,
+        "formatter": false,
+        "mcp": {},
+        "tools": {
+          "*": false,
+          "bash": true,
+          "todowrite": true,
+          "read": false,
+          "glob": false,
+          "grep": false,
+          "write": false,
+          "edit": false,
+          "apply_patch": false,
+          "task": false,
+          "skill": false
+        },
+        "plugin": [
+          "<PLUGIN_URL>"
+        ],
+        "permission": {
+          "edit": "deny",
+          "*": "deny",
+          "bash": "allow",
+          "todowrite": "allow",
+          "external_directory": {
+            "*": "deny",
+            "<TARGET>": "allow",
+            "<TARGET>/**": "allow"
+          }
+        }
+      },
+      "KILO_CONFIG_DIR": "<ROOT>/program-io/provider-home/.config/kilo",
+      "KILO_DISABLE_AUTOUPDATE": "true",
+      "KILO_DISABLE_CLAUDE_CODE": "true",
+      "KILO_DISABLE_CLAUDE_CODE_PROMPT": "true",
+      "KILO_DISABLE_CLAUDE_CODE_SKILLS": "true",
+      "KILO_DISABLE_CODEBASE_INDEXING": "true",
+      "KILO_DISABLE_DEFAULT_PLUGINS": "true",
+      "KILO_DISABLE_EXTERNAL_SKILLS": "true",
+      "KILO_DISABLE_FFF": "true",
+      "KILO_DISABLE_LSP_DOWNLOAD": "true",
+      "KILO_DISABLE_PROJECT_CONFIG": "true",
+      "KILO_DISABLE_SKILL_SHELL": "true",
+      "LD_LIBRARY_PATH": "",
+      "LD_PRELOAD": "",
+      "NODE_OPTIONS": "",
+      "NODE_PATH": "",
+      "PATH": "<PATH>",
+      "SHELL": "/bin/sh",
+      "XDG_CACHE_HOME": "<ROOT>/program-io/provider-home/.cache",
+      "XDG_CONFIG_HOME": "<ROOT>/program-io/provider-home/.config",
+      "XDG_DATA_HOME": "<USER_HOME>/.local/share",
+      "XDG_STATE_HOME": "<ROOT>/program-io/provider-home/.local/state"
+    },
+    "transport": null
+  },
+  "review": {
+    "binary": "<NODE>",
+    "args": [
+      "<FIXTURE>",
+      "--print-logs",
+      "--log-level",
+      "INFO",
+      "run",
+      "--format",
+      "json",
+      "--model",
+      "golden-model",
+      "--dir",
+      "<TARGET>",
+      "GOLDEN PROMPT\n\nNative tool protocol: use the exact schema supplied by this CLI. Never send an empty tool input. After a schema error, correct the missing fields before trying again; do not repeat the same invalid call. Kernel-isolated tool protocol: commands execute in a Linux VM with Node 24 and preinstalled Chromium/Playwright, regardless of the provider CLI host platform. Each bash command gets a fresh VM, destroyed before its result is accepted. Start, use and close any server in the same foreground check; no background server or PID survives to a later call. Use bash(command, description) for ALL project file operations. Native read/glob/grep/write/edit/task/skill/MCP tools are disabled. Use target-relative paths, shell cat/ls/grep for inspection and small quoted heredocs for implementation writes. This role is READ ONLY: only inspection commands (cat/ls/head/tail/sed/grep) are permitted; do not execute tests, Node programs, mkdir or writes. Review/approval must read each own test file and the canonical quality report using standalone cat commands. The VM confines every command and its children; HOME/cache/temp are private under verification/.agent-io. Host network, home, sockets and credentials are unavailable. Never use /tmp output paths, host credentials/configuration or unregistered execution tools. Emit AGENT_REPORT only in final assistant text.\nTarget scope: native filesystem tools may inspect only these approved roots: [\"<TARGET>\"]. Default glob/grep path is the target project. Never inspect parent directories, global configuration, credentials or orchestrator sessions. A scope denial happened before execution; correct the path and continue using target-relative files. Registered platform verifiers may be executed as supplied; do not read/search their installation. Emit AGENT_REPORT directly in the final assistant response, never write AGENT_REPORT.json in read-only/test roles."
+    ],
+    "env": {
+      "AGENT_GRAPH_KILO_CHECKS": {
+        "cwd": "<TARGET>",
+        "commands": [],
+        "testSourcesReadOnly": true,
+        "guardOwnedProcesses": true,
+        "scopeRoots": [
+          "<TARGET>"
+        ],
+        "programIo": {
+          "version": 1,
+          "id": "golden-policy",
+          "cwd": "<TARGET>",
+          "directory": "<ROOT>/program-io",
+          "node": "/golden/node",
+          "runner": "/golden/program_io_runner.js",
+          "bootstrap": "/golden/program_io_bootstrap.js",
+          "profile": "{}",
+          "profileDigest": "golden-digest",
+          "publicKey": "golden-public-key",
+          "privateKey": "golden-private-key",
+          "expiresAt": 1,
+          "writableRoots": [
+            "<TARGET>"
+          ],
+          "runtimeReadRoots": [],
+          "scratch": "<ROOT>/program-io/scratch",
+          "preflightPassed": true,
+          "browserPath": "/ms-playwright",
+          "backend": "apple-container-vm"
+        },
+        "readOnlyRole": true
+      },
+      "AGENT_GRAPH_PROGRAM_IO": {
+        "version": 1,
+        "id": "golden-policy",
+        "cwd": "<TARGET>",
+        "directory": "<ROOT>/program-io",
+        "node": "/golden/node",
+        "runner": "/golden/program_io_runner.js",
+        "bootstrap": "/golden/program_io_bootstrap.js",
+        "profile": "{}",
+        "profileDigest": "golden-digest",
+        "publicKey": "golden-public-key",
+        "privateKey": "golden-private-key",
+        "expiresAt": 1,
+        "writableRoots": [
+          "<TARGET>"
+        ],
+        "runtimeReadRoots": [],
+        "scratch": "<ROOT>/program-io/scratch",
+        "preflightPassed": true,
+        "browserPath": "/ms-playwright",
+        "backend": "apple-container-vm"
+      },
+      "BASH_ENV": "/dev/null",
+      "DYLD_INSERT_LIBRARIES": "",
+      "DYLD_LIBRARY_PATH": "",
+      "ENV": "/dev/null",
+      "GIT_CONFIG_GLOBAL": "/dev/null",
+      "GIT_CONFIG_NOSYSTEM": "1",
+      "GIT_DIR": "/dev/null",
+      "GIT_OPTIONAL_LOCKS": "0",
+      "GIT_WORK_TREE": "<TARGET>",
+      "HOME": "<ROOT>/program-io/provider-home",
+      "KILO_CONFIG_CONTENT": {
+        "model": "native-model",
+        "provider": {
+          "native": {}
+        },
+        "snapshot": false,
+        "lsp": false,
+        "formatter": false,
+        "mcp": {},
+        "tools": {
+          "*": false,
+          "bash": true,
+          "todowrite": true,
+          "read": false,
+          "glob": false,
+          "grep": false,
+          "write": false,
+          "edit": false,
+          "apply_patch": false,
+          "task": false,
+          "skill": false
+        },
+        "plugin": [
+          "<PLUGIN_URL>"
+        ],
+        "permission": {
+          "edit": "deny",
+          "bash": "allow",
+          "*": "deny",
+          "todowrite": "allow",
+          "external_directory": {
+            "*": "deny",
+            "<TARGET>": "allow",
+            "<TARGET>/**": "allow"
+          }
+        }
+      },
+      "KILO_CONFIG_DIR": "<ROOT>/program-io/provider-home/.config/kilo",
+      "KILO_DISABLE_AUTOUPDATE": "true",
+      "KILO_DISABLE_CLAUDE_CODE": "true",
+      "KILO_DISABLE_CLAUDE_CODE_PROMPT": "true",
+      "KILO_DISABLE_CLAUDE_CODE_SKILLS": "true",
+      "KILO_DISABLE_CODEBASE_INDEXING": "true",
+      "KILO_DISABLE_DEFAULT_PLUGINS": "true",
+      "KILO_DISABLE_EXTERNAL_SKILLS": "true",
+      "KILO_DISABLE_FFF": "true",
+      "KILO_DISABLE_LSP_DOWNLOAD": "true",
+      "KILO_DISABLE_PROJECT_CONFIG": "true",
+      "KILO_DISABLE_SKILL_SHELL": "true",
+      "LD_LIBRARY_PATH": "",
+      "LD_PRELOAD": "",
+      "NODE_OPTIONS": "",
+      "NODE_PATH": "",
+      "PATH": "<PATH>",
+      "SHELL": "/bin/sh",
+      "XDG_CACHE_HOME": "<ROOT>/program-io/provider-home/.cache",
+      "XDG_CONFIG_HOME": "<ROOT>/program-io/provider-home/.config",
+      "XDG_DATA_HOME": "<USER_HOME>/.local/share",
+      "XDG_STATE_HOME": "<ROOT>/program-io/provider-home/.local/state"
+    },
+    "transport": null
+  },
+  "approval": {
+    "binary": "<NODE>",
+    "args": [
+      "<FIXTURE>",
+      "--print-logs",
+      "--log-level",
+      "INFO",
+      "run",
+      "--format",
+      "json",
+      "--model",
+      "golden-model",
+      "--dir",
+      "<TARGET>",
+      "GOLDEN PROMPT\n\nNative tool protocol: use the exact schema supplied by this CLI. Never send an empty tool input. After a schema error, correct the missing fields before trying again; do not repeat the same invalid call. Kernel-isolated tool protocol: commands execute in a Linux VM with Node 24 and preinstalled Chromium/Playwright, regardless of the provider CLI host platform. Each bash command gets a fresh VM, destroyed before its result is accepted. Start, use and close any server in the same foreground check; no background server or PID survives to a later call. Use bash(command, description) for ALL project file operations. Native read/glob/grep/write/edit/task/skill/MCP tools are disabled. Use target-relative paths, shell cat/ls/grep for inspection and small quoted heredocs for implementation writes. This role is READ ONLY: only inspection commands (cat/ls/head/tail/sed/grep) are permitted; do not execute tests, Node programs, mkdir or writes. Review/approval must read each own test file and the canonical quality report using standalone cat commands. The VM confines every command and its children; HOME/cache/temp are private under verification/.agent-io. Host network, home, sockets and credentials are unavailable. Never use /tmp output paths, host credentials/configuration or unregistered execution tools. Emit AGENT_REPORT only in final assistant text.\nTarget scope: native filesystem tools may inspect only these approved roots: [\"<TARGET>\"]. Default glob/grep path is the target project. Never inspect parent directories, global configuration, credentials or orchestrator sessions. A scope denial happened before execution; correct the path and continue using target-relative files. Registered platform verifiers may be executed as supplied; do not read/search their installation. Emit AGENT_REPORT directly in the final assistant response, never write AGENT_REPORT.json in read-only/test roles."
+    ],
+    "env": {
+      "AGENT_GRAPH_KILO_CHECKS": {
+        "cwd": "<TARGET>",
+        "commands": [],
+        "testSourcesReadOnly": true,
+        "guardOwnedProcesses": true,
+        "scopeRoots": [
+          "<TARGET>"
+        ],
+        "programIo": {
+          "version": 1,
+          "id": "golden-policy",
+          "cwd": "<TARGET>",
+          "directory": "<ROOT>/program-io",
+          "node": "/golden/node",
+          "runner": "/golden/program_io_runner.js",
+          "bootstrap": "/golden/program_io_bootstrap.js",
+          "profile": "{}",
+          "profileDigest": "golden-digest",
+          "publicKey": "golden-public-key",
+          "privateKey": "golden-private-key",
+          "expiresAt": 1,
+          "writableRoots": [
+            "<TARGET>"
+          ],
+          "runtimeReadRoots": [],
+          "scratch": "<ROOT>/program-io/scratch",
+          "preflightPassed": true,
+          "browserPath": "/ms-playwright",
+          "backend": "apple-container-vm"
+        },
+        "readOnlyRole": true
+      },
+      "AGENT_GRAPH_PROGRAM_IO": {
+        "version": 1,
+        "id": "golden-policy",
+        "cwd": "<TARGET>",
+        "directory": "<ROOT>/program-io",
+        "node": "/golden/node",
+        "runner": "/golden/program_io_runner.js",
+        "bootstrap": "/golden/program_io_bootstrap.js",
+        "profile": "{}",
+        "profileDigest": "golden-digest",
+        "publicKey": "golden-public-key",
+        "privateKey": "golden-private-key",
+        "expiresAt": 1,
+        "writableRoots": [
+          "<TARGET>"
+        ],
+        "runtimeReadRoots": [],
+        "scratch": "<ROOT>/program-io/scratch",
+        "preflightPassed": true,
+        "browserPath": "/ms-playwright",
+        "backend": "apple-container-vm"
+      },
+      "BASH_ENV": "/dev/null",
+      "DYLD_INSERT_LIBRARIES": "",
+      "DYLD_LIBRARY_PATH": "",
+      "ENV": "/dev/null",
+      "GIT_CONFIG_GLOBAL": "/dev/null",
+      "GIT_CONFIG_NOSYSTEM": "1",
+      "GIT_DIR": "/dev/null",
+      "GIT_OPTIONAL_LOCKS": "0",
+      "GIT_WORK_TREE": "<TARGET>",
+      "HOME": "<ROOT>/program-io/provider-home",
+      "KILO_CONFIG_CONTENT": {
+        "model": "native-model",
+        "provider": {
+          "native": {}
+        },
+        "snapshot": false,
+        "lsp": false,
+        "formatter": false,
+        "mcp": {},
+        "tools": {
+          "*": false,
+          "bash": true,
+          "todowrite": true,
+          "read": false,
+          "glob": false,
+          "grep": false,
+          "write": false,
+          "edit": false,
+          "apply_patch": false,
+          "task": false,
+          "skill": false
+        },
+        "plugin": [
+          "<PLUGIN_URL>"
+        ],
+        "permission": {
+          "edit": "deny",
+          "bash": "allow",
+          "*": "deny",
+          "todowrite": "allow",
+          "external_directory": {
+            "*": "deny",
+            "<TARGET>": "allow",
+            "<TARGET>/**": "allow"
+          }
+        }
+      },
+      "KILO_CONFIG_DIR": "<ROOT>/program-io/provider-home/.config/kilo",
+      "KILO_DISABLE_AUTOUPDATE": "true",
+      "KILO_DISABLE_CLAUDE_CODE": "true",
+      "KILO_DISABLE_CLAUDE_CODE_PROMPT": "true",
+      "KILO_DISABLE_CLAUDE_CODE_SKILLS": "true",
+      "KILO_DISABLE_CODEBASE_INDEXING": "true",
+      "KILO_DISABLE_DEFAULT_PLUGINS": "true",
+      "KILO_DISABLE_EXTERNAL_SKILLS": "true",
+      "KILO_DISABLE_FFF": "true",
+      "KILO_DISABLE_LSP_DOWNLOAD": "true",
+      "KILO_DISABLE_PROJECT_CONFIG": "true",
+      "KILO_DISABLE_SKILL_SHELL": "true",
+      "LD_LIBRARY_PATH": "",
+      "LD_PRELOAD": "",
+      "NODE_OPTIONS": "",
+      "NODE_PATH": "",
+      "PATH": "<PATH>",
+      "SHELL": "/bin/sh",
+      "XDG_CACHE_HOME": "<ROOT>/program-io/provider-home/.cache",
+      "XDG_CONFIG_HOME": "<ROOT>/program-io/provider-home/.config",
+      "XDG_DATA_HOME": "<USER_HOME>/.local/share",
+      "XDG_STATE_HOME": "<ROOT>/program-io/provider-home/.local/state"
+    },
+    "transport": null
+  },
+  "interrupt": {
+    "binary": "<NODE>",
+    "args": [
+      "<FIXTURE>",
+      "--print-logs",
+      "--log-level",
+      "INFO",
+      "run",
+      "--format",
+      "json",
+      "--model",
+      "golden-model",
+      "--dir",
+      "<TARGET>",
+      "GOLDEN PROMPT\n\nNative tool protocol: use the exact schema supplied by this CLI. Never send an empty tool input. After a schema error, correct the missing fields before trying again; do not repeat the same invalid call. Kernel-isolated tool protocol: commands execute in a Linux VM with Node 24 and preinstalled Chromium/Playwright, regardless of the provider CLI host platform. Each bash command gets a fresh VM, destroyed before its result is accepted. Start, use and close any server in the same foreground check; no background server or PID survives to a later call. Use bash(command, description) for ALL project file operations. Native read/glob/grep/write/edit/task/skill/MCP tools are disabled. Use target-relative paths, shell cat/ls/grep for inspection and small quoted heredocs for implementation writes. This role is READ ONLY: only inspection commands (cat/ls/head/tail/sed/grep) are permitted; do not execute tests, Node programs, mkdir or writes. Review/approval must read each own test file and the canonical quality report using standalone cat commands. The VM confines every command and its children; HOME/cache/temp are private under verification/.agent-io. Host network, home, sockets and credentials are unavailable. Never use /tmp output paths, host credentials/configuration or unregistered execution tools. Emit AGENT_REPORT only in final assistant text.\nTarget scope: native filesystem tools may inspect only these approved roots: [\"<TARGET>\"]. Default glob/grep path is the target project. Never inspect parent directories, global configuration, credentials or orchestrator sessions. A scope denial happened before execution; correct the path and continue using target-relative files. Registered platform verifiers may be executed as supplied; do not read/search their installation. Emit AGENT_REPORT directly in the final assistant response, never write AGENT_REPORT.json in read-only/test roles."
+    ],
+    "env": {
+      "AGENT_GRAPH_KILO_CHECKS": {
+        "cwd": "<TARGET>",
+        "commands": [],
+        "testSourcesReadOnly": true,
+        "guardOwnedProcesses": true,
+        "scopeRoots": [
+          "<TARGET>"
+        ],
+        "programIo": {
+          "version": 1,
+          "id": "golden-policy",
+          "cwd": "<TARGET>",
+          "directory": "<ROOT>/program-io",
+          "node": "/golden/node",
+          "runner": "/golden/program_io_runner.js",
+          "bootstrap": "/golden/program_io_bootstrap.js",
+          "profile": "{}",
+          "profileDigest": "golden-digest",
+          "publicKey": "golden-public-key",
+          "privateKey": "golden-private-key",
+          "expiresAt": 1,
+          "writableRoots": [
+            "<TARGET>"
+          ],
+          "runtimeReadRoots": [],
+          "scratch": "<ROOT>/program-io/scratch",
+          "preflightPassed": true,
+          "browserPath": "/ms-playwright",
+          "backend": "apple-container-vm"
+        },
+        "readOnlyRole": true
+      },
+      "AGENT_GRAPH_PROGRAM_IO": {
+        "version": 1,
+        "id": "golden-policy",
+        "cwd": "<TARGET>",
+        "directory": "<ROOT>/program-io",
+        "node": "/golden/node",
+        "runner": "/golden/program_io_runner.js",
+        "bootstrap": "/golden/program_io_bootstrap.js",
+        "profile": "{}",
+        "profileDigest": "golden-digest",
+        "publicKey": "golden-public-key",
+        "privateKey": "golden-private-key",
+        "expiresAt": 1,
+        "writableRoots": [
+          "<TARGET>"
+        ],
+        "runtimeReadRoots": [],
+        "scratch": "<ROOT>/program-io/scratch",
+        "preflightPassed": true,
+        "browserPath": "/ms-playwright",
+        "backend": "apple-container-vm"
+      },
+      "BASH_ENV": "/dev/null",
+      "DYLD_INSERT_LIBRARIES": "",
+      "DYLD_LIBRARY_PATH": "",
+      "ENV": "/dev/null",
+      "GIT_CONFIG_GLOBAL": "/dev/null",
+      "GIT_CONFIG_NOSYSTEM": "1",
+      "GIT_DIR": "/dev/null",
+      "GIT_OPTIONAL_LOCKS": "0",
+      "GIT_WORK_TREE": "<TARGET>",
+      "HOME": "<ROOT>/program-io/provider-home",
+      "KILO_CONFIG_CONTENT": {
+        "model": "native-model",
+        "provider": {
+          "native": {}
+        },
+        "snapshot": false,
+        "lsp": false,
+        "formatter": false,
+        "mcp": {},
+        "tools": {
+          "*": false,
+          "bash": true,
+          "todowrite": true,
+          "read": false,
+          "glob": false,
+          "grep": false,
+          "write": false,
+          "edit": false,
+          "apply_patch": false,
+          "task": false,
+          "skill": false
+        },
+        "plugin": [
+          "<PLUGIN_URL>"
+        ],
+        "permission": {
+          "edit": "deny",
+          "bash": "allow",
+          "*": "deny",
+          "todowrite": "allow",
+          "external_directory": {
+            "*": "deny",
+            "<TARGET>": "allow",
+            "<TARGET>/**": "allow"
+          }
+        }
+      },
+      "KILO_CONFIG_DIR": "<ROOT>/program-io/provider-home/.config/kilo",
+      "KILO_DISABLE_AUTOUPDATE": "true",
+      "KILO_DISABLE_CLAUDE_CODE": "true",
+      "KILO_DISABLE_CLAUDE_CODE_PROMPT": "true",
+      "KILO_DISABLE_CLAUDE_CODE_SKILLS": "true",
+      "KILO_DISABLE_CODEBASE_INDEXING": "true",
+      "KILO_DISABLE_DEFAULT_PLUGINS": "true",
+      "KILO_DISABLE_EXTERNAL_SKILLS": "true",
+      "KILO_DISABLE_FFF": "true",
+      "KILO_DISABLE_LSP_DOWNLOAD": "true",
+      "KILO_DISABLE_PROJECT_CONFIG": "true",
+      "KILO_DISABLE_SKILL_SHELL": "true",
+      "LD_LIBRARY_PATH": "",
+      "LD_PRELOAD": "",
+      "NODE_OPTIONS": "",
+      "NODE_PATH": "",
+      "PATH": "<PATH>",
+      "SHELL": "/bin/sh",
+      "XDG_CACHE_HOME": "<ROOT>/program-io/provider-home/.cache",
+      "XDG_CONFIG_HOME": "<ROOT>/program-io/provider-home/.config",
+      "XDG_DATA_HOME": "<USER_HOME>/.local/share",
+      "XDG_STATE_HOME": "<ROOT>/program-io/provider-home/.local/state"
+    },
+    "transport": null
+  }
+}

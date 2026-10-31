@@ -1,0 +1,304 @@
+{
+  "planning": {
+    "binary": "<NODE>",
+    "args": [
+      "<FIXTURE>",
+      "--print-logs",
+      "--log-level",
+      "INFO",
+      "run",
+      "--format",
+      "json",
+      "--model",
+      "golden-model",
+      "--dir",
+      "<TARGET>",
+      "GOLDEN PROMPT\n\nNative tool protocol: use the exact schema supplied by this CLI. Never send an empty tool input. After a schema error, correct the missing fields before trying again; do not repeat the same invalid call. Use only permitted read-only tools: read(filePath), glob(pattern), grep(pattern) to inspect target files and prior actual test evidence. exec, exec_command, execute, bash, write and edit are unavailable in this read-only role; never call them or request shell/write permissions. For planning, use the supplied browser command/schema contract without reading the platform implementation.\nTarget scope: native filesystem tools may inspect only these approved roots: [\"<TARGET>\",\"<EXTRA>\"]. Default glob/grep path is the target project. Never inspect parent directories, global configuration, credentials or orchestrator sessions. A scope denial happened before execution; correct the path and continue using target-relative files. Registered platform verifiers may be executed as supplied; do not read/search their installation. Emit AGENT_REPORT directly in the final assistant response, never write AGENT_REPORT.json in read-only/test roles."
+    ],
+    "env": {
+      "AGENT_GRAPH_KILO_CHECKS": {
+        "cwd": "<TARGET>",
+        "commands": [],
+        "testSourcesReadOnly": true,
+        "guardOwnedProcesses": true,
+        "aliases": {
+          "npm test": "node --test"
+        },
+        "scopeRoots": [
+          "<TARGET>",
+          "<EXTRA>"
+        ]
+      },
+      "KILO_CONFIG_CONTENT": {
+        "plugin": [
+          "<PLUGIN_URL>"
+        ],
+        "permission": {
+          "edit": "deny",
+          "bash": "deny",
+          "external_directory": {
+            "*": "deny",
+            "<TARGET>": "allow",
+            "<TARGET>/**": "allow",
+            "<EXTRA>": "allow",
+            "<EXTRA>/**": "allow"
+          }
+        }
+      },
+      "PATH": "<PATH>"
+    },
+    "transport": null
+  },
+  "implementation": {
+    "binary": "<NODE>",
+    "args": [
+      "<FIXTURE>",
+      "--print-logs",
+      "--log-level",
+      "INFO",
+      "run",
+      "--format",
+      "json",
+      "--model",
+      "golden-model",
+      "--dir",
+      "<TARGET>",
+      "GOLDEN PROMPT\n\nNative tool protocol: use the exact schema supplied by this CLI. Never send an empty tool input. After a schema error, correct the missing fields before trying again; do not repeat the same invalid call. Use bash with command (string) and description (string) for shell commands, never exec or exec_command. The write tool requires both filePath (absolute path) and content (string). Keep each write small; never send {}. This test role cannot edit ANY source, tests, package or configuration. Execute exact registered checks and inspect via read/glob/grep or read-only shell commands. On first failure report FAIL with concrete diagnostics; implementation owns every repair. \nTarget scope: native filesystem tools may inspect only these approved roots: [\"<TARGET>\",\"<EXTRA>\"]. Default glob/grep path is the target project. Never inspect parent directories, global configuration, credentials or orchestrator sessions. A scope denial happened before execution; correct the path and continue using target-relative files. Registered platform verifiers may be executed as supplied; do not read/search their installation. Emit AGENT_REPORT directly in the final assistant response, never write AGENT_REPORT.json in read-only/test roles."
+    ],
+    "env": {
+      "AGENT_GRAPH_KILO_CHECKS": {
+        "cwd": "<TARGET>",
+        "commands": [
+          "npm test"
+        ],
+        "testSourcesReadOnly": true,
+        "guardOwnedProcesses": true,
+        "aliases": {
+          "npm test": "node --test"
+        },
+        "scopeRoots": [
+          "<TARGET>",
+          "<EXTRA>"
+        ]
+      },
+      "KILO_CONFIG_CONTENT": {
+        "plugin": [
+          "<PLUGIN_URL>"
+        ],
+        "permission": {
+          "edit": "allow",
+          "external_directory": {
+            "*": "deny",
+            "<TARGET>": "allow",
+            "<TARGET>/**": "allow",
+            "<EXTRA>": "allow",
+            "<EXTRA>/**": "allow"
+          }
+        }
+      },
+      "PATH": "<PATH>"
+    },
+    "transport": null
+  },
+  "test": {
+    "binary": "<NODE>",
+    "args": [
+      "<FIXTURE>",
+      "--print-logs",
+      "--log-level",
+      "INFO",
+      "run",
+      "--format",
+      "json",
+      "--model",
+      "golden-model",
+      "--dir",
+      "<TARGET>",
+      "GOLDEN PROMPT\n\nNative tool protocol: use the exact schema supplied by this CLI. Never send an empty tool input. After a schema error, correct the missing fields before trying again; do not repeat the same invalid call. Use bash with command (string) and description (string) for shell commands, never exec or exec_command. The write tool requires both filePath (absolute path) and content (string). Keep each write small; never send {}. This test role cannot edit ANY source, tests, package or configuration. Execute exact registered checks and inspect via read/glob/grep or read-only shell commands. On first failure report FAIL with concrete diagnostics; implementation owns every repair. \nTarget scope: native filesystem tools may inspect only these approved roots: [\"<TARGET>\",\"<EXTRA>\"]. Default glob/grep path is the target project. Never inspect parent directories, global configuration, credentials or orchestrator sessions. A scope denial happened before execution; correct the path and continue using target-relative files. Registered platform verifiers may be executed as supplied; do not read/search their installation. Emit AGENT_REPORT directly in the final assistant response, never write AGENT_REPORT.json in read-only/test roles."
+    ],
+    "env": {
+      "AGENT_GRAPH_KILO_CHECKS": {
+        "cwd": "<TARGET>",
+        "commands": [
+          "npm test"
+        ],
+        "testSourcesReadOnly": true,
+        "guardOwnedProcesses": true,
+        "aliases": {
+          "npm test": "node --test"
+        },
+        "scopeRoots": [
+          "<TARGET>",
+          "<EXTRA>"
+        ]
+      },
+      "KILO_CONFIG_CONTENT": {
+        "plugin": [
+          "<PLUGIN_URL>"
+        ],
+        "permission": {
+          "edit": "allow",
+          "external_directory": {
+            "*": "deny",
+            "<TARGET>": "allow",
+            "<TARGET>/**": "allow",
+            "<EXTRA>": "allow",
+            "<EXTRA>/**": "allow"
+          }
+        }
+      },
+      "PATH": "<PATH>"
+    },
+    "transport": null
+  },
+  "review": {
+    "binary": "<NODE>",
+    "args": [
+      "<FIXTURE>",
+      "--print-logs",
+      "--log-level",
+      "INFO",
+      "run",
+      "--format",
+      "json",
+      "--model",
+      "golden-model",
+      "--dir",
+      "<TARGET>",
+      "GOLDEN PROMPT\n\nNative tool protocol: use the exact schema supplied by this CLI. Never send an empty tool input. After a schema error, correct the missing fields before trying again; do not repeat the same invalid call. Use only permitted read-only tools: read(filePath), glob(pattern), grep(pattern) to inspect target files and prior actual test evidence. exec, exec_command, execute, bash, write and edit are unavailable in this read-only role; never call them or request shell/write permissions. For planning, use the supplied browser command/schema contract without reading the platform implementation.\nTarget scope: native filesystem tools may inspect only these approved roots: [\"<TARGET>\",\"<EXTRA>\"]. Default glob/grep path is the target project. Never inspect parent directories, global configuration, credentials or orchestrator sessions. A scope denial happened before execution; correct the path and continue using target-relative files. Registered platform verifiers may be executed as supplied; do not read/search their installation. Emit AGENT_REPORT directly in the final assistant response, never write AGENT_REPORT.json in read-only/test roles."
+    ],
+    "env": {
+      "AGENT_GRAPH_KILO_CHECKS": {
+        "cwd": "<TARGET>",
+        "commands": [],
+        "testSourcesReadOnly": true,
+        "guardOwnedProcesses": true,
+        "aliases": {
+          "npm test": "node --test"
+        },
+        "scopeRoots": [
+          "<TARGET>",
+          "<EXTRA>"
+        ]
+      },
+      "KILO_CONFIG_CONTENT": {
+        "plugin": [
+          "<PLUGIN_URL>"
+        ],
+        "permission": {
+          "edit": "deny",
+          "bash": "deny",
+          "external_directory": {
+            "*": "deny",
+            "<TARGET>": "allow",
+            "<TARGET>/**": "allow",
+            "<EXTRA>": "allow",
+            "<EXTRA>/**": "allow"
+          }
+        }
+      },
+      "PATH": "<PATH>"
+    },
+    "transport": null
+  },
+  "approval": {
+    "binary": "<NODE>",
+    "args": [
+      "<FIXTURE>",
+      "--print-logs",
+      "--log-level",
+      "INFO",
+      "run",
+      "--format",
+      "json",
+      "--model",
+      "golden-model",
+      "--dir",
+      "<TARGET>",
+      "GOLDEN PROMPT\n\nNative tool protocol: use the exact schema supplied by this CLI. Never send an empty tool input. After a schema error, correct the missing fields before trying again; do not repeat the same invalid call. Use only permitted read-only tools: read(filePath), glob(pattern), grep(pattern) to inspect target files and prior actual test evidence. exec, exec_command, execute, bash, write and edit are unavailable in this read-only role; never call them or request shell/write permissions. For planning, use the supplied browser command/schema contract without reading the platform implementation.\nTarget scope: native filesystem tools may inspect only these approved roots: [\"<TARGET>\",\"<EXTRA>\"]. Default glob/grep path is the target project. Never inspect parent directories, global configuration, credentials or orchestrator sessions. A scope denial happened before execution; correct the path and continue using target-relative files. Registered platform verifiers may be executed as supplied; do not read/search their installation. Emit AGENT_REPORT directly in the final assistant response, never write AGENT_REPORT.json in read-only/test roles."
+    ],
+    "env": {
+      "AGENT_GRAPH_KILO_CHECKS": {
+        "cwd": "<TARGET>",
+        "commands": [],
+        "testSourcesReadOnly": true,
+        "guardOwnedProcesses": true,
+        "aliases": {
+          "npm test": "node --test"
+        },
+        "scopeRoots": [
+          "<TARGET>",
+          "<EXTRA>"
+        ]
+      },
+      "KILO_CONFIG_CONTENT": {
+        "plugin": [
+          "<PLUGIN_URL>"
+        ],
+        "permission": {
+          "edit": "deny",
+          "bash": "deny",
+          "external_directory": {
+            "*": "deny",
+            "<TARGET>": "allow",
+            "<TARGET>/**": "allow",
+            "<EXTRA>": "allow",
+            "<EXTRA>/**": "allow"
+          }
+        }
+      },
+      "PATH": "<PATH>"
+    },
+    "transport": null
+  },
+  "interrupt": {
+    "binary": "<NODE>",
+    "args": [
+      "<FIXTURE>",
+      "--print-logs",
+      "--log-level",
+      "INFO",
+      "run",
+      "--format",
+      "json",
+      "--model",
+      "golden-model",
+      "--dir",
+      "<TARGET>",
+      "GOLDEN PROMPT\n\nNative tool protocol: use the exact schema supplied by this CLI. Never send an empty tool input. After a schema error, correct the missing fields before trying again; do not repeat the same invalid call. Use only permitted read-only tools: read(filePath), glob(pattern), grep(pattern) to inspect target files and prior actual test evidence. exec, exec_command, execute, bash, write and edit are unavailable in this read-only role; never call them or request shell/write permissions. For planning, use the supplied browser command/schema contract without reading the platform implementation.\nTarget scope: native filesystem tools may inspect only these approved roots: [\"<TARGET>\",\"<EXTRA>\"]. Default glob/grep path is the target project. Never inspect parent directories, global configuration, credentials or orchestrator sessions. A scope denial happened before execution; correct the path and continue using target-relative files. Registered platform verifiers may be executed as supplied; do not read/search their installation. Emit AGENT_REPORT directly in the final assistant response, never write AGENT_REPORT.json in read-only/test roles."
+    ],
+    "env": {
+      "AGENT_GRAPH_KILO_CHECKS": {
+        "cwd": "<TARGET>",
+        "commands": [],
+        "testSourcesReadOnly": true,
+        "guardOwnedProcesses": true,
+        "aliases": {
+          "npm test": "node --test"
+        },
+        "scopeRoots": [
+          "<TARGET>",
+          "<EXTRA>"
+        ]
+      },
+      "KILO_CONFIG_CONTENT": {
+        "plugin": [
+          "<PLUGIN_URL>"
+        ],
+        "permission": {
+          "edit": "deny",
+          "bash": "deny",
+          "external_directory": {
+            "*": "deny",
+            "<TARGET>": "allow",
+            "<TARGET>/**": "allow",
+            "<EXTRA>": "allow",
+            "<EXTRA>/**": "allow"
+          }
+        }
+      },
+      "PATH": "<PATH>"
+    },
+    "transport": null
+  }
+}

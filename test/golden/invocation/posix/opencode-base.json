@@ -1,0 +1,144 @@
+{
+  "planning": {
+    "binary": "<NODE>",
+    "args": [
+      "<FIXTURE>",
+      "run",
+      "--format",
+      "json",
+      "--model",
+      "golden-model",
+      "--dir",
+      "<TARGET>",
+      "GOLDEN PROMPT"
+    ],
+    "env": {
+      "OPENCODE_CONFIG_CONTENT": {
+        "permission": {
+          "edit": "deny",
+          "bash": "deny"
+        }
+      },
+      "PATH": "<PATH>"
+    },
+    "transport": null
+  },
+  "implementation": {
+    "binary": "<NODE>",
+    "args": [
+      "<FIXTURE>",
+      "run",
+      "--format",
+      "json",
+      "--model",
+      "golden-model",
+      "--dir",
+      "<TARGET>",
+      "GOLDEN PROMPT"
+    ],
+    "env": {
+      "OPENCODE_CONFIG_CONTENT": {
+        "permission": {
+          "edit": "allow"
+        }
+      },
+      "PATH": "<PATH>"
+    },
+    "transport": null
+  },
+  "test": {
+    "binary": "<NODE>",
+    "args": [
+      "<FIXTURE>",
+      "run",
+      "--format",
+      "json",
+      "--model",
+      "golden-model",
+      "--dir",
+      "<TARGET>",
+      "GOLDEN PROMPT"
+    ],
+    "env": {
+      "OPENCODE_CONFIG_CONTENT": {
+        "permission": {
+          "edit": "allow"
+        }
+      },
+      "PATH": "<PATH>"
+    },
+    "transport": null
+  },
+  "review": {
+    "binary": "<NODE>",
+    "args": [
+      "<FIXTURE>",
+      "run",
+      "--format",
+      "json",
+      "--model",
+      "golden-model",
+      "--dir",
+      "<TARGET>",
+      "GOLDEN PROMPT"
+    ],
+    "env": {
+      "OPENCODE_CONFIG_CONTENT": {
+        "permission": {
+          "edit": "deny",
+          "bash": "deny"
+        }
+      },
+      "PATH": "<PATH>"
+    },
+    "transport": null
+  },
+  "approval": {
+    "binary": "<NODE>",
+    "args": [
+      "<FIXTURE>",
+      "run",
+      "--format",
+      "json",
+      "--model",
+      "golden-model",
+      "--dir",
+      "<TARGET>",
+      "GOLDEN PROMPT"
+    ],
+    "env": {
+      "OPENCODE_CONFIG_CONTENT": {
+        "permission": {
+          "edit": "deny",
+          "bash": "deny"
+        }
+      },
+      "PATH": "<PATH>"
+    },
+    "transport": null
+  },
+  "interrupt": {
+    "binary": "<NODE>",
+    "args": [
+      "<FIXTURE>",
+      "run",
+      "--format",
+      "json",
+      "--model",
+      "golden-model",
+      "--dir",
+      "<TARGET>",
+      "GOLDEN PROMPT"
+    ],
+    "env": {
+      "OPENCODE_CONFIG_CONTENT": {
+        "permission": {
+          "edit": "deny",
+          "bash": "deny"
+        }
+      },
+      "PATH": "<PATH>"
+    },
+    "transport": null
+  }
+}

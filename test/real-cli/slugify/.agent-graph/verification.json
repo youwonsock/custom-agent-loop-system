@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "protectedFiles": ["test/slug.test.mjs", "package.json"],
+  "checks": [
+    {
+      "id": "unit",
+      "command": "node --test test/slug.test.mjs",
+      "requirements": ["REQ-001", "REQ-002"]
+    }
+  ],
+  "requiredFiles": [{ "path": "README.md", "requirements": ["REQ-002"] }]
+}

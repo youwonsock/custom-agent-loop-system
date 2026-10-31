@@ -74,9 +74,12 @@ flowchart LR
 | 테스트 | 고정 대상 |
 | --- | --- |
 | `prompt_golden.test.ts` | 역할·자동화 조합별 노드 프롬프트와 복구 메시지 전문 |
-| `invocation_golden.test.ts` | CLI·역할·옵션별 인자, 앱이 바꾼 환경 변수, transport (`win32`/`posix`) |
+| `invocation_golden.test.ts` | CLI·역할·옵션별 인자, 앱이 바꾼 환경 변수, transport (`win32`/`posix`). 프로그램 I/O 분기는 `prepareProgramIo`만 대체해 VM 없이 posix에서 비교 |
+| `shell_judgment.test.ts` | 같은 셸 명령을 단어 분리·조회 분할·검사 키·검증 명령·파일 변경 판정이 각각 어떻게 보는지 |
 | `runtime_characterization.test.ts` | 기존 시나리오가 닿지 않던 정지 경로의 전체 세션 상태 |
 | `app_workflow`·`app_recovery`·`app_autonomy`·`app_contracts.test.ts` | 서버·워커·가짜 CLI를 사용한 시나리오 (기본 흐름·승인 / 재시도·복구·수명 / 자율 실행·범위 / 검증 계약·예산). 공통 서버 준비는 `app_harness.test.ts` |
 | `run_policy.test.ts`, `isolation.test.ts` | 플래그·CLI 조합 결정과 격리 안내 |
+
+VM 격리 동작은 `npm run verify:vm`이 macOS에서 확인한다. CI는 VM 런타임을 준비하지 않으므로 해당 테스트 4개를 건너뛴다. 실제 CLI 회귀는 모델 사용량이 들어 `scripts/real-cli-regression.js`로 따로 실행한다.
 
 V8 커버리지는 워커 프로세스 코드를 적게 집계한다. 경로 도달 여부는 빌드 산출물에 probe를 넣어 확인한다.

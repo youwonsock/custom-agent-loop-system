@@ -24,10 +24,34 @@ import { ProcessSupervisor } from "./process_supervisor";
 import { buildInvocation } from "./invocation";
 import { preExecutionDenied } from "./event_evidence";
 import { ToolFailureTracker } from "./tool_failures";
-import { vmRuntimeAvailable } from "./program_io_vm";
+import { vmRuntimeStatus } from "./program_io_vm";
 
 const mac = process.platform === "darwin",
   sq = (s: string) => "'" + s.replace(/'/g, "'\\''") + "'";
+// verify:vm sets AGENT_GRAPH_REQUIRE_VM so a missing or stale runtime fails instead of skipping.
+const vmSkip = !mac
+  ? "macOS only"
+  : process.env.AGENT_GRAPH_REQUIRE_VM === "1" || vmRuntimeStatus() === "ready"
+    ? false
+    : `VM runtime ${vmRuntimeStatus()}; run npm run sandbox:prepare`;
+// The Seatbelt profile reads only Node's own prefix. Homebrew Node loads libuv and
+// others from outside it and cannot start there. CI never skips these for that reason.
+function seatbeltSkipReason(): string | false {
+  if (!mac) return "macOS only";
+  if (process.env.CI) return false;
+  const prefix = path.dirname(path.dirname(fs.realpathSync(process.execPath)));
+  const probe = spawnSync("/usr/bin/sandbox-exec", [
+    "-p",
+    `(version 1)(allow default)(deny file-read* (subpath "/opt/homebrew") (subpath "/usr/local"))(allow file-read* (subpath ${JSON.stringify(prefix)}))`,
+    process.execPath,
+    "-e",
+    "0",
+  ]);
+  return probe.status === 0
+    ? false
+    : `Seatbelt tests need a Node that loads only from its own prefix, such as an official build: ${prefix}`;
+}
+const seatbeltSkip = seatbeltSkipReason();
 async function workspace(
   t: { after(fn: () => Promise<unknown>): unknown },
   role: "implementation" | "test" | "review" = "implementation",
@@ -80,7 +104,7 @@ function run(command: string, policy: ProgramIoPolicy) {
 }
 test(
   "kernel confinement blocks direct, child, symlink, hardlink, listing, stat and outside writes without exposing host secrets",
-  { skip: !mac },
+  { skip: seatbeltSkip },
   async (t) => {
     const { policy, outside, target } = await workspace(t);
     const code = `const f=require('node:fs'),c=require('node:child_process'),out=${JSON.stringify(outside)};let denied=0;for(const fn of [()=>f.readFileSync(out+'/sentinel.txt'),()=>f.writeFileSync(out+'/sentinel.txt','bad'),()=>f.readdirSync(out),()=>f.statSync(out+'/sentinel.txt'),()=>f.linkSync(out+'/sentinel.txt','link'),()=>{f.symlinkSync(out,'escape');f.readFileSync('escape/sentinel.txt')},()=>f.linkSync(${JSON.stringify(policy.runner)},'runtime-link'),()=>f.writeFileSync('frozen.txt','bad')]){try{fn()}catch(e){if(['EPERM','EACCES'].includes(e.code))denied++}}const r=c.spawnSync(process.execPath,['-e',"try{require('node:fs').readFileSync(process.argv[1]);process.exit(7)}catch(e){process.exit(e.code==='EPERM'?0:8)}",out+'/sentinel.txt']);f.writeFileSync('inside-ok.txt','yes');console.log(JSON.stringify({denied,child:r.status,secret:!!process.env.AGENT_GRAPH_PROGRAM_IO||!!process.env.AGENT_GRAPH_TEST_SECRET,home:process.env.HOME,tmp:process.env.TMPDIR}));`;
@@ -119,7 +143,7 @@ test(
 );
 test(
   "test and review kernel profiles prevent product writes while preserving scratch, exact exit codes and read evidence",
-  { skip: !mac },
+  { skip: seatbeltSkip },
   async (t) => {
     for (const role of ["test", "review"] as const) {
       const { policy, target } = await workspace(t, role);
@@ -143,7 +167,7 @@ test(
 );
 test(
   "signed broker receipts reject modified/replayed/unwrapped evidence and preserve failing registered checks",
-  { skip: !mac },
+  { skip: seatbeltSkip },
   async (t) => {
     const { policy } = await workspace(t);
     const command = "node --test verification/check.test.cjs";
@@ -182,7 +206,7 @@ test(
 );
 test(
   "isolated hooks disable alternate tool hosts and retain strict test/readonly command policies",
-  { skip: !mac },
+  { skip: seatbeltSkip },
   async (t) => {
     const { policy, target } = await workspace(t);
     const hooks = kiloCheckHooks({
@@ -248,7 +272,7 @@ test(
 );
 test(
   "registered-check and process-name rejections remain pre-execution denials while genuine unwrapped executions fail closed",
-  { skip: !mac },
+  { skip: seatbeltSkip },
   async (t) => {
     const { policy, target } = await workspace(t);
     const check = "npm test > verification/model-tests.txt 2>&1",
@@ -316,7 +340,7 @@ test(
 );
 test(
   "signed after-hook evidence authenticates CLI versions retaining original tool inputs",
-  { skip: !mac },
+  { skip: seatbeltSkip },
   async (t) => {
     const { policy, target } = await workspace(t);
     const hooks = kiloCheckHooks({
@@ -407,7 +431,7 @@ test(
 );
 test(
   "resumed model context normalizes authenticated prior-attempt commands and empty inputs use bounded schema recovery",
-  { skip: !mac },
+  { skip: seatbeltSkip },
   async (t) => {
     const { policy, target, root } = await workspace(t);
     const earlier = prepareProgramIo({
@@ -518,7 +542,7 @@ test(
 );
 test(
   "native supervisor authenticates wrapped command exits and inspection evidence before the success gate",
-  { skip: !mac },
+  { skip: seatbeltSkip },
   async (t) => {
     const { policy, root, target } = await workspace(t);
     fs.mkdirSync(path.join(target, "verification"), { recursive: true });
@@ -615,7 +639,7 @@ test(
           },
         },
       );
-    if (!vmRuntimeAvailable()) {
+    if (vmSkip) {
       await assert.rejects(build(), /IO_UNAVAILABLE/);
       return;
     }
@@ -652,7 +676,7 @@ test(
 );
 test(
   "isolated VM programs cannot use host loopback services as filesystem delegates",
-  { skip: !mac || !vmRuntimeAvailable() },
+  { skip: vmSkip },
   async (t) => {
     const { policy } = await workspace(
       t,
@@ -678,7 +702,7 @@ test(
 );
 test(
   "VM boundary blocks host files, guest outside writes, and detached processes are destroyed before command acceptance",
-  { skip: !mac || !vmRuntimeAvailable() },
+  { skip: vmSkip },
   async (t) => {
     const { policy, outside, target } = await workspace(
       t,
@@ -710,7 +734,7 @@ test(
 );
 test(
   "VM Test and review mounts preserve product files while permitting owned verification scratch",
-  { skip: !mac || !vmRuntimeAvailable() },
+  { skip: vmSkip },
   async (t) => {
     for (const role of ["test", "review"] as const) {
       const { policy, target } = await workspace(t, role, "apple-container-vm");
@@ -732,7 +756,7 @@ test(
 );
 test(
   "controller cleans only an orphaned policy VM and retains invalid completion evidence",
-  { skip: !mac || !vmRuntimeAvailable() },
+  { skip: vmSkip },
   async (t) => {
     const { policy } = await workspace(
       t,
@@ -775,3 +799,28 @@ test(
     );
   },
 );
+test("VM runtime status separates missing, stale and corrupt descriptors without starting anything", async (t) => {
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), "io-status-")),
+    file = path.join(root, "runtime.json"),
+    saved = process.env.AGENT_GRAPH_IO_VM_RUNTIME;
+  t.after(async () => {
+    if (saved === undefined) delete process.env.AGENT_GRAPH_IO_VM_RUNTIME;
+    else process.env.AGENT_GRAPH_IO_VM_RUNTIME = saved;
+    await fsp.rm(root, { recursive: true, force: true });
+  });
+  process.env.AGENT_GRAPH_IO_VM_RUNTIME = file;
+  assert.equal(vmRuntimeStatus(), "missing");
+  if (!fs.existsSync("/opt/homebrew/bin/container")) return;
+  fs.writeFileSync(file, "{not json");
+  assert.equal(vmRuntimeStatus(), "stale");
+  fs.writeFileSync(file, JSON.stringify({ lockDigest: "other" }));
+  assert.equal(vmRuntimeStatus(), "stale");
+  const { lockDigest } = JSON.parse(
+    fs.readFileSync(
+      path.resolve(__dirname, "../../program_io_dependencies.json"),
+      "utf8",
+    ),
+  );
+  fs.writeFileSync(file, JSON.stringify({ lockDigest }));
+  assert.equal(vmRuntimeStatus(), "ready");
+});

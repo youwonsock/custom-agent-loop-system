@@ -121,15 +121,19 @@ function capture(command, args, cwd) {
 }
 async function main() {
   const suite = process.argv[2];
-  if (!["platform", "browser"].includes(suite))
-    throw new Error("Usage: npm run verify:platform | npm run verify:browser");
+  if (!["platform", "browser", "vm"].includes(suite))
+    throw new Error(
+      "Usage: npm run verify:platform | npm run verify:browser | npm run verify:vm",
+    );
+  // A missing or stale VM runtime fails this suite instead of skipping its tests.
+  if (suite === "vm") process.env.AGENT_GRAPH_REQUIRE_VM = "1";
   const cwd = path.resolve(__dirname, ".."),
     npm = process.env.npm_execpath;
   if (!npm) throw new Error("Run verification through npm run.");
   const script = (name) => [process.execPath, npm, "run", name];
   const steps =
-    suite === "browser"
-      ? ["build", "test:e2e"].map((name) => ({
+    suite !== "platform"
+      ? ["build", suite === "vm" ? "test:vm" : "test:e2e"].map((name) => ({
           name: name.replaceAll(":", "-"),
           command: script(name),
         }))

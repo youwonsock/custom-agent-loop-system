@@ -263,6 +263,19 @@ test("prompt goldens: autonomous graph with a locked contract, budgets and repai
         }),
       ),
     );
+  // Only the check still missing a passing receipt may be listed as remaining.
+  matchGolden(
+    "auto-locked-test-partial-receipts.txt",
+    prompt(
+      lockedSession(),
+      "test",
+      visit("test", {
+        id: "v4-test",
+        stageDeadlineAt: "2026-01-01T00:10:00.000Z",
+        verifiedCommands: [receipt("npm test")],
+      }),
+    ),
+  );
 });
 test("prompt goldens: access, research, operator message and recovery variants", (t) => {
   t.mock.timers.enable({ apis: ["Date"], now });
