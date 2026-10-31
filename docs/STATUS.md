@@ -6,10 +6,10 @@
 
 | 항목 | 상태 |
 | --- | --- |
-| 기준 커밋 | `main` `5f24658` (통합 계획 완료) |
-| 원격 CI | PR #16~#22 병합 전 3개 OS와 브라우저 통과 |
+| 기준 커밋 | `main` `23b2854` (통합 계획과 앱 실행기 수정 완료) |
+| 원격 CI | PR #16~#24 병합 전 3개 OS와 브라우저 통과, `23b2854` main CI 성공 |
 | 로컬 검사 (macOS 26 arm64, 공식 Node 24.22.2) | `verify:platform` 10단계 통과: 단위 360개 중 358 통과·0 실패·Windows 전용 2 건너뜀, tooling 10/10, audit high 이상 0건(moderate 3건은 아래 "수용한 위험"). `verify:browser` 27/27. `verify:vm` 17/17 |
-| 실제 모델 호출 | G4 재실행 통과(5단계). Claude Haiku와 Kilo 무료 모델 모두 수동 개입 없이 `SUCCESS`, Kilo VM 명령 26/26 정상 |
+| 실제 모델 호출 | G4 재실행 통과(5단계). Claude Haiku와 Kilo 무료 모델 모두 수동 개입 없이 `SUCCESS`, Kilo VM 명령 26/26 정상. 브라우저 검증과 자체 테스트를 끈 시나리오이며 6·7단계 이후에는 재실행하지 않았다 |
 
 ## 완료한 작업 (2026-10-29 ~ 10-30)
 
@@ -112,16 +112,11 @@
 
 동작 불변 커밋에서 G2가 달라지면 수정하지 않고 되돌린 뒤 원인부터 찾는다.
 
-### 남은 사용자 환경 정리
+### 사용자 환경
 
-코드 작업과 CI 확인은 끝났다(PR #16: Ubuntu에서 posix 골든 일치, 3개 OS 통과). 남은 것은 사용자 환경 정리다.
+공식 Node 24.22.2를 `~/.local/opt/node-24`에 설치하고 `~/.zprofile`의 PATH 앞에 두었다. `.git/config`의 빈 `user.name`을 지웠고, 이 저장소의 push는 `gh` 계정을 쓰도록 저장소 설정에만 등록했다. `~/.npm-cache`의 root 소유 캐시는 `_cacache.root-owned-backup`으로 옮겨 두었고, 지우려면 `sudo`가 필요하다.
 
-| 작업 | 완료 기준 |
-| --- | --- |
-| 공식 빌드 Node 24 설치. Homebrew Node는 `libuv`를 외부에 두어 Seatbelt 테스트 8개를 건너뛴다 | `node -v`가 v24 |
-| `~/.npm-cache` 소유권 복구 (`sudo`는 사용자 작업). 지금은 임시 캐시로 설치했다 | 기본 캐시로 `npm ci` 성공 |
-| `.git/config`의 빈 `user.name` 항목 정리. 전역 설정을 가려 `git commit`이 실패하며, 통합 계획의 커밋은 `-c user.name=SC_Logan`으로 했다 | 옵션 없이 커밋 가능 |
-| `git push` 인증. 키체인 계정(SC-Logan)에 저장소 쓰기 권한이 없어 통합 계획은 push마다 `gh` 계정을 지정했다 | `gh auth setup-git` 후 옵션 없이 push 가능 |
+앱 실행기는 로그인 셸의 `node`를 먼저 쓰고 Homebrew 빌드는 다른 Node 24 이상이 없을 때만 쓴다(PR #24).
 
 Codex는 사용자 결정으로 G4에서 제외했다. Codex 경로는 가짜 이벤트로만 검증되었고, 실제 Codex가 명령을 셸로 감싸는지도 확인하지 못했다.
 
@@ -135,9 +130,22 @@ Codex는 사용자 결정으로 G4에서 제외했다. Codex 경로는 가짜 �
 
 보류: 테스트 시간 단축(macOS·Ubuntu는 CI 작업 전체가 2.5~3.5분이고 Windows만 약 9분이다), 자동화 플래그 제거, `src/core` 폴더 재구성, 테스트 fixture 통합, 저장 필드 이름 변경.
 
+## 후속 계획 (2026-10-31)
+
+프로젝트 재분석에서 나온 약점을 고친다. 단계마다 PR을 만들어 CI 통과 후 병합한다. 라이선스는 사용자 선택 전이라 넣지 않았고, Codex는 G4 제외를 유지한다.
+
+| 단계 | 내용 | 완료 기준 |
+| --- | --- | --- |
+| 0 | 문서 갱신, CI 중복 실행 제거 | 문서가 현재 상태와 일치, PR 검사 4개 |
+| 1 | 서버와 화면이 있는 고정 시나리오로 기본 자율 프리셋을 실제 모델로 실행 | Claude 수동 개입 없이 `SUCCESS`. Kilo VM 명령 전부 정상, 격리 이탈 0건 |
+| 2 | 제어 큐 ack 실패, 재시작 복구, 잠금 가드 회수 | ack 실패에도 실행 중 세션의 STOP이 처리됨 |
+| 3 | `testSourceGuard`를 끈 그래프의 검토·승인과 계획·중단 역할의 파일 변경 판정 | `node -e`로 파일을 바꾼 읽기 전용 역할이 반려됨 |
+| 4 | `MutationTracker.observe`, `evidenceGates`, `judge` 분해 | 복잡도 15 이하, `runtime.ts` 1,200행 미만, 골든 diff 0 |
+| 5 | VM 테스트의 CI 실행 또는 PR 강제, 실제 CLI 최종 재실행 | VM 검사가 CI에서 돌거나 PR에서 강제됨 |
+
 ## 브랜치
 
-통합 계획 전에 작업 브랜치를 모두 정리했다. 그 후 병합된 `harden/verification-gaps`와 `stage2/`~`stage7/` 브랜치 7개, `docs/status-after-plan`은 원격에 남아 있으며 모두 `main`에 포함되어 지워도 된다.
+통합 계획 전에 작업 브랜치를 모두 정리했다. 그 후 병합된 `harden/verification-gaps`, `stage2/`~`stage7/`, `docs/status-after-plan`, `fix/launcher-official-node`는 원격에 남아 있으며 모두 `main`에 포함되어 지워도 된다.
 
 병합하지 않은 이전 브랜치 2개는 삭제 전에 로컬 태그로 보존했다(2단계에서 이 복사본의 태그를 다시 만들었다). 둘 다 지금은 제거된 VS Code 확장·데스크톱 앱 구조의 코드이며(`8.0.0`, `3.4.1`), 현재 `main`(`4.0.0` 구조)에 그대로 병합할 수 없다. 태그는 원격에 올리지 않았으므로 해당 복사본에만 있다. 다른 복사본에서는 `9f39ebf`를 원격 `refs/pull/7/head`에서 받을 수 있지만 `87f2b2c`는 원격 참조가 없다.
 
