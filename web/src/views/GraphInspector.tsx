@@ -3,6 +3,7 @@ import { id } from "../api";
 import { typeMeta } from "../nodeMeta";
 import { BindingEditor } from "../Binding";
 import type { GraphInspectorModel } from "./viewModels";
+import { autonomousDefaults } from "../../../src/shared/graph_defaults";
 
 export default function GraphInspector({
   controller,
@@ -290,18 +291,7 @@ export default function GraphInspector({
                   onChange={(e) =>
                     change((g) => {
                       if (e.target.checked)
-                        g.automation = {
-                          maxRepairCycles: 5,
-                          nativeApprovalReview: false,
-                          browserVerification: true,
-                          verificationContract: true,
-                          authoredNodeTests: true,
-                          testSourceGuard: true,
-                          reserveFinalizationBudget: true,
-                          guardOwnedProcesses: true,
-                          targetScopeGuard: true,
-                          programIoGuard: true,
-                        };
+                        g.automation = autonomousDefaults(false);
                       else delete g.automation;
                     })
                   }

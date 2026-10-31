@@ -166,6 +166,7 @@ test("without the test source guard, a hidden test-role product edit is found by
   const s = await setup(t);
   const graph = await s.store.createGraph({ template: "autonomous" });
   graph.automation!.verificationContract = false;
+  graph.automation!.authoredNodeTests = false;
   graph.automation!.browserVerification = false;
   graph.automation!.testSourceGuard = false;
   const state = await settle(

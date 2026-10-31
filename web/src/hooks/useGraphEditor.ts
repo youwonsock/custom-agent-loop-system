@@ -10,6 +10,7 @@ import { typeMeta } from "../nodeMeta";
 import { backupKey, fingerprint, clientDiagnostics } from "../studioTypes";
 import { isolationNotes } from "../../../src/shared/isolation";
 import type { StudioData } from "./useStudioData";
+import { defaultNode } from "../../../src/shared/graph_defaults";
 
 export function useGraphEditor(
   data: Pick<
@@ -333,21 +334,17 @@ export function useGraphEditor(
   const addNode = (type: AgentNode["type"]) => {
     const nodeId = id();
     change((g) => {
-      const index = g.nodes.length;
-      g.nodes.push({
-        id: nodeId,
-        name: `새 ${typeMeta[type].label} 노드`,
-        roleName: typeMeta[type].label,
-        type,
-        instructions: "",
-        position: {
-          x: 80 + (index % 3) * 320,
-          y: 80 + Math.floor(index / 3) * 260,
-        },
-        ...(type === "planning"
-          ? { planning: { requiresApproval: true, optionsCount: 3 } }
-          : {}),
-      });
+      g.nodes.push(
+        defaultNode({
+          id: nodeId,
+          type,
+          name: `새 ${typeMeta[type].label} 노드`,
+          roleName: typeMeta[type].label,
+          index: g.nodes.length,
+          left: 80,
+          columnWidth: 320,
+        }),
+      );
       if (!g.entrypoints.start) g.entrypoints.start = nodeId;
       if (!g.entrypoints.reentry) g.entrypoints.reentry = nodeId;
       if (!g.entrypoints.cycleCompletion)

@@ -18,6 +18,7 @@ test("autonomous preset repairs a product BLOCKED and reaches final approval wit
   t.after(s.cleanup);
   let graph = await s.store.createGraph({ template: "autonomous" });
   graph.automation!.verificationContract = false; // legacy-policy coverage; contract cases are separate below
+  graph.automation!.authoredNodeTests = false;
   graph.automation!.browserVerification = false;
   graph.defaultBinding = s.graph.defaultBinding;
   graph = await s.store.saveGraph(graph.id, graph, graph.revision);
@@ -52,6 +53,7 @@ test("autonomous failures stop at repair budget instead of requesting endless in
   t.after(s.cleanup);
   let graph = await s.store.createGraph({ template: "autonomous" });
   graph.automation!.verificationContract = false; // legacy-policy coverage; contract cases are separate below
+  graph.automation!.authoredNodeTests = false;
   graph.automation!.browserVerification = false;
   graph.automation!.maxRepairCycles = 1;
   graph.defaultBinding = s.graph.defaultBinding;
@@ -81,6 +83,7 @@ test("autonomous policy never bypasses an explicitly enabled planning approval",
   t.after(s.cleanup);
   let graph = await s.store.createGraph({ template: "autonomous" });
   graph.automation!.verificationContract = false; // legacy-policy coverage; contract cases are separate below
+  graph.automation!.authoredNodeTests = false;
   graph.nodes.find((n) => n.type === "planning")!.planning!.requiresApproval =
     true;
   graph.defaultBinding = s.graph.defaultBinding;
@@ -106,6 +109,7 @@ test("autonomous runtime detects hidden production writes even without native fi
   t.after(s.cleanup);
   let graph = await s.store.createGraph({ template: "autonomous" });
   graph.automation!.verificationContract = false; // legacy-policy coverage; contract cases are separate below
+  graph.automation!.authoredNodeTests = false;
   graph.automation!.browserVerification = false;
   graph.defaultBinding = s.graph.defaultBinding;
   graph = await s.store.saveGraph(graph.id, graph, graph.revision);

@@ -644,6 +644,7 @@ test("an explicit original-goal external path retains its access approval gate i
   t.after(s.cleanup);
   let graph = await s.store.createGraph({ template: "autonomous" });
   graph.automation!.verificationContract = false;
+  graph.automation!.authoredNodeTests = false;
   graph.automation!.browserVerification = false;
   graph.defaultBinding = s.graph.defaultBinding;
   graph = await s.store.saveGraph(graph.id, graph, graph.revision);
