@@ -89,6 +89,49 @@ test("contracts require bounded safe paths, unique actual checks and complete re
   };
   assert.equal(validateManifest(web, ["REQ-001"], true).checks.length, 2);
 });
+test("a broken browser spec is refused before it can be frozen", async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "contract-browser-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  await fs.mkdir(path.join(root, ".agent-graph"));
+  await fs.mkdir(path.join(root, "tests"));
+  await fs.writeFile(path.join(root, "tests/verify-acceptance.mjs"), "\n");
+  await fs.writeFile(
+    path.join(root, CONTRACT_FILE),
+    JSON.stringify({
+      ...manifest,
+      protectedFiles: [...manifest.protectedFiles, ".agent-graph/browser.json"],
+      checks: [
+        ...manifest.checks,
+        {
+          id: "browser",
+          command: browserVerificationCommand(),
+          requirements: ["REQ-001"],
+        },
+      ],
+    }),
+  );
+  const state = {
+    targetProjectPath: root,
+    graph: createAutonomousGraph(),
+    requirements: deriveRequirementLedger("goal"),
+  } as SessionState;
+  const spec = (type: string) =>
+    fs.writeFile(
+      path.join(root, ".agent-graph/browser.json"),
+      JSON.stringify({
+        version: 1,
+        server: { command: ["node", "server.mjs"] },
+        steps: [{ id: "first", type, selector: "h1" }],
+      }),
+    );
+  await spec("goto");
+  await assert.rejects(
+    lockContract(state, "implementation"),
+    /browser\.json.*first: unsupported type "goto"\. Supported: viewport/,
+  );
+  await spec("visible");
+  assert.equal((await lockContract(state, "implementation")).status, "locked");
+});
 test("contract snapshots pin initial files and manifest across mutations, deletion and restoration", async (t) => {
   const root = await fs.mkdtemp(
     path.join(os.tmpdir(), "verification-contract-"),
