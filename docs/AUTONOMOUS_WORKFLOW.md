@@ -110,7 +110,7 @@
 
 ## 자체 Node 테스트의 영역별 계약과 독립 검토
 
-새 자율 프리셋은 `automation.authoredNodeTests=true`를 사용한다. 고정 계약에 `npm test`가 있으면 `nodeTests` 정책도 필수다. 기존 그래프에 이 선택 필드가 없으면 종전 동작을 유지한다. UI의 **자체 Node 테스트 계약 필수** 설정으로 제어하며 다른 데이터 버전이나 저장 키는 변경하지 않는다.
+새 자율 프리셋은 `automation.authoredNodeTests=true`를 사용한다. 고정 계약에 `npm test`가 있으면 `nodeTests` 정책도 필수다. 필수 요구사항이 `npm test`를 명시하면 계약에 그 검사가 있어야 잠근다. 기존 그래프에 이 선택 필드가 없으면 종전 동작을 유지한다. UI의 **자체 Node 테스트 계약 필수** 설정으로 제어하며 다른 데이터 버전이나 저장 키는 변경하지 않는다.
 
 `nodeTests`는 `suiteCheckId`(실제 `npm test` 검사), `checkId`(플랫폼이 제공하는 정확한 `verify-node-tests` 명령), `scopes`를 선언한다. 각 영역은 고유한 `id`, 직접 작성할 `test/*.test.mjs` 파일, 요구사항 ID, 정확한 `cases` 이름, 보호된 `challenges` 목록을 가진다. 예를 들어 2048은 엔진·컨트롤러·저장·HTTP를 각각 선언한다. 컨트롤러의 실제 이동/스폰/점수, 저장 어댑터의 직렬화/복구/예외, 포트 0의 실제 HTTP 요청과 서버 종료를 자체 assertion으로 검사한다. 제공된 인수 검사만 호출하는 파일은 자체 테스트로 인정하지 않는다.
 
