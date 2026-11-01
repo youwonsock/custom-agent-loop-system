@@ -442,8 +442,10 @@ export async function runNodeTestVerification(options: {
             ),
           ];
           if (evidence.mutant.summary.success || !evidence.killedBy.length) {
-            evidence.error =
-              "Required authored assertions did not detect this production defect.";
+            const failedNames = evidence.mutant.cases
+              .filter((c) => !c.passed)
+              .map((c) => c.name);
+            evidence.error = `Required authored assertions did not detect this production defect. Failed in this run: ${failedNames.join(", ") || "none"}. A kill needs an assertion failing directly inside a required case (${scope.cases.join(", ")}), not in a subtest or another test.`;
             throw Error(`${scope.id}/${challenge.id}: ${evidence.error}`);
           }
           evidence.status = "passed";
