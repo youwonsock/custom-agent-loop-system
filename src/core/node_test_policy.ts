@@ -77,25 +77,47 @@ export function validateNodeTestPolicy(
       !isObj(raw) ||
       typeof raw.id !== "string" ||
       !/^[a-z][a-z0-9_-]{0,63}$/.test(raw.id) ||
-      ids.has(raw.id) ||
+      ids.has(raw.id)
+    )
+      throw Error(
+        `Every Node scope needs a unique lowercase id: ${JSON.stringify(isObj(raw) ? raw.id : raw)}`,
+      );
+    const scopeId = raw.id;
+    if (
       !relative(raw.file) ||
       !/^(?:test|tests)\/.+\.test\.[cm]?js$/.test(raw.file) ||
-      files.has(raw.file) ||
-      manifest.protectedFiles.includes(raw.file) ||
+      files.has(raw.file)
+    )
+      throw Error(
+        `Node scope ${scopeId}: file must be its own test/*.test.mjs: ${JSON.stringify(raw.file)}`,
+      );
+    if (manifest.protectedFiles.includes(raw.file))
+      throw Error(
+        `Node scope ${scopeId}: remove ${raw.file} from protectedFiles. Authored scope tests stay editable; supplied acceptance files cannot count as authored tests.`,
+      );
+    if (
       !strings(raw.requirements) ||
       !raw.requirements.every(
         (id) =>
           check.requirements.includes(id) && suite.requirements.includes(id),
-      ) ||
+      )
+    )
+      throw Error(
+        `Node scope ${scopeId}: every requirement must also be listed by the "${check.id}" and "${suite.id}" checks: ${JSON.stringify(raw.requirements)}`,
+      );
+    if (
       !strings(raw.cases, 100) ||
-      !raw.cases.every((name) => name.startsWith(raw.id + ":")) ||
+      !raw.cases.every((name) => name.startsWith(scopeId + ":"))
+    )
+      throw Error(
+        `Node scope ${scopeId}: every case must be a test name starting with "${scopeId}:": ${JSON.stringify(raw.cases)}`,
+      );
+    if (
       !Array.isArray(raw.challenges) ||
       !raw.challenges.length ||
       raw.challenges.length > 20
     )
-      throw Error(
-        "Invalid own Node scope/file/requirements/cases; supplied acceptance files cannot count as authored tests.",
-      );
+      throw Error(`Node scope ${scopeId}: needs 1 to 20 challenges.`);
     ids.add(raw.id);
     files.add(raw.file);
     const probes = raw.challenges.map((probe) => {
@@ -103,10 +125,20 @@ export function validateNodeTestPolicy(
         !isObj(probe) ||
         typeof probe.id !== "string" ||
         !/^[a-z][a-z0-9_-]{0,63}$/.test(probe.id) ||
-        challenges.has(probe.id) ||
+        challenges.has(probe.id)
+      )
+        throw Error(
+          `Node scope ${scopeId}: challenge ids must be lowercase and unique across all scopes: ${JSON.stringify(isObj(probe) ? probe.id : probe)}`,
+        );
+      if (
         !relative(probe.adapter) ||
         !probe.adapter.endsWith(".mjs") ||
-        !manifest.protectedFiles.includes(probe.adapter) ||
+        !manifest.protectedFiles.includes(probe.adapter)
+      )
+        throw Error(
+          `Node challenge ${probe.id}: adapter must be a .mjs file listed in protectedFiles: ${JSON.stringify(probe.adapter)}`,
+        );
+      if (
         !strings(probe.targets, 10) ||
         !probe.targets.every(
           (file) =>
@@ -119,7 +151,7 @@ export function validateNodeTestPolicy(
         )
       )
         throw Error(
-          "Every Node challenge needs a unique ID, protected adapter and production-only replacement targets.",
+          `Node challenge ${probe.id}: targets must be production-only, unprotected files, not tests or package.json: ${JSON.stringify(probe.targets)}`,
         );
       challenges.add(probe.id);
       return {

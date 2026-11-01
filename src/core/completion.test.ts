@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createGraph, createAutonomousGraph } from "./graph";
 import { validateCompletion, parsePlans } from "./completion";
+import { implementationBlocker } from "./implementation_blocker";
 import { deriveRequirementLedger } from "./requirement_ledger";
 import { emptyEvidence } from "./event_evidence";
 import { SupervisorResult } from "./process_supervisor";
@@ -25,6 +26,26 @@ const result = (text: string): SupervisorResult => ({
   autoInjected: [],
   evidence: emptyEvidence(),
   diagnostics: emptyCliDiagnostics(),
+});
+test("a bare AGENT_REPORT list is a summary, unless it says it is blocked", () => {
+  assert.equal(
+    implementationBlocker(
+      "Done.\n\nAGENT_REPORT\n- role: implementation\n- verdict: READY_FOR_TEST\n- blockers: none\n\n[PHASE_DONE]",
+    ),
+    null,
+  );
+  for (const line of ["- verdict: BLOCKED", "**Verdict:** BLOCKED"])
+    assert.throws(
+      () => implementationBlocker(`AGENT_REPORT\n${line}\n\n[PHASE_DONE]`),
+      /VERDICT: BLOCKED/,
+    );
+  assert.throws(() =>
+    implementationBlocker("[AGENT_REPORT]\n- not json\n[/AGENT_REPORT]"),
+  );
+  assert.equal(
+    implementationBlocker('AGENT_REPORT\n{"verdict":"BLOCKED"}')?.kind,
+    "external",
+  );
 });
 test("implementation external blockers cannot hand off successfully with PHASE_DONE, including observed bare JSON", () => {
   const node = createAutonomousGraph().nodes.find(
