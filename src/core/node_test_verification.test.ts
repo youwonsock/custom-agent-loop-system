@@ -489,6 +489,47 @@ test("a defect caught only in a subtest of a required case explains what would c
     /directly inside a required case \(value:correct\)/,
   );
 });
+test("a malformed node test scope names the field to repair", () => {
+  const scope = (change: Record<string, unknown>) => {
+    const m = manifest();
+    Object.assign(m.nodeTests!.scopes[0]!, change);
+    return () => validateManifest(m, ["REQ-001"], false);
+  };
+  assert.doesNotThrow(scope({}));
+  assert.throws(scope({ cases: ["plain name"] }), /start.*"value:"/);
+  assert.throws(scope({ file: "value.mjs" }), /test\/\*\.test\.mjs/);
+  assert.throws(scope({ requirements: ["REQ-009"] }), /"quality" and "node"/);
+  assert.throws(scope({ challenges: [] }), /1 to 20 challenges/);
+  assert.throws(
+    scope({ challenges: [{ id: "x", adapter, targets: ["package.json"] }] }),
+    /targets must be production-only/,
+  );
+  assert.throws(
+    scope({
+      challenges: [
+        { id: "x", adapter: "probes/o.mjs", targets: ["value.mjs"] },
+      ],
+    }),
+    /adapter must be a \.mjs file listed in protectedFiles/,
+  );
+  const guarded = manifest();
+  guarded.protectedFiles.push("test/value.test.mjs");
+  assert.throws(
+    () => validateManifest(guarded, ["REQ-001"], false),
+    /remove test\/value\.test\.mjs from protectedFiles/,
+  );
+  const twin = manifest();
+  twin.nodeTests!.scopes.push({
+    ...twin.nodeTests!.scopes[0]!,
+    id: "other",
+    file: "test/other.test.mjs",
+    cases: ["other:case"],
+  });
+  assert.throws(
+    () => validateManifest(twin, ["REQ-001"], false),
+    /unique across all scopes: "wrong-value"/,
+  );
+});
 test("a requirement naming npm test cannot be locked by a contract that never runs it", async (t) => {
   const s = await setup(t),
     old = structuredClone(s.manifest);
