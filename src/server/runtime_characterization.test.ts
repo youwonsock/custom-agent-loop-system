@@ -33,7 +33,8 @@ const quickSettings = {
   maxCompletionRecoveryAttempts: 1,
   maxAutomaticRecoveryCycles: 0,
   phaseTimeoutMs: 3000,
-  idleTimeoutMs: 1000,
+  // Stays below phaseTimeoutMs: a slow Windows runner can stall a fixture for a second.
+  idleTimeoutMs: process.platform === "win32" ? 2500 : 1000,
   toolTimeoutMs: 1000,
   // A loaded Windows runner can take over a second to get ConPTY and Node talking.
   transportTimeoutMs: process.platform === "win32" ? 3000 : 1000,
