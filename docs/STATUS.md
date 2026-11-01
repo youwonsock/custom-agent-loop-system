@@ -6,10 +6,10 @@
 
 | 항목 | 상태 |
 | --- | --- |
-| 기준 커밋 | `main` `d114582` (후속 계획 완료) |
-| 원격 CI | PR #25~#39 병합 전 3개 OS와 브라우저 통과. `main`의 간헐 실패 기록은 [VERIFICATION.md](VERIFICATION.md) 참고 |
+| 기준 커밋 | `main` `f1a89b8` (후속 계획 완료) |
+| 원격 CI | PR #25~#42 병합 전 3개 OS와 브라우저 통과. `main`의 간헐 실패 기록은 [VERIFICATION.md](VERIFICATION.md) 참고 |
 | 로컬 검사 \(macOS 26 arm64, 공식 Node 24.22.2\) | `verify:platform` 통과: 단위 409개 중 407 통과·0 실패·Windows 전용 2 건너뜀, 도구 12/12, 실행기 5/5. `verify:vm` 45/45(하위 사례 포함). `verify:browser` 27/27은 `d114582` 기준 |
-| 실제 모델 호출 | 최종 코드에서 Claude Haiku·Kilo 무료 모델 모두 `tiny-web` `SUCCESS`. `nodeTests`를 포함한 `tiny-web-tests`는 Claude 5회 중 4회 `SUCCESS`, Kilo 미통과. [VERIFICATION.md](VERIFICATION.md) 참고 |
+| 실제 모델 호출 | Claude Haiku·Kilo 무료 모델 모두 `tiny-web` `SUCCESS`. `nodeTests`를 포함한 `tiny-web-tests`는 Claude 5회 중 4회 `SUCCESS`, Kilo 6회 모두 미통과(무료 사용량 제한 4회 포함). [VERIFICATION.md](VERIFICATION.md) 참고 |
 
 ## 완료한 작업 (2026-10-29 ~ 10-30)
 
@@ -141,7 +141,7 @@ Codex는 사용자 결정으로 G4에서 제외했다. Codex 경로는 가짜 �
 | 2 | 제어 큐 ack 실패, 재시작 복구, 잠금 가드 회수 | 완료 | #26 |
 | 3 | 읽기 전용 역할의 숨은 파일 변경 판정 | 완료 | #27 |
 | 4 | `MutationTracker.observe`, `evidenceGates`, `judge` 분해 | `observe` 복잡도 9, 게이트와 `judge` 15 이하, `runtime.ts` 1,200행 미만. 무작위 40만 건에서 이전과 결과 동일 | #30 |
-| 5 | VM 테스트의 PR 강제, 실제 CLI 최종 재실행 | 아래 한계 참고 | #28, #31~#39 |
+| 5 | VM 테스트의 PR 강제, 실제 CLI 최종 재실행 | 아래 한계 참고 | #28, #31~#42 |
 
 ### 남은 위험
 
