@@ -78,6 +78,9 @@ test("pipe transport retains streaming credential redaction and bounded terminat
   assert.equal(stopped.outcome, "transport_timeout");
 });
 
+// The runtime uses ConPTY on Windows. winpty can lose the split record (1 of 60
+// runs measured, against 0 of 120 on ConPTY), so these cases test the real transport.
+const productionConpty = process.platform === "win32";
 function runFake(
   mode: string,
   timeouts?: {
@@ -181,7 +184,9 @@ test("configured secrets are redacted from raw logs and assistant text", async (
 });
 
 test("configured secrets remain redacted when split across PTY chunks", async () => {
-  const result = await runFake("split-secret-echo");
+  const result = await runFake("split-secret-echo", {
+    conpty: productionConpty,
+  });
   assert.equal(result.outcome, "succeeded");
   assert.equal(result.rawLogIncludesSecret, false);
   assert.equal(result.assistantText.includes("top-secret"), false);
@@ -189,7 +194,9 @@ test("configured secrets remain redacted when split across PTY chunks", async ()
 });
 
 test("terminal-wrapped JSON cannot reconstruct a secret in parsed events or assistant text", async () => {
-  const result = await runFake("wrapped-secret-echo");
+  const result = await runFake("wrapped-secret-echo", {
+    conpty: productionConpty,
+  });
   assert.equal(result.outcome, "succeeded");
   assert.equal(result.rawLogIncludesSecret, false);
   assert.equal(result.parsedEventIncludesSecret, false);

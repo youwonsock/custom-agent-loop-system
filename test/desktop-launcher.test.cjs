@@ -107,7 +107,9 @@ function launch(root, port, source = project) {
     }
   });
   const waitState = async (state) => {
-    const deadline = Date.now() + 20_000;
+    // Reaching "ready" includes installing packages, which a loaded runner can
+    // take well over 20 seconds to do.
+    const deadline = Date.now() + 60_000;
     while (Date.now() < deadline) {
       const found = messages.find((m) => m.state === state);
       if (found) return found;
@@ -131,7 +133,7 @@ function launch(root, port, source = project) {
 
 test(
   "double-click helper builds, serves assets, reuses its existing server and safely stops only its own server",
-  { timeout: 45_000 },
+  { timeout: 120_000 },
   async (t) => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "graph-launcher-"));
     const first = launch(root, 0);
@@ -190,7 +192,7 @@ test(
 
 test(
   "simultaneous launchers reuse one server after serialized setup",
-  { timeout: 45_000 },
+  { timeout: 120_000 },
   async (t) => {
     const root = await fs.mkdtemp(
       path.join(os.tmpdir(), "graph-launcher-race-"),
