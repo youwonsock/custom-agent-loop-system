@@ -4,9 +4,11 @@ import * as fs from "node:fs";
 import * as fsp from "node:fs/promises";
 import * as path from "node:path";
 import * as os from "node:os";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
+import { generateKeyPairSync, randomUUID } from "node:crypto";
 import { createServer } from "node:net";
 import {
+  ioSign,
   prepareProgramIo,
   wrapProgramCommand,
   unwrapProgramCommand,
@@ -17,14 +19,23 @@ import {
 import { kiloCheckHooks } from "./kilo_protocol";
 import { InspectionTracker } from "./inspection_evidence";
 import { CommandTracker } from "./verification_evidence";
-import { SessionState } from "../shared/domain";
+import { ProgramIoAudit, SessionState } from "../shared/domain";
 import { createAutonomousGraph, validateGraphDocument } from "./graph";
 import { ProcessSupervisor } from "./process_supervisor";
 import { buildInvocation } from "./invocation";
 import { preExecutionDenied } from "./event_evidence";
 import { ToolFailureTracker } from "./tool_failures";
 import { IO_UNAVAILABLE } from "./program_io_errors";
-import { nestedProjectProblem, vmRuntimeStatus } from "./program_io_vm";
+import {
+  nestedProjectProblem,
+  vmCommandName,
+  vmRuntimeStatus,
+} from "./program_io_vm";
+import { validProgramIoAudit } from "./session_schema";
+import { evidenceGates } from "./runtime_gates";
+import type { GateHost } from "./runtime_gates";
+import { TEST_POLICY, testPolicyEvent } from "./test_source_guard";
+import { sha } from "./values";
 
 const mac = process.platform === "darwin",
   sq = (s: string) => "'" + s.replace(/'/g, "'\\''") + "'";
@@ -833,3 +844,675 @@ test("a project inside the install folder gets a stated reason instead of a moun
   assert.match(nestedProjectProblem(install, install)!, /설치 폴더/);
   assert.equal(nestedProjectProblem(`${install}-other/project`, install), null);
 });
+
+// A platform stop of the CLI: only a stop the supervisor itself made, of a command
+// with a signed start, is told apart from a violation. Everything else stays invalid.
+const posix = process.platform === "win32" ? "POSIX fake container CLI" : false;
+function stoppedFixture(
+  t: { after(fn: () => Promise<unknown>): unknown },
+  mode: "implementation" | "test" = "test",
+) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "program io stop-"));
+  t.after(() => fsp.rm(root, { recursive: true, force: true }));
+  const directory = path.join(root, "broker"),
+    vms = path.join(root, "vms.json"),
+    binary = path.join(root, "container"),
+    keys = generateKeyPairSync("ed25519");
+  fs.mkdirSync(directory);
+  fs.writeFileSync(path.join(directory, "profile.sb"), "profile");
+  fs.writeFileSync(vms, "[]");
+  fs.writeFileSync(
+    binary,
+    `#!${process.execPath}
+const fs=require('node:fs'),f=${JSON.stringify(vms)},[cmd,,name]=process.argv.slice(2);
+if(cmd==='list')console.log(fs.readFileSync(f,'utf8'));
+if(cmd==='delete'){if(fs.existsSync(f+'.stuck'))process.exit(1);fs.writeFileSync(f,JSON.stringify(JSON.parse(fs.readFileSync(f,'utf8')).filter(v=>v.id!==name)));}
+`,
+    { mode: 0o755 },
+  );
+  const policy = {
+    version: 1,
+    id: randomUUID(),
+    cwd: root,
+    directory,
+    node: process.execPath,
+    runner: "runner",
+    bootstrap: "bootstrap",
+    profile: "profile",
+    profileDigest: sha("profile"),
+    publicKey: keys.publicKey
+      .export({ format: "der", type: "spki" })
+      .toString("base64"),
+    privateKey: keys.privateKey
+      .export({ format: "der", type: "pkcs8" })
+      .toString("base64"),
+    expiresAt: Date.now() + 60000,
+    writableRoots: [],
+    runtimeReadRoots: [],
+    scratch: path.join(root, "scratch"),
+    preflightPassed: true,
+    browserPath: "/ms-playwright",
+    backend: "apple-container-vm",
+    vm: {
+      binary,
+      image: "image",
+      imageDigest: `sha256:${"a".repeat(64)}`,
+      lockDigest: "lock",
+      controlHome: root,
+      runtimeRoot: root,
+      distRoot: root,
+      manifestRoot: root,
+      mode,
+      protectedFiles: [],
+      uid: 501,
+      gid: 20,
+    },
+  } as ProgramIoPolicy;
+  const record = (data: Record<string, unknown>, signature?: string) => {
+    const full = {
+      ...data,
+      policyId: policy.id,
+      profileDigest: policy.profileDigest,
+    };
+    fs.appendFileSync(
+      path.join(directory, "receipts.jsonl"),
+      JSON.stringify({
+        data: full,
+        signature: signature ?? ioSign(full, policy),
+      }) + "\n",
+    );
+  };
+  const start = (id: string, over: Record<string, unknown> = {}) =>
+    record({
+      type: "start",
+      id,
+      command: "ls -la",
+      pid: 2147483646,
+      at: new Date(Date.now() - 1000).toISOString(),
+      backend: policy.backend,
+      containerName: vmCommandName(policy.id, id),
+      imageDigest: policy.vm!.imageDigest,
+      argumentsDigest: "digest",
+      network: "none",
+      ...over,
+    });
+  const end = (id: string, over: Record<string, unknown> = {}) =>
+    record({
+      type: "end",
+      id,
+      command: "ls -la",
+      exitCode: 137,
+      at: new Date().toISOString(),
+      backend: policy.backend,
+      processGroupStopped: true,
+      containerRemoved: true,
+      ...over,
+    });
+  const running = (...names: string[]) =>
+    fs.writeFileSync(vms, JSON.stringify(names.map((id) => ({ id }))));
+  const left = () => JSON.parse(fs.readFileSync(vms, "utf8")).length as number;
+  return { root, policy, vms, record, start, end, running, left };
+}
+const stopAudit = (policy: ProgramIoPolicy, settleMs = 300) => {
+  const tracker = new ProgramIoTracker(policy, settleMs);
+  tracker.markPlatformStop();
+  return tracker.finish(true);
+};
+test(
+  "a platform stop tells a signed interrupted VM command apart from a violation",
+  { skip: posix },
+  (t) => {
+    const { policy, start, end, running, left } = stoppedFixture(t);
+    const id = randomUUID();
+    start(id);
+    running(vmCommandName(policy.id, id));
+    const before = new ProgramIoTracker(policy).finish(true);
+    assert.equal(before.invalidReceipts, 2, "without a stop: VM and receipt");
+    assert.equal(before.interruptedCommands, undefined);
+    running(vmCommandName(policy.id, id));
+    const audit = stopAudit(policy);
+    assert.equal(audit.invalidReceipts, 0);
+    assert.equal(audit.unresolvedCommands, 0);
+    assert.equal(audit.interruptedCommands, 1);
+    assert.equal(audit.nativeCommands, 0);
+    assert.equal(audit.commands.length, 0, "no exit code, no check evidence");
+    assert.equal(left(), 0);
+    // The broker survived the CLI and signed the removal itself.
+    end(id);
+    assert.equal(stopAudit(policy).interruptedCommands, 1);
+    assert.equal(stopAudit(policy).invalidReceipts, 0);
+  },
+);
+test(
+  "a stop does not excuse forged, unsigned, foreign or unconfirmed VM evidence",
+  { skip: posix },
+  async (t) => {
+    const id = randomUUID();
+    const cases: Array<
+      [
+        string,
+        (f: ReturnType<typeof stoppedFixture>) => void,
+        (policy: ProgramIoPolicy) => ProgramIoAudit,
+      ]
+    > = [
+      [
+        "bad signature",
+        (f) =>
+          f.record(
+            { type: "start", id, command: "ls -la", at: "2000-01-01" },
+            "forged",
+          ),
+        stopAudit,
+      ],
+      [
+        "signature over other content",
+        (f) => {
+          f.start(id);
+          const file = path.join(f.policy.directory, "receipts.jsonl");
+          fs.writeFileSync(
+            file,
+            fs.readFileSync(file, "utf8").replace("ls -la", "rm -rf ."),
+          );
+        },
+        stopAudit,
+      ],
+      [
+        "VM with no signed start",
+        (f) => f.running(vmCommandName(f.policy.id, randomUUID())),
+        stopAudit,
+      ],
+      [
+        "started after the stop",
+        (f) => f.start(id, { at: new Date(Date.now() + 60000).toISOString() }),
+        stopAudit,
+      ],
+      ["unreadable start time", (f) => f.start(id, { at: "soon" }), stopAudit],
+      [
+        "another VM's name",
+        (f) => f.start(id, { containerName: "agio-other" }),
+        stopAudit,
+      ],
+      [
+        "another image",
+        (f) => f.start(id, { imageDigest: "sha256:other" }),
+        stopAudit,
+      ],
+      ["with network", (f) => f.start(id, { network: "host" }), stopAudit],
+      [
+        "broker signed that removal failed",
+        (f) => {
+          f.start(id);
+          f.end(id, { containerRemoved: false });
+        },
+        stopAudit,
+      ],
+      ["an end with no start", (f) => f.end(id), stopAudit],
+      [
+        "a VM that cannot be removed",
+        (f) => {
+          f.start(id);
+          f.running(vmCommandName(f.policy.id, id));
+          fs.writeFileSync(f.vms + ".stuck", "");
+        },
+        stopAudit,
+      ],
+      [
+        "a broker that still holds the lock",
+        (f) => {
+          f.start(id);
+          const lock = path.join(f.policy.directory, "command.lock");
+          fs.mkdirSync(lock);
+          fs.writeFileSync(
+            path.join(lock, "owner.json"),
+            JSON.stringify({ pid: process.pid }),
+          );
+        },
+        stopAudit,
+      ],
+      [
+        "a VM client that is still running",
+        (f) => f.start(id, { pid: process.pid }),
+        stopAudit,
+      ],
+      [
+        "a stop with the CLI not confirmed gone",
+        (f) => {
+          f.start(id);
+          f.running(vmCommandName(f.policy.id, id));
+        },
+        (policy) => {
+          const tracker = new ProgramIoTracker(policy, 300);
+          tracker.markPlatformStop();
+          return tracker.finish(false);
+        },
+      ],
+      [
+        "the CLI ended by itself",
+        (f) => {
+          f.start(id);
+          f.running(vmCommandName(f.policy.id, id));
+        },
+        (policy) => new ProgramIoTracker(policy, 300).finish(true),
+      ],
+    ];
+    for (const [name, arrange, audit] of cases)
+      await t.test(name, (s) => {
+        const fixture = stoppedFixture(s);
+        arrange(fixture);
+        const result = audit(fixture.policy);
+        assert.ok(result.invalidReceipts > 0, name);
+        assert.equal(result.interruptedCommands, undefined, name);
+      });
+  },
+);
+test(
+  "a finished sibling keeps its proof, and a dead broker's lock does not block the stop",
+  { skip: posix },
+  (t) => {
+    const { policy, start, end } = stoppedFixture(t);
+    const done = wrapProgramCommand("cat a.txt", policy),
+      doneId = unwrapProgramCommand(done, policy)!.id,
+      id = randomUUID();
+    start(doneId, { command: "cat a.txt" });
+    end(doneId, { command: "cat a.txt", exitCode: 0 });
+    start(id);
+    const lock = path.join(policy.directory, "command.lock");
+    fs.mkdirSync(lock);
+    fs.writeFileSync(
+      path.join(lock, "owner.json"),
+      JSON.stringify({ pid: 2147483646 }),
+    );
+    const tracker = new ProgramIoTracker(policy, 300);
+    tracker.normalize({
+      type: "tool_use",
+      part: {
+        id: "1",
+        tool: "bash",
+        state: {
+          status: "completed",
+          input: { command: done },
+          metadata: { exit: 0 },
+        },
+      },
+    });
+    tracker.markPlatformStop();
+    const audit = tracker.finish(true);
+    assert.equal(audit.invalidReceipts, 0);
+    assert.equal(audit.completedCommands, 1);
+    assert.equal(audit.nativeCommands, 1);
+    assert.equal(audit.interruptedCommands, 1);
+    assert.equal(fs.existsSync(lock), false);
+  },
+);
+test(
+  "a command the CLI reported as finished but never signed an end stays unresolved",
+  { skip: posix },
+  (t) => {
+    const { policy, start } = stoppedFixture(t);
+    const wrapped = wrapProgramCommand("ls -la", policy);
+    start(unwrapProgramCommand(wrapped, policy)!.id);
+    const tracker = new ProgramIoTracker(policy, 300);
+    tracker.normalize({
+      type: "tool_use",
+      part: {
+        id: "1",
+        tool: "bash",
+        state: {
+          status: "error",
+          input: { command: wrapped },
+          error: "killed",
+        },
+      },
+    });
+    tracker.markPlatformStop();
+    const audit = tracker.finish(true);
+    assert.equal(audit.unresolvedCommands, 1);
+    assert.equal(audit.interruptedCommands, undefined);
+  },
+);
+test("session success refuses an accepted attempt with an interrupted command", () => {
+  const audit = (over: Partial<ProgramIoAudit>): ProgramIoAudit => ({
+    version: 1,
+    backend: "apple-container-vm",
+    policyId: "policy",
+    profileDigest: "a".repeat(64),
+    cwd: fs.realpathSync(os.tmpdir()),
+    preflightPassed: true,
+    nativeCommands: 0,
+    completedCommands: 0,
+    unwrappedCommands: 0,
+    unresolvedCommands: 0,
+    invalidReceipts: 0,
+    runtimeReadRoots: [],
+    commands: [],
+    ...over,
+  });
+  const state = (
+    programIoAudit: ProgramIoAudit,
+    completionAccepted?: boolean,
+  ) =>
+    ({
+      graph: createAutonomousGraph(),
+      targetProjectPath: os.tmpdir(),
+      bindings: { test: { connectionId: "kilo" } },
+      connections: [{ id: "kilo", type: "kilo" }],
+      visits: [
+        { nodeId: "test", attempts: [{ programIoAudit, completionAccepted }] },
+      ],
+    }) as unknown as SessionState;
+  assert.equal(
+    programIoEvidenceProblem(state(audit({ interruptedCommands: 1 }), false)),
+    null,
+  );
+  assert.equal(
+    programIoEvidenceProblem(state(audit({ interruptedCommands: 1 }))),
+    null,
+  );
+  assert.ok(
+    programIoEvidenceProblem(state(audit({ interruptedCommands: 1 }), true)),
+  );
+  assert.ok(
+    programIoEvidenceProblem(state(audit({ interruptedCommands: 0 }), false)),
+  );
+  assert.ok(
+    programIoEvidenceProblem(state(audit({ invalidReceipts: 1 }), false)),
+  );
+  assert.equal(validProgramIoAudit(audit({ interruptedCommands: 1 })), true);
+  assert.equal(validProgramIoAudit(audit({ interruptedCommands: -1 })), false);
+});
+test("the evidence gate halts on invalid receipts and lets an interrupted command through", async () => {
+  const outcome = async (counts: Partial<ProgramIoAudit>) => {
+    const halts: string[] = [];
+    const host = {
+      state: { graph: { automation: {} }, visits: [] },
+      halt: async (_visit: unknown, status: string) => {
+        halts.push(status);
+        return { step: "stopped" };
+      },
+      contractStop: async () => false,
+      budgetStop: async () => {},
+      stageStop: async () => {},
+    } as unknown as GateHost;
+    const attempt = {
+      programIoAudit: {
+        invalidReceipts: 0,
+        unresolvedCommands: 0,
+        unwrappedCommands: 0,
+        ...counts,
+      },
+    } as unknown as { failureKind?: string };
+    await evidenceGates(
+      host,
+      {
+        node: { type: "test" },
+        visit: {},
+        policy: {},
+      } as unknown as Parameters<typeof evidenceGates>[1],
+      {
+        attempt,
+        result: { outcome: "process_exit", evidence: {} },
+      } as unknown as Parameters<typeof evidenceGates>[2],
+    );
+    return { halts, failure: attempt.failureKind };
+  };
+  assert.deepEqual((await outcome({ interruptedCommands: 1 })).halts, []);
+  assert.deepEqual(await outcome({ invalidReceipts: 2 }), {
+    halts: ["BLOCKED"],
+    failure: "role_violation",
+  });
+  assert.deepEqual((await outcome({ unresolvedCommands: 1 })).halts, [
+    "BLOCKED",
+  ]);
+});
+const supervisorOptions = (
+  policy: ProgramIoPolicy,
+  root: string,
+  cli: string,
+) =>
+  ({
+    binary: process.execPath,
+    args: [cli],
+    transport: "pipe",
+    cwd: policy.cwd,
+    env: {
+      ...Object.fromEntries(
+        Object.entries(process.env).filter(
+          (v): v is [string, string] => typeof v[1] === "string",
+        ),
+      ),
+      AGENT_GRAPH_PROGRAM_IO: JSON.stringify(policy),
+    },
+    programIoPolicy: policy,
+    cols: 200,
+    rows: 40,
+    useConpty: false,
+    transportTimeoutMs: 15000,
+    idleTimeoutMs: 15000,
+    toolTimeoutMs: 15000,
+    phaseTimeoutMs: 30000,
+    terminationGraceMs: 2000,
+    killTimeoutMs: 2000,
+    maxInMemoryOutputBytes: 1024 * 1024,
+    rawLogPath: path.join(root, "native.log"),
+    interactionWhitelist: [],
+    destructivePrompts: [],
+    sensitiveValues: [policy.privateKey],
+  }) as Parameters<ProcessSupervisor["run"]>[0];
+const denial = JSON.stringify({
+  type: "tool_use",
+  part: {
+    id: "denied",
+    tool: "bash",
+    state: {
+      status: "error",
+      input: { command: "find . -type f | sort" },
+      error: `${TEST_POLICY} Test role permits registered foreground checks only.`,
+    },
+  },
+});
+test(
+  "the supervisor marks only its own stop of a live CLI",
+  { skip: posix },
+  async (t) => {
+    for (const [name, script, policyStop] of [
+      ["policy", `console.log(${sq(denial)});setInterval(()=>{},1000);`, true],
+      ["self-exit", "console.log('{}');", false],
+    ] as const) {
+      const { root, policy, start, running } = stoppedFixture(t);
+      const id = randomUUID(),
+        cli = path.join(root, "cli.cjs");
+      start(id);
+      running(vmCommandName(policy.id, id));
+      fs.writeFileSync(cli, script);
+      const result = await new ProcessSupervisor().run({
+        ...supervisorOptions(policy, root, cli),
+        eventPolicy: policyStop ? testPolicyEvent : undefined,
+      });
+      const audit = result.evidence.programIoAudit!;
+      assert.equal(audit.invalidReceipts, policyStop ? 0 : 2, name);
+      assert.equal(audit.interruptedCommands, policyStop ? 1 : undefined, name);
+      if (policyStop) {
+        assert.equal(result.outcome, "process_exit");
+        assert.equal(result.failureKind, "role_violation");
+      }
+    }
+  },
+);
+test(
+  "an interrupted command counts as a possible write only where the VM can write",
+  { skip: posix },
+  async (t) => {
+    for (const mode of ["implementation", "test"] as const) {
+      const { root, policy, start } = stoppedFixture(t, mode),
+        cli = path.join(root, "cli.cjs");
+      start(randomUUID());
+      fs.writeFileSync(
+        cli,
+        `console.log(${sq(denial)});setInterval(()=>{},1000);`,
+      );
+      const result = await new ProcessSupervisor().run({
+        ...supervisorOptions(policy, root, cli),
+        eventPolicy: testPolicyEvent,
+      });
+      assert.equal(result.evidence.programIoAudit!.interruptedCommands, 1);
+      assert.equal(result.evidence.fileMutation, mode === "implementation");
+    }
+  },
+);
+const vmNames = (policy: ProgramIoPolicy): string[] => {
+  const list = spawnSync(
+    policy.vm!.binary,
+    ["list", "--all", "--format", "json"],
+    { encoding: "utf8", timeout: 15000 },
+  );
+  assert.equal(list.status, 0, list.stderr);
+  return JSON.parse(list.stdout)
+    .map(
+      (item: { id?: string; configuration?: { id?: string } }) =>
+        item.id ?? item.configuration?.id,
+    )
+    .filter((name: string) => name.startsWith(vmCommandName(policy.id, "")));
+};
+async function untilStarted(policy: ProgramIoPolicy): Promise<void> {
+  const file = path.join(policy.directory, "receipts.jsonl"),
+    deadline = Date.now() + 30000;
+  while (!fs.existsSync(file) || !fs.readFileSync(file, "utf8").length) {
+    assert.ok(Date.now() < deadline, "the broker never signed a start");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+}
+async function untilVmListed(policy: ProgramIoPolicy): Promise<void> {
+  const deadline = Date.now() + 30000;
+  while (!vmNames(policy).length) {
+    assert.ok(Date.now() < deadline, "the VM never appeared");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+}
+function startBroker(command: string, policy: ProgramIoPolicy) {
+  return spawn(
+    "/bin/sh",
+    ["-c", `exec ${wrapProgramCommand(command, policy)}`],
+    {
+      cwd: policy.cwd,
+      env: { ...process.env, AGENT_GRAPH_PROGRAM_IO: JSON.stringify(policy) },
+      stdio: "ignore",
+    },
+  );
+}
+for (const [when, vmUp] of [
+  ["with its VM up", true],
+  ["while its VM client is still creating it", false],
+] as const)
+  test(
+    `VM: a broker killed ${when} leaves no VM and a signed start, and no broker starts another`,
+    { skip: vmSkip },
+    async (t) => {
+      const { policy, target } = await workspace(
+        t,
+        "test",
+        "apple-container-vm",
+      );
+      fs.mkdirSync(path.join(target, "verification"), { recursive: true });
+      const broker = startBroker(
+        "sleep 2; echo late > verification/late.txt; sleep 60",
+        policy,
+      );
+      await untilStarted(policy);
+      if (vmUp) await untilVmListed(policy);
+      const tracker = new ProgramIoTracker(policy);
+      tracker.markPlatformStop();
+      // Reaped first: its real parent, the CLI, is gone, so launchd collects it. This
+      // test process is its parent, and finish() blocks the loop that would collect it.
+      const killed = new Promise((resolve) => broker.once("close", resolve));
+      broker.kill("SIGKILL");
+      await killed;
+      const audit = tracker.finish(true);
+      assert.equal(audit.invalidReceipts, 0);
+      assert.equal(audit.unresolvedCommands, 0);
+      assert.equal(audit.interruptedCommands, 1);
+      assert.equal(audit.commands.length, 0);
+      assert.deepEqual(vmNames(policy), []);
+      await new Promise((resolve) => setTimeout(resolve, 2500));
+      assert.equal(
+        fs.existsSync(path.join(target, "verification/late.txt")),
+        false,
+        "the interrupted command cannot act after the audit",
+      );
+      assert.deepEqual(vmNames(policy), []);
+      const receipts = fs.readFileSync(
+        path.join(policy.directory, "receipts.jsonl"),
+        "utf8",
+      );
+      const late = run("echo late > verification/late.txt", policy);
+      assert.equal(late.child.status, 125, late.child.stderr);
+      assert.equal(
+        fs.readFileSync(path.join(policy.directory, "receipts.jsonl"), "utf8"),
+        receipts,
+      );
+      assert.deepEqual(vmNames(policy), []);
+      assert.equal(
+        fs.existsSync(path.join(target, "verification/late.txt")),
+        false,
+      );
+    },
+  );
+test(
+  "VM: a signed broker that outlives the CLI ends its VM and still counts as interrupted",
+  { skip: vmSkip },
+  async (t) => {
+    const { policy } = await workspace(t, "test", "apple-container-vm");
+    const broker = startBroker("sleep 60", policy);
+    await untilStarted(policy);
+    const closed = new Promise((resolve) => broker.once("close", resolve));
+    const tracker = new ProgramIoTracker(policy);
+    tracker.markPlatformStop();
+    broker.kill("SIGTERM");
+    const audit = tracker.finish(true);
+    await closed;
+    assert.equal(audit.invalidReceipts, 0);
+    assert.equal(audit.interruptedCommands, 1);
+    assert.deepEqual(vmNames(policy), []);
+  },
+);
+test(
+  "VM: a VM left running without a platform stop stays invalid",
+  { skip: vmSkip },
+  async (t) => {
+    const { policy } = await workspace(t, "test", "apple-container-vm");
+    const broker = startBroker("sleep 60", policy);
+    await untilStarted(policy);
+    await untilVmListed(policy);
+    const killed = new Promise((resolve) => broker.once("close", resolve));
+    broker.kill("SIGKILL");
+    await killed;
+    const audit = new ProgramIoTracker(policy).finish(true);
+    assert.ok(audit.invalidReceipts > 0);
+    assert.equal(audit.interruptedCommands, undefined);
+    assert.deepEqual(vmNames(policy), []);
+  },
+);
+test(
+  "VM: parallel ls and a denied find end the test CLI without a false isolation violation",
+  { skip: vmSkip },
+  async (t) => {
+    const { policy, root } = await workspace(t, "test", "apple-container-vm");
+    const cli = path.join(root, "parallel-fixture.cjs");
+    fs.writeFileSync(
+      cli,
+      `const{kiloCheckHooks}=require(${JSON.stringify(path.join(__dirname, "kilo_protocol.js"))});const c=require('node:child_process'),f=require('node:fs'),path=require('node:path'),p=JSON.parse(process.env.AGENT_GRAPH_PROGRAM_IO);(async()=>{const hooks=kiloCheckHooks({cwd:p.cwd,commands:[],testSourcesReadOnly:true,programIo:p});const args={command:'ls -la'};await hooks['tool.execute.before']({tool:'bash'},{args});c.spawn('/bin/sh',['-c',args.command],{cwd:p.cwd,env:process.env,stdio:'ignore'});const file=path.join(p.directory,'receipts.jsonl');while(!f.existsSync(file))await new Promise(r=>setTimeout(r,10));const denied={command:'find . -type f | sort'};let error='';try{await hooks['tool.execute.before']({tool:'bash'},{args:denied})}catch(e){error=e.message}console.log(JSON.stringify({type:'tool_use',part:{id:'find',tool:'bash',state:{status:'error',input:denied,error}}}));setInterval(()=>{},1000)})().catch(e=>{console.error(e);process.exitCode=1});`,
+    );
+    const result = await new ProcessSupervisor().run({
+      ...supervisorOptions(policy, root, cli),
+      eventPolicy: testPolicyEvent,
+    });
+    assert.equal(result.outcome, "process_exit", result.output);
+    assert.equal(result.failureKind, "role_violation");
+    assert.match(result.failureMessage!, /AGENT_GRAPH_TEST_POLICY/);
+    const audit = result.evidence.programIoAudit!;
+    assert.equal(audit.invalidReceipts, 0);
+    assert.equal(audit.unresolvedCommands, 0);
+    assert.equal(audit.unwrappedCommands, 0);
+    assert.equal(audit.interruptedCommands, 1);
+    assert.deepEqual(vmNames(policy), []);
+  },
+);

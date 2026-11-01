@@ -97,6 +97,7 @@ export const validProgramIoAudit = (v: unknown): boolean =>
   count(v.unwrappedCommands) &&
   count(v.unresolvedCommands) &&
   count(v.invalidReceipts) &&
+  (v.interruptedCommands === undefined || count(v.interruptedCommands)) &&
   array(v.runtimeReadRoots, text) &&
   array(v.commands, programIoCommand);
 function attempt(v: unknown): boolean {
