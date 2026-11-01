@@ -320,6 +320,7 @@ for (const isFree of [true, false]) {
     if (!isFree) assert.match(state.statusReason!, /공급자 사용 한도/);
   });
 }
+const slow = process.platform === "win32" ? 4 : 1;
 for (const isFree of [true, false]) {
   test(`absolute recovery budget exhaustion ${isFree ? "retries a free model" : "pauses a paid model"}`, async (t) => {
     const s = await setup(true);
@@ -330,11 +331,13 @@ for (const isFree of [true, false]) {
       await minimal(s),
       "fixture:progress-budget-once",
       {
-        phaseTimeoutMs: 1000,
-        phaseRecoveryBudgetMs: 1200,
-        transportTimeoutMs: 600,
-        idleTimeoutMs: 600,
-        toolTimeoutMs: 600,
+        // The phase limit must fire first, and a slow Windows runner can take
+        // over 600ms just to get the first output.
+        phaseTimeoutMs: 1000 * slow,
+        phaseRecoveryBudgetMs: 1200 * slow,
+        transportTimeoutMs: 600 * slow,
+        idleTimeoutMs: 600 * slow,
+        toolTimeoutMs: 600 * slow,
         maxAutomaticRecoveryCycles: 1,
         automaticRecoveryBackoffMs: [100],
       },
