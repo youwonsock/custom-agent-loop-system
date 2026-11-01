@@ -26,6 +26,17 @@ export const manifest = {
     },
   ],
 };
+test("a malformed contract names the field the model must repair", () => {
+  const { version: _version, ...noVersion } = manifest;
+  for (const [bad, message] of [
+    [[], /JSON 객체/],
+    [noVersion, /"version": 1/],
+    [{ ...manifest, protectedFiles: [] }, /protectedFiles/],
+    [{ ...manifest, protectedFiles: ["a", "a"] }, /protectedFiles/],
+    [{ ...manifest, checks: [] }, /checks/],
+  ] as const)
+    assert.throws(() => validateManifest(bad, ["REQ-001"], false), message);
+});
 test("contracts require bounded safe paths, unique actual checks and complete requirement coverage", () => {
   assert.equal(validateManifest(manifest, ["REQ-001"], false).checks.length, 1);
   for (const bad of [
