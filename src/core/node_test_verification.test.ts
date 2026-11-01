@@ -27,6 +27,7 @@ import { emptyEvidence } from "./event_evidence";
 import { emptyCliDiagnostics } from "./cli_diagnostics";
 import { SupervisorResult } from "./process_supervisor";
 import { buildNodePrompt } from "./prompt";
+import { ADAPTER_EXAMPLE } from "./prompt_sections";
 
 const adapter = "probes/value.mjs";
 function manifest(): VerificationManifest {
@@ -458,6 +459,19 @@ test("the example contract for a goal naming npm test validates, and a miswired 
       e.message.includes(nodeTestVerificationCommand()) &&
       e.message.includes('suiteCheckId "node"'),
   );
+});
+test("the adapter example shown to models passes the real verifier", async (t) => {
+  const s = await setup(t);
+  await fs.writeFile(
+    path.join(s.root, adapter),
+    ADAPTER_EXAMPLE.replaceAll("module.mjs", "value.mjs"),
+  );
+  const r = await runNodeTestVerification({
+    target: s.root,
+    manifest: s.manifest,
+  });
+  assert.equal(r.allPassed, true, r.error ?? JSON.stringify(r.scopes));
+  assert.deepEqual(r.scopes[0]!.challenges[0]!.killedBy, ["value:correct"]);
 });
 test("a requirement naming npm test cannot be locked by a contract that never runs it", async (t) => {
   const s = await setup(t),
