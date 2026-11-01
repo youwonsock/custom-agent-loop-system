@@ -99,11 +99,16 @@ export function outsidePaths(text: string, roots: string[]): string[] {
         /^\s*(?:->|=>|→)\s*index\.html\b/i.test(
           line.slice(start + 1).replace(/^["'`]/, ""),
         );
+      // "serves index.html on `/` with 200". Only the bare root: a named path on
+      // such a line can still be a file.
+      const servedRoot =
+        value === "/" &&
+        /\b(?:serv(?:e|es|ed|ing)|status|returns? [1-5]\d\d)\b/i.test(line);
       if (
         !explicit &&
         !knownFileRoot &&
         !/^[A-Za-z]:/.test(value) &&
-        (httpContext || urlOnly || rootDocumentRoute)
+        (httpContext || urlOnly || rootDocumentRoute || servedRoot)
       )
         continue;
       const api = /^[A-Za-z]:[\\/]/.test(value) ? path.win32 : path.posix;
