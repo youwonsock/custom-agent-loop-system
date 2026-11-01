@@ -125,3 +125,25 @@ Kilo의 `BLOCKED` 1회는 잘못된 receipt 2건으로 집계됐지만 격리 �
 안전 조건을 빌드 결과에서 하나씩 빼 보았고(중단 표시 무시, VM 클라이언트 대기 생략, CLI 종료 미확인 허용, 시작 시각 검사 생략, 모르는 VM 허용), 다섯 경우 모두 테스트가 실패했다.
 
 실행 중 드러난 것: 시작 기록 직후에는 VM이 아직 목록에 없다. 그래서 목록만 비었다고 믿지 않고 `container run` 클라이언트가 끝날 때까지 기다린다.
+
+## Claude Haiku 5.5 실제 실행 — 2026-11-01
+
+Kilo 무료 모델의 사용량 제한이 계속되어, 사용자 결정으로 `tiny-web-tests`를 Kilo 대신 `claude-haiku-5-5`로 실행했다. 모델 별칭 `haiku`를 `ANTHROPIC_DEFAULT_HAIKU_MODEL`로 고정했고, 응답 모델이 `claude-haiku-5-5`임을 시도 기록에서 확인했다.
+
+| 코드 | `tiny-web` | `tiny-web-tests` (`nodeTests` 포함) |
+| --- | --- | --- |
+| `cb6a105` | 1회 `PAUSED` | 3회 중 2회 `SUCCESS` |
+| `4264b83` (#44) | **3회 모두 `SUCCESS`**, 315~530초 | 3회 중 2회 `SUCCESS` |
+| `9657dc8` (#45, 최종) | 재실행 안 함 | **3회 모두 `SUCCESS`**, 470~590초 |
+
+`SUCCESS`인 실행은 모두 `npm test`, `verify-node-tests`, 인수 검사, `verify-browser`의 종료 코드가 0이고, 검증기 보고서가 `allPassed: true`이며, 넣은 결함을 필수 케이스의 assertion이 잡았다.
+
+멈춘 실행에서 드러나 고친 문제:
+
+| 문제 | 처리 |
+| --- | --- |
+| 맨 `AGENT_REPORT` 아래의 목록을 JSON으로 읽어 정상 완료를 3회 거부 | 목록은 요약으로 간주. `verdict: BLOCKED`를 말하면 계속 거부(#44) |
+| `Invalid own Node scope/...`가 틀린 항목을 말하지 않아 모델이 `BLOCKED`를 보고 | 범위 오류를 항목별로 표시. 판정 기준은 그대로(#44) |
+| "requests `/no-such-page`", "`/nope` returns 404"를 외부 경로로 판정해 계획 거부 | HTTP 문맥으로 인정. 알려진 파일 루트와 `FILE_ACCESS`는 계속 보고(#45) |
+
+**이 결과의 범위:** 프로그램 I/O 격리는 Kilo 경로에서만 동작하므로 Claude 실행은 VM을 쓰지 않는다. Haiku 5.5의 통과는 자율 프리셋과 `nodeTests` 경로를 증명할 뿐 VM 격리를 증명하지 않는다. VM 경로의 실제 모델 증거는 Kilo의 `tiny-web` `SUCCESS`와 위의 VM 명령 기록이다. Kilo 무료 모델이 `nodeTests`를 통과한 적은 여전히 없다.
