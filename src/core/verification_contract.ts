@@ -237,6 +237,13 @@ async function fileHash(root: string, name: string): Promise<string> {
     throw Error(`검증 보호 파일이 너무 큽니다: ${name}`);
   return sha(await fs.readFile(file));
 }
+/** A mandatory requirement that an authored-test contract must run as npm test. */
+export function requirementNamingNpmTest(state: SessionState) {
+  if (!state.graph.automation?.authoredNodeTests) return undefined;
+  return state.requirements.items.find(
+    (r) => r.mandatory && /\bnpm test\b/.test(r.text),
+  );
+}
 export async function lockContract(
   state: SessionState,
   origin: "supplied" | "implementation",
@@ -263,10 +270,8 @@ export async function lockContract(
     );
   // A reviewer reading package.json is no proof: a requirement that names npm test
   // would pass without anything ever running it.
-  const namesNpmTest = state.requirements.items.find(
-    (r) => r.mandatory && /\bnpm test\b/.test(r.text),
-  );
-  if (state.graph.automation?.authoredNodeTests && namesNpmTest && !hasNpmTest)
+  const namesNpmTest = requirementNamingNpmTest(state);
+  if (namesNpmTest && !hasNpmTest)
     throw Error(
       `${namesNpmTest.id}가 npm test를 요구하므로 고정 계약에 npm test 검사와 nodeTests 정책이 필요합니다.`,
     );

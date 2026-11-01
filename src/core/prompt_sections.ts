@@ -13,6 +13,7 @@ import {
 import { parseRequirementEvidence } from "./requirement_ledger";
 import { nodeTestScript } from "./node_test_policy";
 import { nodeTestVerificationCommand } from "./node_test_command";
+import { requirementNamingNpmTest } from "./verification_contract";
 import {
   isAuditRole,
   isResearchRole,
@@ -215,13 +216,25 @@ function contractSections({ state }: PromptContext): string[] {
 function exampleManifest(state: PromptContext["state"]) {
   const requirements = state.requirements.items.map((r) => r.id);
   const browser = state.graph.automation?.browserVerification;
+  const npmTest = !!requirementNamingNpmTest(state);
   return {
     version: 1,
     protectedFiles: [
       "tests/verify-acceptance.mjs",
       ...(browser ? [".agent-graph/browser.json"] : []),
+      ...(npmTest ? ["tests/probes/defect.mjs"] : []),
     ],
     checks: [
+      ...(npmTest
+        ? [
+            { id: "node", command: "npm test", requirements },
+            {
+              id: "self_tests",
+              command: nodeTestVerificationCommand(),
+              requirements,
+            },
+          ]
+        : []),
       {
         id: "acceptance",
         command: "node tests/verify-acceptance.mjs",
@@ -237,6 +250,29 @@ function exampleManifest(state: PromptContext["state"]) {
           ]
         : []),
     ],
+    ...(npmTest
+      ? {
+          nodeTests: {
+            checkId: "self_tests",
+            suiteCheckId: "node",
+            scopes: [
+              {
+                id: "behavior",
+                file: "test/behavior.test.mjs",
+                requirements,
+                cases: ["behavior:boundary"],
+                challenges: [
+                  {
+                    id: "wrong-result",
+                    adapter: "tests/probes/defect.mjs",
+                    targets: ["module.mjs"],
+                  },
+                ],
+              },
+            ],
+          },
+        }
+      : {}),
   };
 }
 function autonomousSections({

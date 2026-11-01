@@ -413,6 +413,52 @@ test("new autonomous npm contracts require own-suite policy while historical gra
   delete state.graph.automation!.authoredNodeTests;
   assert.equal((await lockContract(state, "supplied")).status, "locked");
 });
+test("the example contract for a goal naming npm test validates, and a miswired one names the fix", async (t) => {
+  const s = await setup(t);
+  const graph = createAutonomousGraph();
+  graph.automation!.browserVerification = false;
+  const visit = {
+    id: "implementation",
+    nodeId: "implementation",
+    attempts: [],
+    output: "",
+  } as unknown as NodeVisit;
+  const prompt = buildNodePrompt(
+    {
+      goal: "npm test runs the project's own node tests.",
+      targetProjectPath: s.root,
+      graph,
+      requirements: deriveRequirementLedger(
+        "npm test runs the project's own node tests.",
+      ),
+      visits: [visit],
+      accessMode: "ask",
+      additionalAllowedPaths: [],
+    } as unknown as SessionState,
+    graph.nodes.find((n) => n.type === "implementation")!,
+    visit,
+  );
+  const lines = prompt.split("\n");
+  const example = JSON.parse(
+    lines[lines.indexOf("=== FROZEN VERIFICATION CONTRACT ===") + 2]!,
+  );
+  assert.equal(
+    validateManifest(example, ["REQ-001"], false).nodeTests!.suiteCheckId,
+    "node",
+  );
+  const miswired = structuredClone(example);
+  miswired.checks = miswired.checks.filter(
+    (c: { id: string }) => c.id !== "node",
+  );
+  miswired.checks.find((c: { id: string }) => c.id === "self_tests").command =
+    "npm test";
+  assert.throws(
+    () => validateManifest(miswired, ["REQ-001"], false),
+    (e: Error) =>
+      e.message.includes(nodeTestVerificationCommand()) &&
+      e.message.includes('suiteCheckId "node"'),
+  );
+});
 test("a requirement naming npm test cannot be locked by a contract that never runs it", async (t) => {
   const s = await setup(t),
     old = structuredClone(s.manifest);

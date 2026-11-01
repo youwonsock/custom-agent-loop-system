@@ -67,7 +67,7 @@ export function validateNodeTestPolicy(
     !/^npm test(?: > [a-zA-Z0-9_./-]+ 2>&1)?$/.test(suite.command)
   )
     throw Error(
-      "nodeTests requires the exact installed verify-node-tests command and a separate npm test check.",
+      `nodeTests requires two separate checks: checkId "${value.checkId}" must exist with the exact command ${nodeTestVerificationCommand()} and suiteCheckId "${value.suiteCheckId}" must exist with the command npm test.`,
     );
   const ids = new Set<string>(),
     files = new Set<string>(),
