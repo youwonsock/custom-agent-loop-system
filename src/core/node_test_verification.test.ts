@@ -413,6 +413,38 @@ test("new autonomous npm contracts require own-suite policy while historical gra
   delete state.graph.automation!.authoredNodeTests;
   assert.equal((await lockContract(state, "supplied")).status, "locked");
 });
+test("a requirement naming npm test cannot be locked by a contract that never runs it", async (t) => {
+  const s = await setup(t),
+    old = structuredClone(s.manifest);
+  delete old.nodeTests;
+  old.protectedFiles.push("probes/verify-acceptance.mjs");
+  await fs.writeFile(
+    path.join(s.root, "probes/verify-acceptance.mjs"),
+    "// supplied acceptance runner\n",
+  );
+  old.checks = [
+    {
+      id: "acceptance",
+      command: "node probes/verify-acceptance.mjs",
+      requirements: ["REQ-001"],
+    },
+  ];
+  await fs.writeFile(
+    path.join(s.root, ".agent-graph/verification.json"),
+    JSON.stringify(old),
+  );
+  const state = {
+    targetProjectPath: s.root,
+    requirements: deriveRequirementLedger(
+      "npm test runs the project's own node tests.",
+    ),
+    graph: createAutonomousGraph(),
+  } as SessionState;
+  state.graph.automation!.browserVerification = false;
+  await assert.rejects(lockContract(state, "supplied"), /REQ-001.*npm test/);
+  state.requirements = deriveRequirementLedger("goal");
+  assert.equal((await lockContract(state, "supplied")).status, "locked");
+});
 test("one quality run reports weak assertions across multiple scopes instead of consuming a repair visit per first failure", async (t) => {
   const s = await setup(
     t,

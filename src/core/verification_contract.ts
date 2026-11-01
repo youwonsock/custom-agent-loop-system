@@ -243,13 +243,25 @@ export async function lockContract(
     state.requirements.items.map((r) => r.id),
     !!state.graph.automation?.browserVerification,
   );
+  const hasNpmTest = manifest.checks.some((c) =>
+    /^npm test(?:\s|$)/.test(c.command),
+  );
   if (
     state.graph.automation?.authoredNodeTests &&
-    manifest.checks.some((c) => /^npm test(?:\s|$)/.test(c.command)) &&
+    hasNpmTest &&
     !manifest.nodeTests
   )
     throw Error(
       "새 자율 Node 프리셋에는 자체 테스트 영역·필수 케이스·보호된 결함 탐지 어댑터를 선언한 nodeTests 계약이 필요합니다.",
+    );
+  // A reviewer reading package.json is no proof: a requirement that names npm test
+  // would pass without anything ever running it.
+  const namesNpmTest = state.requirements.items.find(
+    (r) => r.mandatory && /\bnpm test\b/.test(r.text),
+  );
+  if (state.graph.automation?.authoredNodeTests && namesNpmTest && !hasNpmTest)
+    throw Error(
+      `${namesNpmTest.id}가 npm test를 요구하므로 고정 계약에 npm test 검사와 nodeTests 정책이 필요합니다.`,
     );
   const hashes: Record<string, string> = {};
   let totalBytes = 0;
