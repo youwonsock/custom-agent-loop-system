@@ -35,19 +35,26 @@ export function validateManifest(
   requirements: string[],
   browser: boolean,
 ): VerificationManifest {
+  // The model repairs from this text: name the field, or it retries blind.
+  if (!plain(value)) throw Error("검증 계약은 JSON 객체여야 합니다.");
+  if (value.version !== 1)
+    throw Error('검증 계약에 "version": 1이 필요합니다.');
   if (
-    !plain(value) ||
-    value.version !== 1 ||
     !Array.isArray(value.protectedFiles) ||
     !value.protectedFiles.length ||
     value.protectedFiles.length > 200 ||
     !value.protectedFiles.every(relative) ||
-    new Set(value.protectedFiles).size !== value.protectedFiles.length ||
+    new Set(value.protectedFiles).size !== value.protectedFiles.length
+  )
+    throw Error(
+      "검증 계약의 protectedFiles는 중복 없는 상대 경로 1~200개여야 합니다.",
+    );
+  if (
     !Array.isArray(value.checks) ||
     !value.checks.length ||
     value.checks.length > 50
   )
-    throw Error("검증 계약 version/보호 파일/검사 목록이 잘못되었습니다.");
+    throw Error("검증 계약의 checks는 1~50개여야 합니다.");
   const ids = new Set<string>(),
     commands = new Set<string>(),
     covered = new Set<string>();
