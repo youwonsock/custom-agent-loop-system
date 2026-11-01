@@ -121,7 +121,7 @@ function summarize(state) {
     .flatMap((v) => v.attempts)
     .map((a) => a.programIoAudit)
     .filter(Boolean);
-  const total = (key) => audits.reduce((sum, a) => sum + a[key], 0);
+  const total = (key) => audits.reduce((sum, a) => sum + (a[key] ?? 0), 0);
   const node = (id) => state.graph.nodes.find((n) => n.id === id)?.type ?? id;
   return {
     status: state.status,
@@ -147,6 +147,7 @@ function summarize(state) {
           unwrappedCommands: total("unwrappedCommands"),
           unresolvedCommands: total("unresolvedCommands"),
           invalidReceipts: total("invalidReceipts"),
+          interruptedCommands: total("interruptedCommands"),
           containersRemoved: audits
             .flatMap((a) => a.commands)
             .every((c) => c.containerRemoved),

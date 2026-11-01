@@ -210,6 +210,8 @@ export interface ProgramIoAudit {
   unwrappedCommands: number;
   unresolvedCommands: number;
   invalidReceipts: number;
+  /** Signed VM starts the platform's own stop of the CLI cut off. Proves nothing passed. */
+  interruptedCommands?: number;
   runtimeReadRoots: string[];
   commands: Array<{
     id: string;

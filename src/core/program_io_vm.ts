@@ -290,8 +290,13 @@ export function removeVm(vm: VmRuntime, name: string): boolean {
     return false;
   }
 }
-/** Controller backstop after a broker crash. Never touches another policy's VM. */
-export function cleanupPolicyVms(vm: VmRuntime, policyId: string): number {
+export const vmCommandName = (policyId: string, commandId: string): string =>
+  `agio-${policyId.slice(0, 16)}-${commandId.slice(0, 16)}`;
+/**
+ * Controller backstop after a broker crash. Never touches another policy's VM.
+ * Returns the names it removed.
+ */
+export function cleanupPolicyVms(vm: VmRuntime, policyId: string): string[] {
   const all = JSON.parse(
     cli(
       vm.binary,
@@ -302,7 +307,7 @@ export function cleanupPolicyVms(vm: VmRuntime, policyId: string): number {
   );
   if (!Array.isArray(all))
     throw unavailable("Cannot confirm owned VM cleanup.");
-  const prefix = `agio-${policyId.slice(0, 16)}-`;
+  const prefix = vmCommandName(policyId, "");
   const names = all
     .map(
       (item: { id?: string; configuration?: { id?: string } }) =>
@@ -314,7 +319,7 @@ export function cleanupPolicyVms(vm: VmRuntime, policyId: string): number {
     );
   for (const name of names)
     if (!removeVm(vm, name)) throw unavailable("Owned VM cleanup failed.");
-  return names.length;
+  return names;
 }
 export function vmArgumentsDigest(args: string[]): string {
   return sha(JSON.stringify(args));

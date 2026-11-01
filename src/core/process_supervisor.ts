@@ -435,8 +435,17 @@ class SupervisedAttempt {
     }
     const { options, evidence } = this;
     this.scopeTracker?.finish();
-    if (this.ioTracker) evidence.programIoAudit = this.ioTracker.finish();
+    if (this.ioTracker)
+      evidence.programIoAudit = this.ioTracker.finish(
+        outcome !== "orphaned_process",
+      );
     evidence.fileMutation ||= this.mutations.finish();
+    // The CLI reports only finished tools, so an interrupted write has no event.
+    if (
+      evidence.programIoAudit?.interruptedCommands &&
+      options.programIoPolicy?.vm?.mode === "implementation"
+    )
+      evidence.fileMutation = true;
     if (this.mutations.changedFiles.length)
       evidence.changedFiles = this.mutations.changedFiles.map((file) =>
         path.relative(options.cwd, path.resolve(options.cwd, file)),
@@ -521,6 +530,8 @@ class SupervisedAttempt {
         return;
       }
     }
+    if (checkProcessLiveness(pid) !== "dead")
+      this.ioTracker?.markPlatformStop();
     try {
       this.child.kill();
     } catch {

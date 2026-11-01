@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { spawn } from "node:child_process";
 import {
+  PLATFORM_STOP_FILE,
   ProgramIoPolicy,
   ioSign,
   ioVerify,
@@ -11,6 +12,7 @@ import {
   imageDigest,
   vmCommandArguments,
   vmArgumentsDigest,
+  vmCommandName,
   removeVm,
   containerHostEnvironment,
 } from "./program_io_vm";
@@ -53,7 +55,7 @@ async function main(): Promise<void> {
       { mode: 0o600 },
     );
   };
-  const name = `agio-${policy.id.slice(0, 16)}-${payload.id.slice(0, 16)}`,
+  const name = vmCommandName(policy.id, payload.id),
     lock = path.join(policy.directory, "command.lock");
   for (;;) {
     try {
@@ -125,6 +127,10 @@ async function main(): Promise<void> {
           policy.bootstrap,
           Buffer.from(JSON.stringify(inner)).toString("base64url"),
         ];
+    // Holding the lock here is what lets the controller trust an empty lock: a
+    // broker that missed this file still holds it while the controller waits.
+    if (fs.existsSync(path.join(policy.directory, PLATFORM_STOP_FILE)))
+      throw new IoUnavailable(`The platform already ended this CLI.`);
     const child = spawn(policy.vm?.binary ?? "/usr/bin/sandbox-exec", args, {
       cwd: policy.cwd,
       env: policy.vm
