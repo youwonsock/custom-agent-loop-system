@@ -27,6 +27,7 @@ import { emptyEvidence } from "./event_evidence";
 import { emptyCliDiagnostics } from "./cli_diagnostics";
 import { SupervisorResult } from "./process_supervisor";
 import { buildNodePrompt } from "./prompt";
+import { ADAPTER_EXAMPLE } from "./prompt_sections";
 
 const adapter = "probes/value.mjs";
 function manifest(): VerificationManifest {
@@ -457,6 +458,35 @@ test("the example contract for a goal naming npm test validates, and a miswired 
     (e: Error) =>
       e.message.includes(nodeTestVerificationCommand()) &&
       e.message.includes('suiteCheckId "node"'),
+  );
+});
+test("the adapter example shown to models passes the real verifier", async (t) => {
+  const s = await setup(t);
+  await fs.writeFile(
+    path.join(s.root, adapter),
+    ADAPTER_EXAMPLE.replaceAll("module.mjs", "value.mjs"),
+  );
+  const r = await runNodeTestVerification({
+    target: s.root,
+    manifest: s.manifest,
+  });
+  assert.equal(r.allPassed, true, r.error ?? JSON.stringify(r.scopes));
+  assert.deepEqual(r.scopes[0]!.challenges[0]!.killedBy, ["value:correct"]);
+});
+test("a defect caught only in a subtest of a required case explains what would count", async (t) => {
+  const s = await setup(
+    t,
+    "import test from 'node:test';import a from 'node:assert/strict';import {value} from '../value.mjs';test('value:correct',async(t)=>{await t.test('inner',()=>a.equal(value,1));});",
+  );
+  const r = await runNodeTestVerification({
+    target: s.root,
+    manifest: s.manifest,
+  });
+  assert.equal(r.allPassed, false);
+  assert.match(r.error ?? "", /Failed in this run: inner, value:correct/);
+  assert.match(
+    r.error ?? "",
+    /directly inside a required case \(value:correct\)/,
   );
 });
 test("a requirement naming npm test cannot be locked by a contract that never runs it", async (t) => {

@@ -66,13 +66,14 @@ export function validateBrowserSpec(value: unknown): BrowserSpec {
     );
   const ids = new Set<string>();
   for (const step of s.steps) {
-    if (
-      !step ||
-      !string(step.id) ||
-      ids.has(step.id) ||
-      !types.includes(step.type)
-    )
-      throw new Error("Browser steps need unique ids and supported types.");
+    if (!step || !string(step.id) || ids.has(step.id))
+      throw new Error(
+        `Browser steps need unique string ids: ${JSON.stringify(step?.id)}`,
+      );
+    if (!types.includes(step.type))
+      throw new Error(
+        `${step.id}: unsupported type ${JSON.stringify(step.type)}. Supported: ${types.join(", ")}`,
+      );
     ids.add(step.id);
     if (
       [

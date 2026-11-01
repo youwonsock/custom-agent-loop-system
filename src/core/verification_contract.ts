@@ -7,6 +7,7 @@ import {
   VerificationManifest,
 } from "../shared/domain";
 import { browserVerificationCommand } from "./browser_command";
+import { validateBrowserSpec } from "./browser_spec";
 import { inside } from "./verification_sources";
 import {
   isVerificationCommand,
@@ -275,6 +276,22 @@ export async function lockContract(
     throw Error(
       `${namesNpmTest.id}가 npm test를 요구하므로 고정 계약에 npm test 검사와 nodeTests 정책이 필요합니다.`,
     );
+  // A frozen file cannot be repaired, so a broken spec must fail while it still can.
+  if (state.graph.automation?.browserVerification)
+    try {
+      validateBrowserSpec(
+        JSON.parse(
+          await fs.readFile(
+            await inside(root, ".agent-graph/browser.json"),
+            "utf8",
+          ),
+        ),
+      );
+    } catch (error) {
+      throw Error(
+        `.agent-graph/browser.json을 고정할 수 없습니다: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
   const hashes: Record<string, string> = {};
   let totalBytes = 0;
   for (const name of [
