@@ -1,6 +1,6 @@
 # 실행 구조
 
-2026-10-30 기준. 사용자 기능과 조건은 [README](../README.md), [실행 조건](EXECUTION_CONDITIONS.md), [자율 실행](AUTONOMOUS_WORKFLOW.md)을 기준으로 한다. 이 문서는 코드를 수정하는 사람을 위한 내부 구조다.
+2026-10-31 기준. 사용자 기능과 조건은 [README](../README.md), [실행 조건](EXECUTION_CONDITIONS.md), [자율 실행](AUTONOMOUS_WORKFLOW.md)을 기준으로 한다. 이 문서는 코드를 수정하는 사람을 위한 내부 구조다.
 
 ## 프로세스
 
@@ -31,11 +31,11 @@ flowchart LR
 | 5 | `newAttempt` | attempt 기록 생성·저장 |
 | 6 | `supervise` | `ProcessSupervisor` 실행(자식 하나의 출력 해석·증거·타이머는 `SupervisedAttempt`). 가드 콜백이 `AttemptRun.policyReason`/`sourceChanges`에 기록 |
 | 7 | `recordOutcome` | 증거(명령 receipt, 읽은 파일, 감사, 파일 변경)를 attempt·방문에 반영 |
-| 8 | `evidenceGates` | 고아 프로세스, VM·범위 감사, 고정 테스트의 소스 변경, 예산, 보호 파일, 단계 예산, 해시 비교, 승인 전 소스 재검사 |
+| 8 | `evidenceGates` | 고아 프로세스, 제어 요청, VM·범위 감사, 고정 테스트의 소스 변경, 예산, 계약, 보호 파일, 단계 예산, 해시 비교, 승인 전 소스 재검사. `EVIDENCE_GATES` 목록을 순서대로 실행 |
 | 9 | `judge` | 자체 Node 증명, `validateCompletion`, 필수 파일, 자율 계획의 외부 경로, 환경 차단 |
-| 10 | `failure` + 재시도 | 실패 분류, 비재시도·할당량 정지, 재시도·재접속·완료 복구 |
+| 10 | `attemptFailure` + 재시도 | 실패 분류, 쓰기 거부·비재시도·할당량 정지, 재시도·재접속·완료 복구. 시도가 소진되면 `recoverOrPause` |
 
-`evidenceGates`와 `judge`는 `undecided`이면 다음 단계로 진행한다.
+8단계 이후는 `runtime_gates.ts`에 있고 `GateHost`로 세션을 다룬다. 단계 사이에 넘기는 타입은 `runtime_steps.ts`에 있다. `evidenceGates`와 `judge`는 `undecided`이면 다음 단계로 진행한다. 게이트 순서는 앞선 게이트가 걸러 내거나 기록한 내용에 뒤의 게이트가 의존하므로 바꾸지 않는다.
 
 `validateCompletion`은 역할 판정을 순서가 있는 게이트 목록(`GATES`)으로 실행하며, 앞선 게이트가 걸러 낸 조건을 뒤의 게이트가 전제로 삼으므로 순서를 바꾸지 않는다.
 
@@ -54,10 +54,10 @@ flowchart LR
 | 고정 테스트의 환경 제약 | WAITING_USER | ✅ | ✅ |
 | 고정 테스트의 인증·권한·모델 오류 | WAITING_USER | ✅ | ❌ |
 | 완료 응답의 환경 차단 | WAITING_USER | ✅ | ✅ |
-| 비재시도 실패 | WAITING_USER | ✅ | ❌ |
+| 비재시도 실패, CLI의 쓰기 거부 | WAITING_USER | ✅ | ❌ |
 | 유료·미확인 모델의 할당량 소진 | PAUSED | ✅ | ❌ |
 
-예산(`budgetStop`), 단계 예산(`stageStop`), 계약 변조(`contractStop`), 소진(`exhausted`)은 별도 메서드가 처리한다. `run()` 시작 시 예약 복구는 이미 비워지므로 "취소 ❌"는 실행 중 새로 예약된 복구가 없다는 뜻이다.
+예산(`budgetStop`), 단계 예산(`stageStop`), 계약 변조(`contractStop`), 소진(`recoverOrPause`)은 별도 메서드가 처리한다. `run()` 시작 시 예약 복구는 이미 비워지므로 "취소 ❌"는 실행 중 새로 예약된 복구가 없다는 뜻이다.
 
 ## 실행 정책 (`run_policy.ts`)
 
