@@ -1,6 +1,7 @@
 {
   "name": "custom-agent-loop-system",
   "version": "4.0.0",
+  "license": "MIT",
   "description": "Local agent graph editor and resilient coding CLI orchestrator",
   "type": "commonjs",
   "main": "dist/src/server/cli.js",
