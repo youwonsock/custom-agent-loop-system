@@ -10,3 +10,4 @@ test/fixtures/
 # Prose keeps its hand-written tables and line breaks
 *.md
 launchers/
+.claude/worktrees/
