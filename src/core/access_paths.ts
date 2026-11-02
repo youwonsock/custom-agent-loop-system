@@ -33,6 +33,14 @@ export function reachableOnThisMachine(file: string): boolean {
   return fs.existsSync(root + resolved.slice(root.length).split(path.sep)[0]);
 }
 
+/** The author asked for access to this path by name, so it is never discounted as prose. */
+export function namedByFileAccess(text: string, file: string): boolean {
+  return text.split(/\r?\n/).some((line) => {
+    const at = line.search(/\bFILE_ACCESS:\s*/);
+    return at >= 0 && line.includes(file, at);
+  });
+}
+
 /** Advisory prompt scan. Native CLI permissions remain the enforcement boundary. */
 export function outsidePaths(text: string, roots: string[]): string[] {
   const found: string[] = [];

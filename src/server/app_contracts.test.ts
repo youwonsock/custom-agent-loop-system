@@ -658,10 +658,12 @@ test("an explicit original-goal external path retains its access approval gate i
   const id = await launch(
     s,
     graph,
-    "Build an artifact using FILE_ACCESS: /tmp/requested-reference.txt",
+    "Build an artifact using FILE_ACCESS: /no-such-e2b1/requested-reference.txt",
   );
   const held = await wait(() => s.store.readSession(id), "WAITING_USER");
-  assert.deepEqual(held.pendingAccess!.paths, ["/tmp/requested-reference.txt"]);
+  assert.deepEqual(held.pendingAccess!.paths, [
+    "/no-such-e2b1/requested-reference.txt",
+  ]);
   assert.equal(
     held.visits.find((v) => v.nodeId === "implementation")!.attempts.length,
     0,

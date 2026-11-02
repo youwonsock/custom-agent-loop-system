@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // Deterministic local coding CLI used only by acceptance tests. No API calls.
 const fs = require("node:fs");
+const os = require("node:os");
 const path = require("node:path");
 const http = require("node:http");
 const { spawnSync } = require("node:child_process");
@@ -390,7 +391,7 @@ if (args[0] === "debug" && args[1] === "config") {
         (calls.planning === 1 ||
           prompt.includes("fixture:plan-external-always"))
       )
-        text += "\nRead /tmp/unrequested-reference.txt before implementation.";
+        text += `\nRead ${path.join(os.tmpdir(), "unrequested-reference.txt")} before implementation.`;
       if (prompt.includes("fixture:plan-prose-paths"))
         text +=
           "\nThe test requests /no-such-page-e2b1 and matches with the regex flag /i-e2b1.";
