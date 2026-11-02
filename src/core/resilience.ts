@@ -85,7 +85,9 @@ export async function readJsonFile<T>(filePath: string): Promise<T | null> {
 export async function renameWithRetry(
   sourcePath: string,
   destinationPath: string,
-  maxRetries = 5,
+  // About 3.5 seconds in all: Windows refuses to replace a file another process is
+  // reading, and it stays inside the 5 seconds other writers wait for the state lock.
+  maxRetries = 12,
 ): Promise<void> {
   let lastError: unknown;
   for (let attempt = 0; attempt < maxRetries; attempt++) {
@@ -98,7 +100,10 @@ export async function renameWithRetry(
       if (code !== "EPERM" && code !== "EBUSY" && code !== "EACCES") {
         throw err;
       }
-      await delay(50 * 2 ** attempt);
+      // Varied, so the wait does not stay in step with a reader polling the file.
+      await delay(
+        Math.min(50 * 2 ** attempt, 400) * (0.75 + Math.random() / 2),
+      );
     }
   }
   throw lastError;
