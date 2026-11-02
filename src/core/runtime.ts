@@ -87,6 +87,7 @@ import {
   sessionDeadline,
 } from "./runtime_attempt";
 import { preflight } from "./runtime_preflight";
+import { checkOutParts, mergeParts, removeParts } from "./parallel_parts";
 import {
   GateHost,
   attemptFailure,
@@ -262,13 +263,16 @@ export class GraphRuntime implements GateHost {
   private async recoverStaleOwner(
     previousLease: Parameters<typeof collectRecoveredChildPids>[0],
   ): Promise<boolean> {
-    const activeAttempt = this.state.visits
-      .find((v) => v.id === this.state.activeVisitId)
-      ?.attempts.at(-1);
-    for (const pid of collectRecoveredChildPids(
-      previousLease,
-      activeAttempt?.pid,
-    )) {
+    const activeVisit = this.state.visits.find(
+      (v) => v.id === this.state.activeVisitId,
+    );
+    const activeAttempt = activeVisit?.attempts.at(-1);
+    const running =
+      activeVisit?.attempts.filter((a) => a.status === "running") ?? [];
+    for (const pid of new Set([
+      ...collectRecoveredChildPids(previousLease, activeAttempt?.pid),
+      ...running.flatMap((a) => (a.pid ? [a.pid] : [])),
+    ])) {
       if (
         checkProcessLiveness(pid) !== "dead" &&
         (await terminateProcessTreeBounded(
@@ -283,14 +287,19 @@ export class GraphRuntime implements GateHost {
         return false;
       }
     }
-    if (activeAttempt?.status === "running") {
-      activeAttempt.status = "interrupted";
-      activeAttempt.failureKind = "worker_crash";
-      activeAttempt.message =
-        "이전 워커 종료 후 남은 자식 프로세스를 정리했습니다.";
-      activeAttempt.endedAt = new Date().toISOString();
-      activeAttempt.pid = null;
+    for (const attempt of running) {
+      attempt.status = "interrupted";
+      attempt.failureKind = "worker_crash";
+      attempt.message = "이전 워커 종료 후 남은 자식 프로세스를 정리했습니다.";
+      attempt.endedAt = new Date().toISOString();
+      attempt.pid = null;
     }
+    if (activeVisit?.attempts.some((a) => a.mode === "parallel_part"))
+      await removeParts(
+        this.state.targetProjectPath,
+        path.join(this.store.visitDir(this.state.id, activeVisit.id), "parts"),
+        `agent-graph/${activeVisit.id}`,
+      );
     return true;
   }
   /** Only bindings referenced by this immutable run are queried; no CLI scan.
@@ -614,6 +623,17 @@ export class GraphRuntime implements GateHost {
     let reconnectUsed = cycleAttempts(visit).some((a) => a.reconnectUsed),
       nextResume: string | undefined;
     let recoveryMessage: string | undefined;
+    // Only the first visit: a repair works on the merged result.
+    if (
+      node.parallelTasks &&
+      !stage.policy.kiloScopeGuard &&
+      this.state.visits.filter((v) => v.nodeId === node.id).length === 1 &&
+      visit.attempts.every((a) => a.mode === "parallel_part")
+    ) {
+      const parts = await this.runParallelParts(stage, node.parallelTasks);
+      if (parts === null) return STOPPED;
+      recoveryMessage = parts;
+    }
     for (;;) {
       if (await this.attemptGuards(stage)) return STOPPED;
       const normal = cycleAttempts(visit).filter(
@@ -767,11 +787,120 @@ export class GraphRuntime implements GateHost {
     }
     return false;
   }
+  /**
+   * Parts run once per visit, in their own checkouts, and only prepare the work: the
+   * normal attempt that follows integrates them on the project and is what gets judged.
+   * Returns what that attempt must know, or null once the session stopped.
+   */
+  private async runParallelParts(
+    stage: Stage,
+    tasks: string[],
+  ): Promise<string | null> {
+    const { node, visit } = stage,
+      target = this.state.targetProjectPath;
+    const together = `Do all of these parts:\n${tasks.map((task) => `- ${task}`).join("\n")}`;
+    if (visit.attempts.some((a) => a.mode === "parallel_part"))
+      return `An earlier run of this visit started these parts in parallel and may not have finished. Check what is there and complete it.\n${together}`;
+    const root = path.join(
+        this.store.visitDir(this.state.id, visit.id),
+        "parts",
+      ),
+      prefix = `agent-graph/${visit.id}`;
+    const checkouts = await checkOutParts(target, root, prefix, tasks);
+    if (!checkouts) return together;
+    try {
+      if (await this.attemptGuards(stage)) return null;
+      // Every part stops on the same request, and only one of them may claim it.
+      let claimed: ClaimedControlRequest | null = null;
+      const pollControl = async () =>
+        (claimed ??= await claimNextControlRequest(this.controls()));
+      // Prepared one at a time, so the attempts are recorded in the order of the tasks.
+      const started = [];
+      for (const part of checkouts.parts) {
+        const id = randomUUID();
+        const options = invocationOptionsFor(
+          this.state,
+          this.store,
+          stage,
+          id,
+          undefined,
+          undefined,
+        );
+        const invocation = await buildInvocation(
+          stage.connection,
+          stage.binding,
+          node,
+          {
+            ...options,
+            cwd: part.directory,
+            prompt: `${options.prompt.replaceAll(target, part.directory)}\n\n=== YOUR PART ===\n${part.task}\nOther parts are being done at the same time in separate checkouts. Change only what this part needs. Do not commit, and do not write .agent-graph: a later step merges the parts and prepares the verification contract.`,
+          },
+        );
+        const attempt = newAttemptRecord(
+          this.state,
+          this.store,
+          this.pricing.get(node.id),
+          stage,
+          id,
+          false,
+          undefined,
+          part.task,
+        );
+        visit.attempts.push(attempt);
+        started.push({ part, attempt, invocation });
+      }
+      await this.save();
+      const runs = await Promise.all(
+        started.map(async ({ part, attempt, invocation }) => {
+          const run = await this.supervise(
+            stage,
+            attempt,
+            invocation,
+            part.directory,
+            pollControl,
+          );
+          await this.recordOutcome(stage, run);
+          return { part, run };
+        }),
+      );
+      await this.save();
+      const stopped = runs.find((r) => r.run.result.controlRequest);
+      if (stopped) {
+        // Settling makes the session resumable, so nothing may be left by then.
+        await removeParts(target, root, prefix);
+        const gated = await evidenceGates(this, stage, stopped.run);
+        if (gated.step === "stopped") return null;
+      }
+      const finished = runs
+        .filter((r) => r.run.result.outcome === "succeeded")
+        .map((r) => r.part);
+      const { merged, conflicts } = await mergeParts(
+        target,
+        checkouts,
+        finished,
+      );
+      const unfinished = tasks.filter(
+        (task) => !finished.some((part) => part.task === task),
+      );
+      const list = (title: string, items: string[]) =>
+        items.length ? [`${title}:`, ...items.map((task) => `- ${task}`)] : [];
+      return [
+        "The parts of this work ran in parallel. Their merged changes are now uncommitted in the project. Finish the work here: integrate them, repair what does not fit, and complete everything this role requires, including the verification contract.",
+        ...list("Merged", merged),
+        ...list("Conflicted, not merged, do these now", conflicts),
+        ...list("Did not finish, do these now", unfinished),
+      ].join("\n");
+    } finally {
+      await removeParts(target, root, prefix);
+    }
+  }
   /** Run the CLI under the supervisor; guard callbacks report into the returned run. */
   private async supervise(
     { node, visit, policy, sourceInputs, deadline }: Stage,
     attempt: AttemptRecord,
     invocation: Invocation,
+    cwd = this.state.targetProjectPath,
+    pollControl = () => claimNextControlRequest(this.controls()),
   ): Promise<AttemptRun> {
     const s = this.state.settings,
       sourceGuard = policy.automated;
@@ -793,7 +922,7 @@ export class GraphRuntime implements GateHost {
       );
     const result = await new ProcessSupervisor().run({
       ...invocation,
-      cwd: this.state.targetProjectPath,
+      cwd,
       cols: process.platform === "win32" ? 2000 : 100000,
       rows: 40,
       useConpty: process.platform === "win32",
@@ -829,7 +958,7 @@ export class GraphRuntime implements GateHost {
             ? [invocation.programIoPolicy.privateKey]
             : [],
         ),
-      pollControl: () => claimNextControlRequest(this.controls()),
+      pollControl,
       ...(policy.kiloScopeGuard
         ? {
             scopeRoots: [

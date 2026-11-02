@@ -43,7 +43,7 @@ Isolating Kilo's programs in a VM needs Apple Silicon macOS 26 and Apple contain
 5. Choose the graph's common model. A node can use a different connection and model.
 6. Enter a goal and a target project, and run the graph.
 
-Node types are plan, implementation, test, review, final approval and interrupt handling.
+Node types are plan, implementation, test, review, final approval and interrupt handling. Nodes run one at a time. An implementation node can list 2 to 4 **parallel tasks**: on its first visit each runs in its own Git checkout, the results merge into uncommitted changes, and a normal attempt finishes the work and is what gets judged. With uncommitted changes, outside a Git repository, or on Kilo with its target scope guard, they run as one attempt.
 
 For an unattended build, create an **Autonomous build graph**. It picks one plan, freezes the checks in `.agent-graph/verification.json`, and returns failures to implementation. A session succeeds only with evidence from real test runs and a final approval.
 
