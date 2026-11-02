@@ -6,6 +6,7 @@ import * as path from "node:path";
 import { randomUUID } from "node:crypto";
 import { createServer } from "./app";
 import { AgentGraphDocument, SessionState } from "../shared/domain";
+import { autonomousDefaults } from "../shared/graph_defaults";
 import { delay } from "../core/resilience";
 
 // Characterization of GraphRuntime.execute() exits that the scenario suite in
@@ -134,9 +135,15 @@ test("an unavailable invocation adapter blocks the session before any attempt is
   await fs.writeFile(path.join(s.target, ".fixture-codex-version"), "0.100.0");
   const graph = await implementationFirst(s);
   graph.automation = {
+    ...autonomousDefaults(false),
     maxRepairCycles: 1,
-    nativeApprovalReview: false,
-    browserVerification: true,
+    verificationContract: false,
+    authoredNodeTests: false,
+    testSourceGuard: false,
+    reserveFinalizationBudget: false,
+    guardOwnedProcesses: false,
+    targetScopeGuard: false,
+    programIoGuard: false,
   };
   const state = await settle(s, await start(s, graph, "build the app"));
   assert.equal(state.status, "BLOCKED");

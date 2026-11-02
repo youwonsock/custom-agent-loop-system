@@ -52,7 +52,7 @@ export default function GraphSettings({
               검증 계약:{" "}
               {draft.automation.verificationContract
                 ? "보호 파일·필수 검사 고정"
-                : "기존 그래프 정책"}
+                : "고정하지 않음"}
             </p>
             <label className="checkbox">
               <input

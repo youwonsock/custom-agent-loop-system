@@ -49,14 +49,14 @@ export interface AgentGraphDocument {
   automation?: {
     maxRepairCycles: number;
     nativeApprovalReview: boolean;
-    browserVerification?: boolean;
-    verificationContract?: boolean;
-    authoredNodeTests?: boolean;
-    testSourceGuard?: boolean;
-    reserveFinalizationBudget?: boolean;
-    guardOwnedProcesses?: boolean;
-    targetScopeGuard?: boolean;
-    programIoGuard?: boolean;
+    browserVerification: boolean;
+    verificationContract: boolean;
+    authoredNodeTests: boolean;
+    testSourceGuard: boolean;
+    reserveFinalizationBudget: boolean;
+    guardOwnedProcesses: boolean;
+    targetScopeGuard: boolean;
+    programIoGuard: boolean;
   };
   entrypoints: {
     start: string | null;
@@ -116,9 +116,8 @@ export type SessionStatus =
   | "SUCCESS"
   | "FAILED";
 export interface ExecutionSettings {
-  /** Optional in historical v3 snapshots; all newly started sessions set these. */
-  sessionTimeoutMs?: number;
-  maxSessionAttempts?: number;
+  sessionTimeoutMs: number;
+  maxSessionAttempts: number;
   maxIterations: number;
   maxAgentAttempts: number;
   maxCompletionRecoveryAttempts: number;
@@ -228,7 +227,7 @@ export interface AttemptRecord {
   scopeAudit?: NativeScopeAudit;
   verificationInvalidation?: { at: string; reason: string; files: string[] };
   readFiles?: string[];
-  /** Written only after runtime completion validation; absent legacy evidence fails closed. */
+  /** Written only after runtime completion validation. */
   completionAccepted?: boolean;
   fileMutation?: boolean;
   pricing?: ModelPricing;
@@ -282,11 +281,11 @@ export interface NodeVisit {
   automaticCycles: number;
 }
 export interface SessionState {
-  stateVersion: 3;
+  stateVersion: 4;
   verificationContract?: VerificationContract;
-  executionBudget?: SessionBudget;
-  /** Monotonic persistence revision; absent in legacy version-3 snapshots. */
-  revision?: number;
+  executionBudget: SessionBudget;
+  /** Monotonic persistence revision. */
+  revision: number;
   id: string;
   requestId: string;
   goal: string;

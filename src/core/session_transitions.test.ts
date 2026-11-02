@@ -8,6 +8,7 @@ import {
   prepareManualResume,
   stopSession,
 } from "./session_transitions";
+import { autonomousDefaults } from "../shared/graph_defaults";
 import { createGraph } from "./graph";
 const state = () =>
   ({
@@ -54,7 +55,10 @@ test("resume preserves approvals and only a manual terminal resume resets reentr
 
 test("autonomous repair is bounded and never resumes explicit interrupt or approvals", () => {
   const s = state();
-  s.graph.automation = { maxRepairCycles: 2, nativeApprovalReview: false };
+  s.graph.automation = {
+    ...autonomousDefaults(false),
+    maxRepairCycles: 2,
+  };
   for (let i = 0; i < 3; i++) {
     const v = {
       id: `failed-${i}`,

@@ -40,10 +40,10 @@ test("fixed role deadline survives recovery and preserves downstream time/calls 
     stageBudgetReason(state, node, visit, true, start + 10 * 60000)!,
     /4회/,
   );
-  delete graph.automation!.reserveFinalizationBudget;
+  graph.automation!.reserveFinalizationBudget = false;
   assert.equal(
     stageBudgetReason(state, node, visit, true, fixed + 10000),
     null,
-    "historical graphs retain their policy even if a stale optional deadline is present",
+    "the reservation is off, even with a stale deadline present",
   );
 });

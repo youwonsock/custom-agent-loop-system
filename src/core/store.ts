@@ -278,7 +278,7 @@ export class StudioStore {
           throw error;
         });
         decodeSession(state, state.id);
-        if (current && (current.revision ?? 0) !== (state.revision ?? 0))
+        if (current && current.revision !== state.revision)
           throw new AppError(
             409,
             "더 새로운 세션 상태가 저장되어 이전 상태를 덮어쓸 수 없습니다.",
@@ -310,7 +310,7 @@ export class StudioStore {
         const s = await this.readSession(id);
         change(s);
         decodeSession(s, id);
-        s.revision = (s.revision ?? 0) + 1;
+        s.revision += 1;
         s.updatedAt = new Date().toISOString();
         await atomicWriteJsonFile(
           path.join(this.sessionDir(id), "state.json"),

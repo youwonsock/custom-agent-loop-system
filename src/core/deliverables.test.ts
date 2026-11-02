@@ -54,14 +54,14 @@ async function fixture(t: { after(fn: () => Promise<unknown>): void }) {
     } as unknown as SessionState,
   };
 }
-test("required files validate safe unique paths and mandatory requirement links without changing legacy manifests", () => {
+test("required files validate safe unique paths and mandatory requirement links; a contract may name none", () => {
   assert.deepEqual(
     validateManifest(manifest, ["REQ-001"], false).requiredFiles,
     manifest.requiredFiles,
   );
-  const { requiredFiles, ...legacy } = manifest;
+  const { requiredFiles, ...noFiles } = manifest;
   assert.equal(
-    validateManifest(legacy, ["REQ-001"], false).requiredFiles,
+    validateManifest(noFiles, ["REQ-001"], false).requiredFiles,
     undefined,
   );
   assert.match(
@@ -80,7 +80,7 @@ test("required files validate safe unique paths and mandatory requirement links 
   );
   assert.equal(
     deliverableInspectionProblem(
-      validateManifest(legacy, ["REQ-001"], false),
+      validateManifest(noFiles, ["REQ-001"], false),
       [],
     ),
     null,
@@ -135,7 +135,7 @@ test("missing, empty, directory and external symlink deliverables cannot hand of
     await fs.rm(readme);
   }
 });
-test("legacy contracts and missing pending contracts keep their preparation path, malformed contracts fail closed", async (t) => {
+test("missing pending contracts keep their preparation path, malformed contracts fail closed", async (t) => {
   const { root, state } = await fixture(t);
   await fs.rm(path.join(root, ".agent-graph/verification.json"));
   assert.equal(await deliverableProblem(state), null);

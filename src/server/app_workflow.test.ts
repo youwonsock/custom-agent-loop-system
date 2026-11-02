@@ -300,14 +300,14 @@ test("recovered terminal snapshots fail closed without current test evidence and
   for (const mode of [
     "missing-tests",
     "failed-approval",
-    "legacy-metadata",
+    "unaccepted",
   ] as const) {
     const snapshot = structuredClone(completed);
     snapshot.status = "PAUSED";
     if (mode === "missing-tests")
       snapshot.visits = snapshot.visits.filter((v) => v.nodeId !== "test");
     if (mode === "failed-approval") snapshot.visits.at(-1)!.status = "failed";
-    if (mode === "legacy-metadata")
+    if (mode === "unaccepted")
       for (const v of snapshot.visits)
         for (const a of v.attempts) delete a.completionAccepted;
     snapshot.revision = (await s.store.readSession(id)).revision;

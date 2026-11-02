@@ -191,12 +191,8 @@ test("scope evidence retains denied versus actual accesses after bounded record 
   assert.match(scopeEvidenceProblem(state)!, /대상 밖/);
   delete state.visits[0]!.attempts[0]!.scopeAudit;
   assert.match(scopeEvidenceProblem(state)!, /증거/);
-  delete state.graph.automation!.targetScopeGuard;
-  assert.equal(
-    scopeEvidenceProblem(state),
-    null,
-    "absent historical policy preserves compatibility",
-  );
+  state.graph.automation!.targetScopeGuard = false;
+  assert.equal(scopeEvidenceProblem(state), null, "the guard is off");
   const nativeDenied = new NativeScopeTracker(target, [target]);
   nativeDenied.observe(
     event(

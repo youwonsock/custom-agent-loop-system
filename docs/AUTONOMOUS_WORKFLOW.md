@@ -79,7 +79,7 @@
 
 ## 고정 검증 계약과 구조화 보고
 
-새 자율 프리셋은 `automation.verificationContract=true`를 사용한다. 기존 그래프 version 2·연결 version 1·세션 stateVersion 3과 localStorage 키는 유지한다. 이 옵션이 없는 기존 그래프는 종전 보고 계약을 사용한다.
+새 자율 프리셋은 `automation.verificationContract=true`를 사용한다. 이 옵션을 끈 그래프는 평문 보고 계약을 사용한다. `automation`이 있는 그래프는 플래그 8개를 모두 적어야 하며, 빠진 플래그가 있으면 저장과 가져오기를 거부한다.
 
 대상 프로젝트의 `.agent-graph/verification.json`은 필수 검사와 요구사항 연결을 선언한다. 시작 전에 제공된 계약은 첫 모델 호출 전에 보호 파일과 함께 SHA-256으로 고정하며 출처는 `supplied`로 기록한다. 없으면 구현 역할이 인수 테스트와 계약을 만들고 첫 테스트 진입 때 고정한다(`implementation`). 계약 누락·오류는 테스트 준비 실패로 구현에 돌아가며 유한 수정 한도 안에서 처리한다. 시작 전에 잘못된 계약이 있으면 호출 없이 요청을 거부한다.
 
@@ -148,7 +148,7 @@ CLI stdout에는 영역별 대조군·결함 결과와 오류를 축약해 출�
 
 ## 소스 고정 테스트와 후속 단계 예산
 
-새 프리셋은 `automation.testSourceGuard=true`, `reserveFinalizationBudget=true`를 사용한다. 선택 필드 없는 기존 그래프는 종전 동작을 유지한다. 테스트 역할은 제품·자체 테스트·package/config를 수정하지 않으며, 모든 작성/수정은 구현 역할이 담당한다. Kilo의 호출별 native pre-hook은 쓰기/편집과 등록되지 않은 실행을 차단한다. 등록 foreground 검사, 읽기, verification 디렉터리 준비는 허용하며 기존 native 권한을 확대하지 않는다. 다른 CLI와 숨은 파일 쓰기는 250ms 간격의 소스 해시 검사 및 종료 후 재검사로 보완한다. 이는 보안 샌드박스가 아니다.
+새 프리셋은 `automation.testSourceGuard=true`, `reserveFinalizationBudget=true`를 사용한다. 테스트 역할은 제품·자체 테스트·package/config를 수정하지 않으며, 모든 작성/수정은 구현 역할이 담당한다. Kilo의 호출별 native pre-hook은 쓰기/편집과 등록되지 않은 실행을 차단한다. 등록 foreground 검사, 읽기, verification 디렉터리 준비는 허용하며 기존 native 권한을 확대하지 않는다. 다른 CLI와 숨은 파일 쓰기는 250ms 간격의 소스 해시 검사 및 종료 후 재검사로 보완한다. 이는 보안 샌드박스가 아니다.
 
 테스트 역할의 첫 등록 검사 실패(exit nonzero)는 CLI 트리를 종료하고 실제 진단을 보존한 FAIL로 구현에 반환한다. 환경 권한/인증/사용 불가 모델과 종료 불명 프로세스는 기존 대기·차단 정책을 유지한다. 위반 attempt는 `verificationInvalidation`에 시각·원인·파일을 기록하며 이전 명령/proof를 수락 근거에서 제외한다. 원시 attempt 명령은 이력으로 보존한다. verification 등 출력 디렉터리 준비는 소스 변경과 구분하므로 정상 검사 기록을 지우지 않는다.
 

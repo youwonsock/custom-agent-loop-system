@@ -33,7 +33,7 @@ const cleanBinding = (b: ExecutionBinding): ExecutionBinding => ({
   ...(b.variant ? { variant: b.variant } : {}),
 });
 /** Draft validation deliberately allows missing edges and unresolved references. */
-/** Optional switches; a graph may omit any of them. Saved in this order. */
+/** Every automated graph sets all of these. Saved in this order. */
 const AUTOMATION_FLAGS = [
   "browserVerification",
   "verificationContract",
@@ -54,7 +54,7 @@ function checkAutomation(a: NonNullable<AgentGraphDocument["automation"]>) {
   if (typeof a.nativeApprovalReview !== "boolean")
     throw new AppError(400, "네이티브 승인 검토 설정이 필요합니다.");
   for (const flag of AUTOMATION_FLAGS)
-    if (a[flag] !== undefined && typeof a[flag] !== "boolean")
+    if (typeof a[flag] !== "boolean")
       throw new AppError(
         400,
         `자동화 설정 ${flag}은(는) true 또는 false여야 합니다.`,
@@ -185,13 +185,9 @@ export function validateGraphDocument(input: unknown): AgentGraphDocument {
           automation: {
             maxRepairCycles: g.automation.maxRepairCycles,
             nativeApprovalReview: g.automation.nativeApprovalReview,
-            ...Object.fromEntries(
-              AUTOMATION_FLAGS.flatMap((flag) =>
-                g.automation![flag] === undefined
-                  ? []
-                  : [[flag, g.automation![flag]]],
-              ),
-            ),
+            ...(Object.fromEntries(
+              AUTOMATION_FLAGS.map((flag) => [flag, g.automation![flag]]),
+            ) as Record<(typeof AUTOMATION_FLAGS)[number], boolean>),
           },
         }
       : {}),

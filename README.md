@@ -117,7 +117,7 @@ agent-loop resume --session SESSION_ID
 agent-loop verify-node-tests --target /absolute/project
 ```
 
-`--root`를 사용하면 GUI와 CLI가 같은 저장 영역을 공유합니다. 그래프는 version 2, 연결 저장소는 version 1, 실행 상태는 stateVersion 3입니다. 소유권 잠금·heartbeat와 파일 기반 제어 큐로 중복 실행과 Stop/Interrupt 요청 손실을 방지합니다.
+`--root`를 사용하면 GUI와 CLI가 같은 저장 영역을 공유합니다. 그래프는 version 2, 연결 저장소는 version 1, 실행 상태는 stateVersion 4입니다. 이전 버전과 호환하지 않습니다. 이전 세션은 목록에 나타나지 않고 파일만 남으며, `automation` 플래그가 빠진 그래프는 거부합니다. 변환 도구는 없습니다. 소유권 잠금·heartbeat와 파일 기반 제어 큐로 중복 실행과 Stop/Interrupt 요청 손실을 방지합니다.
 
 ## 내부 책임과 상태 보존
 
@@ -126,13 +126,13 @@ agent-loop verify-node-tests --target /absolute/project
 | `src/core/runtime.ts` | 방문 실행 단계(사전 검사 → 시도 전 가드 → 호출 구성 → 감독 실행 → 증거 게이트 → 완료 판정 → 실패 분류); 정지 경로는 `halt()`에 부수효과를 명시 |
 | `src/core/run_policy.ts` | 그래프 자동화 플래그와 연결 CLI 조합으로 정해지는 실행 결정 (예: Codex 로컬 HTTP, Kilo 범위·VM 격리) |
 | `src/core/session_transitions.ts` | 승인·재개·방문 이동·중지의 상태 변경 규칙; 프로세스와 파일 I/O는 호출자 담당 |
-| `src/core/store.ts`, `session_schema.ts` | version 3 해석, 원자 저장·잠금·저장 순번 비교, 변경된 세션 요약 캐시 |
+| `src/core/store.ts`, `session_schema.ts` | version 4 해석, 원자 저장·잠금·저장 순번 비교, 변경된 세션 요약 캐시 |
 | `src/core/provider_events.ts`, `process_output.ts`, `process_lifecycle.ts` | 네이티브 이벤트 해석, 출력 프레이밍·마스킹, 제한 시간 내 프로세스 종료 |
 | `src/shared/session_updates.ts`, `graph_validation.ts` | 세션 순서 비교·병합, 서버/화면 공통 실행 진단 |
 | `src/shared/isolation.ts` | 현재 호스트와 그래프 연결 기준의 프로그램 I/O 격리 범위 안내 (실행 화면에 표시) |
 | `web/src/hooks`, `views/viewModels.ts` | 앱 상위 상태 소유자와 화면별로 필요한 상태·동작 계약 |
 
-세션의 내부 `revision`은 저장할 때 증가하며 오래된 워커 쓰기·지연 이벤트가 최신 상태를 덮어쓰지 못하게 합니다. 선택 필드 없는 기존 stateVersion 3은 계속 읽으며 없는 성공 근거는 만들어 넣지 않습니다. GUI는 `?summary=1` 목록·SSE와 선택 세션의 상세 조회를 사용합니다. 기존 기본 API 응답은 유지됩니다. 화면 전환 시 그래프 초안·연결 입력·계획 편집 상태는 상위 hook에 남습니다.
+세션의 내부 `revision`은 저장할 때 증가하며 오래된 워커 쓰기·지연 이벤트가 최신 상태를 덮어쓰지 못하게 합니다. 없는 성공 근거는 만들어 넣지 않습니다. GUI는 `?summary=1` 목록·SSE와 선택 세션의 상세 조회를 사용합니다. 기존 기본 API 응답은 유지됩니다. 화면 전환 시 그래프 초안·연결 입력·계획 편집 상태는 상위 hook에 남습니다.
 
 ## 개발과 검증
 

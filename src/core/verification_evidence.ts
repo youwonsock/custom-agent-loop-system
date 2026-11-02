@@ -171,7 +171,7 @@ export function isVerificationCommand(command: string, cwd?: string): boolean {
   if (c.replace(/2>&1/g, "").replace(/&&/g, "").includes("&")) return false;
   if (/[\n;|`]/.test(c) || /\$\(/.test(c)) return false;
   let parts = verificationSetupParts(c, cwd);
-  // Historical callers without a known project may recognize a literal cd;
+  // Without a known project (contract validation) a literal cd is recognized;
   // runtime receipts always supply cwd and still reject a different project.
   if (!parts && !cwd) {
     const segments = c.split(/\s*&&\s*/),

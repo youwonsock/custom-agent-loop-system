@@ -41,7 +41,7 @@ export function nodeTestPolicyDigest(policy: NodeTestPolicy): string {
   return sha(JSON.stringify(canonical(policy)));
 }
 
-/** Optional for historical contracts; once supplied every scope is mandatory. */
+/** Once supplied, every scope is mandatory. */
 export function validateNodeTestPolicy(
   value: unknown,
   manifest: VerificationManifest,

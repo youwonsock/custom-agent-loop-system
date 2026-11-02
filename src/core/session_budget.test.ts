@@ -45,9 +45,4 @@ test("whole-session deadlines and native attempts include report retries without
   assert.equal(JSON.stringify(b), copy);
   assert.equal(autonomousExecutionSettings().maxAutomaticRecoveryCycles, 1);
   assert.equal(autonomousExecutionSettings().phaseTimeoutMs, 600000);
-  assert.equal(
-    sessionBudgetReason({ visits: [] } as unknown as SessionState),
-    null,
-    "legacy records are not silently assigned a new budget",
-  );
 });

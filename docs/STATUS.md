@@ -98,7 +98,7 @@
 
 수용한 위험: `npm audit`의 moderate 3건(`@fastify/static` → `glob` → `minimatch`). `@fastify/static`은 `wildcard: false`일 때만 `glob`을 호출하고 이 앱은 그 옵션을 쓰지 않는다. `audit fix --force`는 주 버전을 낮추므로 적용하지 않는다.
 
-유지하기로 결정한 것: stateVersion 3 스냅샷 읽기와 수동 그래프의 평문 보고 형식은 현재 기능이다. 마이그레이션 코드는 없었다.
+호환 정책: 이전 버전 데이터와 호환하지 않고 마이그레이션도 두지 않는다(사용자 결정, 2026-11-02). 세션은 stateVersion 4만 읽는다. 수동 그래프의 평문 보고 형식은 호환 코드가 아니라 현재 기능이다.
 
 ## 통합 계획의 기준
 
