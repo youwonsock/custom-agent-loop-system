@@ -504,6 +504,22 @@ if (args[0] === "debug" && args[1] === "config") {
     if (productBlocked)
       text = evidence + "\nBLOCKED_KIND: product\nVERDICT: BLOCKED";
     emit({ type: "thread.started", thread_id: "fixture-session" });
+    if (
+      type === "implementation" &&
+      prompt.includes("fixture:denied-command")
+    ) {
+      emit({
+        type: "result",
+        permission_denials: [
+          {
+            tool_name: "Bash",
+            tool_use_id: "denied-command",
+            tool_input: { command: "cargo test" },
+          },
+        ],
+      });
+      return;
+    }
     if (type === "implementation" && prompt.includes("fixture:denied-write")) {
       emit({
         type: "result",

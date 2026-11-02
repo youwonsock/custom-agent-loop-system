@@ -867,6 +867,13 @@ export class GraphRuntime implements GateHost {
       localHttpAccess: policy.localHttpAccess,
       testSourcesReadOnly: policy.testSourceGuard && node.type === "test",
       guardOwnedProcesses: policy.guardOwnedProcesses,
+      ...(policy.claudeUnattended
+        ? {
+            claudeUnattended: {
+              browserVerification: policy.browserVerification,
+            },
+          }
+        : {}),
       ...(policy.kiloScopeGuard ? { scopeRoots: this.scopeRoots() } : {}),
       ...(policy.kiloProgramIo
         ? {

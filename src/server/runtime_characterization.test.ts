@@ -332,6 +332,17 @@ test(
   },
 );
 
+test("a command refused by the CLI is named in the failure without changing its kind", async (t) => {
+  const s = await setup(t);
+  const graph = await implementationFirst(s);
+  const state = await settle(
+    s,
+    await start(s, graph, "fixture:denied-command build the app"),
+  );
+  const attempt = state.visits.at(-1)!.attempts[0]!;
+  assert.equal(attempt.failureKind, "incomplete_response");
+  assert.match(attempt.message ?? "", /다음 명령을 거부.*cargo test/);
+});
 test("a write refused by the CLI waits for the user and says so instead of asking for the format again", async (t) => {
   const s = await setup(t);
   const graph = await implementationFirst(s);

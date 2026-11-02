@@ -62,3 +62,59 @@ for (const spelling of ["PATH", "Path"]) {
     },
   );
 }
+
+test("an automated Claude role gets its tools up front, and only when it can use them", async () => {
+  const graph = createGraph();
+  const args = async (
+    type: string,
+    options: Partial<Parameters<typeof buildInvocation>[3]>,
+  ) =>
+    (
+      await buildInvocation(
+        { id: "c", label: "c", type: "claude", binary: fixture },
+        { connectionId: "c", modelId: "m" },
+        graph.nodes.find((n) => n.type === type)!,
+        {
+          prompt: "goal",
+          cwd: process.cwd(),
+          fullAccess: false,
+          allowedPaths: [],
+          ...options,
+        },
+      )
+    ).args;
+  const unattended = { claudeUnattended: { browserVerification: true } };
+  const tools = (list: string[]) => list[list.indexOf("--allowedTools") + 1]!;
+
+  const builder = await args("implementation", unattended);
+  assert.match(tools(builder), /^Edit,Write,/);
+  assert.match(tools(builder), /Bash\(npm:\*\)/);
+  const sandbox = JSON.parse(builder[builder.indexOf("--settings") + 1]!);
+  assert.equal(sandbox.sandbox.network.allowLocalBinding, true);
+  assert.match(sandbox.sandbox.excludedCommands[0], /verify-browser/);
+
+  const tester = await args("test", {
+    ...unattended,
+    verificationCommands: ["python3 -m pytest"],
+  });
+  assert.doesNotMatch(tools(tester), /Edit|Write|Bash\(npm:\*\)/);
+  assert.match(tools(tester), /Bash\(python3 -m pytest\)/);
+
+  const noBrowser = await args("test", {
+    claudeUnattended: { browserVerification: false },
+  });
+  assert.equal(
+    JSON.parse(noBrowser[noBrowser.indexOf("--settings") + 1]!).sandbox
+      .excludedCommands,
+    undefined,
+  );
+
+  for (const list of [
+    await args("planning", unattended),
+    await args("implementation", {}),
+    await args("implementation", { ...unattended, fullAccess: true }),
+  ]) {
+    assert.ok(!list.includes("--allowedTools"));
+    assert.ok(!list.includes("--settings"));
+  }
+});

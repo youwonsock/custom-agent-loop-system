@@ -452,6 +452,8 @@ class SupervisedAttempt {
       );
     if (this.mutations.deniedWrites.length)
       evidence.deniedWrites = [...new Set(this.mutations.deniedWrites)];
+    if (this.mutations.deniedCommands.length)
+      evidence.deniedCommands = [...new Set(this.mutations.deniedCommands)];
     const terminal = this.diagnosticCollector.diagnostics.terminalError;
     if (
       terminal &&

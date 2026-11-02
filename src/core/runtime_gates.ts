@@ -559,6 +559,10 @@ export async function attemptFailure(
     failure.retryable = false;
     failure.message = `CLI가 파일 쓰기 권한을 거부했습니다: ${denied.join(", ")}. CLI의 권한 설정과 프로젝트 신뢰 여부를 확인한 뒤 재개하세요.`;
   }
+  // The model may have stopped for another reason, so this only names the refusal.
+  const refused = result.evidence.deniedCommands ?? [];
+  if (refused.length)
+    failure.message += ` CLI가 다음 명령을 거부했습니다: ${refused.slice(0, 5).join(" | ")}. 프로젝트에 다른 명령이 필요하면 전체 접근 허용으로 다시 실행하세요.`;
   failure.message = contextMessage(stage, failure.message);
   failure.attemptId = attempt.id;
   failure.role = node.roleName;
