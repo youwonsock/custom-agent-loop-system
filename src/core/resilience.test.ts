@@ -13,7 +13,7 @@ import {
   readControlAck,
   recoverClaimedControlRequests,
 } from "./control_queue";
-import { collectRecoveredChildPids } from "./resilience";
+import { atomicWriteJsonFile, collectRecoveredChildPids } from "./resilience";
 import { acquireShortFileLock, withShortFileLock } from "./file_lock";
 
 async function withTempDir(run: (dir: string) => Promise<void>): Promise<void> {
@@ -359,4 +359,31 @@ test("recovery reconciles lease and persisted attempt child PIDs", () => {
     ),
     [101],
   );
+});
+
+test("a file replacement outlasts a reader holding the target, then gives up", async (t) => {
+  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), "rename-retry-"));
+  t.after(() => fsp.rm(dir, { recursive: true, force: true }));
+  const target = path.join(dir, "state.json");
+  // The live module: the namespace import here only exposes read-only getters.
+  const live = require("node:fs/promises") as typeof fsp;
+  const refused = async () => {
+    throw Object.assign(new Error("busy"), { code: "EPERM" });
+  };
+  const brief = t.mock.method(live, "rename", refused, { times: 9 });
+  await atomicWriteJsonFile(target, { ok: true });
+  assert.deepEqual(JSON.parse(await fsp.readFile(target, "utf8")), {
+    ok: true,
+  });
+  assert.equal(brief.mock.callCount(), 9);
+
+  const always = t.mock.method(live, "rename", refused);
+  const started = Date.now();
+  await assert.rejects(atomicWriteJsonFile(target, { ok: false }), /busy/);
+  assert.equal(always.mock.callCount(), 12);
+  assert.ok(
+    Date.now() - started < 5_000,
+    "other writers wait 5 seconds for the state lock",
+  );
+  assert.deepEqual(await fsp.readdir(dir), ["state.json"]);
 });
