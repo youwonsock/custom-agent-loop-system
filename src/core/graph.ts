@@ -106,6 +106,20 @@ export function validateGraphDocument(input: unknown): AgentGraphDocument {
         n.planning.optionsCount > 20)
     )
       throw new AppError(400, "계획 선택지 수는 1~20이어야 합니다.");
+    if (
+      n.parallelTasks !== undefined &&
+      (n.type !== "implementation" ||
+        !Array.isArray(n.parallelTasks) ||
+        n.parallelTasks.length < 2 ||
+        n.parallelTasks.length > 4 ||
+        !n.parallelTasks.every(
+          (task) => text(task) && task.trim() && task.length <= 2000,
+        ))
+    )
+      throw new AppError(
+        400,
+        "병렬 작업은 구현 노드에서 2~4개까지 지정할 수 있습니다.",
+      );
   }
   for (const e of g.edges) {
     if (
@@ -153,6 +167,7 @@ export function validateGraphDocument(input: unknown): AgentGraphDocument {
       instructions: n.instructions,
       position: { x: n.position.x, y: n.position.y },
       ...(n.binding ? { binding: cleanBinding(n.binding) } : {}),
+      ...(n.parallelTasks ? { parallelTasks: [...n.parallelTasks] } : {}),
       ...(n.planning
         ? {
             planning: {

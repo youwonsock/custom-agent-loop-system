@@ -30,6 +30,8 @@ export interface AgentNode {
   position: { x: number; y: number };
   binding?: ExecutionBinding;
   planning?: { requiresApproval: boolean; optionsCount: number };
+  /** Implementation only: parts run at once in separate checkouts, then get merged. */
+  parallelTasks?: string[];
 }
 export interface GraphEdge {
   id: string;
@@ -239,7 +241,9 @@ export interface AttemptRecord {
   pid: number | null;
   cliSessionId: string | null;
   reconnectUsed: boolean;
-  mode: "standard" | "completion_recovery";
+  mode: "standard" | "completion_recovery" | "parallel_part";
+  /** The task of a parallel part. */
+  task?: string;
   failureKind: FailureKind | "worker_crash" | null;
   message: string | null;
   logPath: string;

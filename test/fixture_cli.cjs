@@ -399,6 +399,17 @@ if (args[0] === "debug" && args[1] === "config") {
         text +=
           "\nHandle `/` -> index.html, static assets with correct MIME types.";
     } else if (type === "implementation") {
+      const part = /=== YOUR PART ===\n(.+)/.exec(prompt)?.[1];
+      if (part) {
+        if (prompt.includes("fixture:parallel-hang"))
+          return setInterval(() => {}, 1000);
+        fs.writeFileSync(
+          prompt.includes("fixture:parallel-conflict")
+            ? "shared.txt"
+            : `${part}.txt`,
+          `${part}\n`,
+        );
+      }
       if (
         prompt.includes("fixture:contract-required-files") &&
         !prompt.includes("required-files-never") &&

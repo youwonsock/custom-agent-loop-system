@@ -118,7 +118,8 @@ function attempt(v: unknown): boolean {
     (v.pid === null || Number.isSafeInteger(v.pid)) &&
     nullableText(v.cliSessionId) &&
     typeof v.reconnectUsed === "boolean" &&
-    member(v.mode, ["standard", "completion_recovery"]) &&
+    member(v.mode, ["standard", "completion_recovery", "parallel_part"]) &&
+    (v.task === undefined || text(v.task)) &&
     (v.failureKind === null || member(v.failureKind, failures)) &&
     nullableText(v.message) &&
     text(v.logPath) &&

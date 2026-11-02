@@ -46,6 +46,30 @@ export default function NodeInspector({
           }
         />
       </label>
+      {selected.type === "implementation" && (
+        <label>
+          {t("병렬 작업 (한 줄에 하나, 2~4개)")}
+          <textarea
+            key={selected.id}
+            aria-label={t("병렬 작업")}
+            title={t(
+              "별도 체크아웃에서 동시에 실행한 뒤 병합합니다. Git 저장소에 커밋되지 않은 변경이 없을 때만 동작합니다",
+            )}
+            defaultValue={selected.parallelTasks?.join("\n") ?? ""}
+            onBlur={(e) =>
+              updateNode((n) => {
+                const tasks = e.target.value
+                  .split("\n")
+                  .map((task) => task.trim())
+                  .filter(Boolean)
+                  .slice(0, 4);
+                if (tasks.length >= 2) n.parallelTasks = tasks;
+                else delete n.parallelTasks;
+              })
+            }
+          />
+        </label>
+      )}
       <label>
         {t("역할 이름")}
         <input

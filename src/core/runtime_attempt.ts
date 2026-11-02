@@ -97,6 +97,7 @@ export function newAttemptRecord(
   id: string,
   completionRecovery: boolean,
   nextResume: string | undefined,
+  task?: string,
 ): AttemptRecord {
   return {
     id,
@@ -107,7 +108,12 @@ export function newAttemptRecord(
     pid: null,
     cliSessionId: null,
     reconnectUsed: Boolean(nextResume),
-    mode: completionRecovery ? "completion_recovery" : "standard",
+    mode: task
+      ? "parallel_part"
+      : completionRecovery
+        ? "completion_recovery"
+        : "standard",
+    ...(task ? { task } : {}),
     failureKind: null,
     message: null,
     logPath: path.join(store.visitDir(state.id, visit.id), `${id}.log`),
