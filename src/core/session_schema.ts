@@ -196,7 +196,7 @@ function visit(v: unknown): boolean {
   );
 }
 
-/** Decode at the persistence boundary without inventing missing evidence or migrating v3. */
+/** Decode at the persistence boundary without inventing missing evidence. */
 export function decodeSession(
   value: unknown,
   expectedId: string,
@@ -213,11 +213,11 @@ export function decodeSession(
   };
   if (!isObj(value)) return invalid("root");
   const s = value;
-  require(s.stateVersion === 3, "stateVersion");
+  require(s.stateVersion === 4, "stateVersion");
   require(s.id === expectedId &&
     safeId(s.id) &&
     safeId(s.requestId), "identity");
-  require(s.revision === undefined || count(s.revision), "revision");
+  require(count(s.revision), "revision");
   require(text(s.goal) &&
     text(s.targetProjectPath) &&
     text(s.createdAt) &&
@@ -241,11 +241,9 @@ export function decodeSession(
   require(isObj(s.bindings) &&
     Object.values(s.bindings).every(binding), "bindings");
   require(isObj(s.settings) &&
-    Object.keys(executionSettings())
-      .filter(
-        (key) => !["sessionTimeoutMs", "maxSessionAttempts"].includes(key),
-      )
-      .every((key) => key in (s.settings as Obj)), "settings");
+    Object.keys(executionSettings()).every(
+      (key) => key in (s.settings as Obj),
+    ), "settings");
   try {
     executionSettings(s.settings as SessionState["settings"]);
   } catch {
@@ -321,17 +319,15 @@ export function decodeSession(
         text(h.recordedAt),
     ), "convergence");
   const state = value as unknown as SessionState;
-  if (s.executionBudget !== undefined) {
-    const b = s.executionBudget;
-    require(isObj(b) &&
-      text(b.startedAt) &&
-      Number.isFinite(Date.parse(b.startedAt)) &&
-      text(b.deadlineAt) &&
-      Date.parse(b.deadlineAt) > Date.parse(b.startedAt) &&
-      count(b.maxAttempts) &&
-      (b.maxAttempts as number) > 0 &&
-      nullableText(b.exhaustedReason), "executionBudget");
-  }
+  const b = s.executionBudget;
+  require(isObj(b) &&
+    text(b.startedAt) &&
+    Number.isFinite(Date.parse(b.startedAt)) &&
+    text(b.deadlineAt) &&
+    Date.parse(b.deadlineAt) > Date.parse(b.startedAt) &&
+    count(b.maxAttempts) &&
+    (b.maxAttempts as number) > 0 &&
+    nullableText(b.exhaustedReason), "executionBudget");
   if (s.verificationContract !== undefined) {
     require(validContractSnapshot(
       s.verificationContract,

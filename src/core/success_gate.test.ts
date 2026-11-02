@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { NodeVisit, SessionState } from "../shared/domain";
+import { autonomousDefaults } from "../shared/graph_defaults";
 import { createGraph } from "./graph";
 import { deriveRequirementLedger } from "./requirement_ledger";
 import { successBlockers } from "./success_gate";
@@ -60,6 +61,12 @@ function completed(): SessionState {
     recordedAt: "2026-10-24T00:00:00Z",
   }));
   return {
+    executionBudget: {
+      startedAt: "2026-01-01T00:00:00.000Z",
+      deadlineAt: "2999-01-01T00:00:00.000Z",
+      maxAttempts: 1000,
+      exhaustedReason: null,
+    },
     graph: createGraph(),
     requirements,
     visits: [visit("test"), visit("review"), visit("approval")],
@@ -78,9 +85,15 @@ test("Kilo success requires positive scope proof for every attempt and retains p
   s.targetProjectPath = path.resolve("scope-target");
   s.additionalAllowedPaths = [];
   s.graph.automation = {
+    ...autonomousDefaults(true),
     maxRepairCycles: 1,
-    nativeApprovalReview: true,
-    targetScopeGuard: true,
+    browserVerification: false,
+    verificationContract: false,
+    authoredNodeTests: false,
+    testSourceGuard: false,
+    reserveFinalizationBudget: false,
+    guardOwnedProcesses: false,
+    programIoGuard: false,
   };
   s.connections = [{ id: "kilo", label: "Kilo", type: "kilo", binary: "kilo" }];
   s.bindings = Object.fromEntries(

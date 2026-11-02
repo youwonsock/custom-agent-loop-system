@@ -85,7 +85,8 @@ function session(
   graph.id = "graph-golden";
   graph.updatedAt = "2025-12-31T00:00:00.000Z";
   return {
-    stateVersion: 3,
+    stateVersion: 4,
+    revision: 1,
     id: "session-golden",
     requestId: "request-golden",
     goal,

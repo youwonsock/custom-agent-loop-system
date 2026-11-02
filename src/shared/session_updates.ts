@@ -32,9 +32,7 @@ export function isNewerSession(
   incoming: SessionSummary,
   current: SessionSummary,
 ): boolean {
-  if (incoming.revision !== undefined || current.revision !== undefined)
-    return (incoming.revision ?? 0) > (current.revision ?? 0);
-  return incoming.updatedAt > current.updatedAt;
+  return incoming.revision > current.revision;
 }
 export function mergeSessions<T extends SessionSummary>(
   current: T[],

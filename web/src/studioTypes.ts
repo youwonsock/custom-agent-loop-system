@@ -10,8 +10,7 @@ export interface Bootstrap {
   version: string;
   root: string;
   defaultTarget: string;
-  /** Absent from servers older than the isolation notice. */
-  isolation?: IsolationSupport;
+  isolation: IsolationSupport;
   graphs: AgentGraphDocument[];
   connections: LocalConnection[];
   catalogs: ModelCatalog[];

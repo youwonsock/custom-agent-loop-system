@@ -205,7 +205,7 @@ test("native receipts distinguish blocked, failed, successful and unexecuted che
   );
 });
 
-test("proof is invalidated by subsequent implementation or failed tests; legacy snapshots fail closed", () => {
+test("proof is invalidated by subsequent implementation or failed tests; unaccepted attempts fail closed", () => {
   const check = {
     id: "c",
     command: "npm test",

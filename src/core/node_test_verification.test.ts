@@ -383,14 +383,14 @@ test("JSON PASS and read-only approvals require current own-suite proof and sepa
   assert.match(prompt, /testScopes/);
   assert.match(prompt, /supplied acceptance runners/);
 });
-test("new autonomous npm contracts require own-suite policy while historical graph policy remains readable", async (t) => {
+test("npm contracts require own-suite policy only while the graph asks for authored tests", async (t) => {
   const s = await setup(t),
     old = structuredClone(s.manifest);
   delete old.nodeTests;
   old.protectedFiles.push("probes/verify-acceptance.mjs");
   await fs.writeFile(
     path.join(s.root, "probes/verify-acceptance.mjs"),
-    "// supplied legacy oracle\n",
+    "// supplied oracle\n",
   );
   old.checks = [
     old.checks[0]!,
@@ -411,7 +411,7 @@ test("new autonomous npm contracts require own-suite policy while historical gra
   } as SessionState;
   state.graph.automation!.browserVerification = false;
   await assert.rejects(lockContract(state, "supplied"), /nodeTests/);
-  delete state.graph.automation!.authoredNodeTests;
+  state.graph.automation!.authoredNodeTests = false;
   assert.equal((await lockContract(state, "supplied")).status, "locked");
 });
 test("the example contract for a goal naming npm test validates, and a miswired one names the fix", async (t) => {

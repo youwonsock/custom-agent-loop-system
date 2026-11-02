@@ -760,28 +760,26 @@ test("stale runtime snapshot cannot overwrite a newer STOP decision", async (t) 
   assert.deepEqual(await s.store.readSession(id), current);
 });
 
-test("snapshot decoding rejects malformed v3 data and preserves compatible legacy evidence", async (t) => {
+test("snapshot decoding rejects malformed data and any earlier version", async (t) => {
   const s = await setup();
   t.after(s.cleanup);
   const id = await launch(s, await minimal(s), "snapshot validation");
   const valid = await wait(() => s.store.readSession(id), "SUCCESS");
   await delay(100);
   const file = path.join(s.store.sessionDir(id), "state.json");
-  const { decodeSession } = await import("../core/session_schema.js");
-  const legacy = structuredClone(valid);
-  delete legacy.revision;
-  delete legacy.executionBudget;
-  delete legacy.settings.sessionTimeoutMs;
-  delete legacy.settings.maxSessionAttempts;
-  for (const v of legacy.visits)
-    for (const a of v.attempts) {
-      delete a.completionAccepted;
-      delete a.fileMutation;
-      delete a.commands;
-      delete a.pricing;
-    }
-  assert.equal(decodeSession(legacy, id).stateVersion, 3);
   for (const mutate of [
+    (v: any) => {
+      v.stateVersion = 3;
+    },
+    (v: any) => {
+      delete v.revision;
+    },
+    (v: any) => {
+      delete v.executionBudget;
+    },
+    (v: any) => {
+      delete v.settings.sessionTimeoutMs;
+    },
     (v: any) => {
       v.executionBudget.deadlineAt = "invalid";
     },

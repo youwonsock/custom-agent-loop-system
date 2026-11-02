@@ -497,7 +497,7 @@ test(
     }
   },
 );
-test("missing isolation proof blocks success and absent legacy policy preserves compatibility", () => {
+test("missing isolation proof blocks success only while the guard is on", () => {
   const s = {
     graph: createAutonomousGraph(),
     targetProjectPath: "target",
@@ -506,7 +506,7 @@ test("missing isolation proof blocks success and absent legacy policy preserves 
     visits: [{ nodeId: "planning", attempts: [{}] }],
   } as unknown as SessionState;
   assert.ok(programIoEvidenceProblem(s));
-  delete s.graph.automation!.programIoGuard;
+  s.graph.automation!.programIoGuard = false;
   assert.equal(programIoEvidenceProblem(s), null);
   const g = createAutonomousGraph();
   assert.equal(validateGraphDocument(g).automation!.programIoGuard, true);
@@ -617,7 +617,7 @@ test(
   },
 );
 test(
-  "strong invocation isolates provider configuration and exposes only sandboxed bash without changing legacy invocations",
+  "strong invocation isolates provider configuration and exposes only sandboxed bash",
   { skip: !mac },
   async (t) => {
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "io invocation-"));
@@ -1224,7 +1224,15 @@ test("the evidence gate halts on invalid receipts and lets an interrupted comman
   const outcome = async (counts: Partial<ProgramIoAudit>) => {
     const halts: string[] = [];
     const host = {
-      state: { graph: { automation: {} }, visits: [] },
+      state: {
+        graph: { automation: {} },
+        visits: [],
+        executionBudget: {
+          deadlineAt: "2999-01-01T00:00:00.000Z",
+          maxAttempts: 1000,
+          exhaustedReason: null,
+        },
+      },
       halt: async (_visit: unknown, status: string) => {
         halts.push(status);
         return { step: "stopped" };

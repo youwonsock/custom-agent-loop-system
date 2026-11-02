@@ -131,7 +131,8 @@ export class SessionCoordinator extends EventEmitter {
         )
           throw new AppError(400, "접근 모드가 잘못되었습니다.");
         const state: SessionState = {
-          stateVersion: 3,
+          stateVersion: 4,
+          revision: 0,
           id: randomUUID(),
           requestId: input.requestId,
           goal: input.goal.trim(),
@@ -160,8 +161,8 @@ export class SessionCoordinator extends EventEmitter {
           interruptMessage: null,
           requirements: deriveRequirementLedger(input.goal),
           convergence: { stagnantCycles: 0, history: [] },
+          executionBudget: createSessionBudget(settings, Date.parse(now)),
         };
-        state.executionBudget = createSessionBudget(settings, Date.parse(now));
         // The authored-test policy dictates what npm test runs, which would overwrite
         // an existing project's own command. This run's snapshot only; the graph keeps
         // the setting for new projects.

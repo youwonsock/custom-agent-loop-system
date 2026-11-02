@@ -586,11 +586,17 @@ test("automation settings report each bad value by name and save only known flag
   );
   const graph = structuredClone(g);
   (graph.automation as unknown as Record<string, unknown>).smuggled = true;
-  delete graph.automation!.testSourceGuard;
   const saved = validateGraphDocument(graph).automation!;
   assert.ok(!("smuggled" in saved));
-  assert.ok(!("testSourceGuard" in saved));
   assert.equal(saved.programIoGuard, g.automation!.programIoGuard);
+  assert.throws(
+    () =>
+      validateGraphDocument({
+        ...g,
+        automation: { ...g.automation, testSourceGuard: undefined },
+      }),
+    /testSourceGuard/,
+  );
 });
 test("the server reports authored Node tests without a verification contract", () => {
   const codes = (change: (a: NonNullable<typeof g.automation>) => void) => {

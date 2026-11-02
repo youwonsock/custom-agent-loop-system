@@ -29,10 +29,6 @@ test("monotonic revisions reject delayed snapshots even within the same millisec
   assert.equal(mergeSessions(current, [summary(2)]), current);
   assert.equal(mergeSessions(current, [summary(3)]), current);
   assert.equal(isNewerSession(summary(4), done), true);
-  assert.equal(
-    isNewerSession({ ...summary(), revision: undefined }, done),
-    false,
-  );
 });
 test("reconnect list retains newer events and new sessions while removing deleted records", () => {
   const atRequest = [summary(1), { ...summary(), id: "deleted" }];
