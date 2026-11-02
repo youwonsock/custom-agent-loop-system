@@ -15,6 +15,7 @@ async function repository(t: { after(fn: () => Promise<unknown>): void }) {
   const target = path.join(root, "project");
   await fs.mkdir(target);
   git(target, "init", "-q");
+  git(target, "config", "core.autocrlf", "false");
   git(target, "config", "user.name", "t");
   git(target, "config", "user.email", "t@example.com");
   await fs.writeFile(path.join(target, "base.txt"), "base\n");
