@@ -1,3 +1,5 @@
+import { VM_BINARY, isolationSupported, listVms } from "./program_io_vm";
+import { nativeVmBackend, ProgramIoBackend } from "./program_io";
 import { claudeVmDecision } from "./program_io_claude";
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -43,8 +45,8 @@ import { sha } from "./values";
 const mac = process.platform === "darwin",
   sq = (s: string) => "'" + s.replace(/'/g, "'\\''") + "'";
 // verify:vm sets AGENT_GRAPH_REQUIRE_VM so a missing or stale runtime fails instead of skipping.
-const vmSkip = !mac
-  ? "macOS only"
+const vmSkip = !isolationSupported()
+  ? "not supported here"
   : process.env.AGENT_GRAPH_REQUIRE_VM === "1" || vmRuntimeStatus() === "ready"
     ? false
     : `VM runtime ${vmRuntimeStatus()}; run npm run sandbox:prepare`;
@@ -69,7 +71,7 @@ const seatbeltSkip = seatbeltSkipReason();
 async function workspace(
   t: { after(fn: () => Promise<unknown>): unknown },
   role: "implementation" | "test" | "review" = "implementation",
-  backend: "macos-seatbelt" | "apple-container-vm" = "macos-seatbelt",
+  backend: ProgramIoBackend = "macos-seatbelt",
 ) {
   const root = await fsp.mkdtemp(path.join(os.tmpdir(), "program io-")),
     target = path.join(root, "target"),
@@ -692,11 +694,7 @@ test(
   "isolated VM programs cannot use host loopback services as filesystem delegates",
   { skip: vmSkip },
   async (t) => {
-    const { policy } = await workspace(
-      t,
-      "implementation",
-      "apple-container-vm",
-    );
+    const { policy } = await workspace(t, "implementation", nativeVmBackend());
     const server = createServer();
     await new Promise<void>((resolve) =>
       server.listen(0, "127.0.0.1", resolve),
@@ -721,7 +719,7 @@ test(
     const { policy, outside } = await workspace(
       t,
       "implementation",
-      "apple-container-vm",
+      nativeVmBackend(),
     );
     const protocol = {
       cwd: policy.cwd,
@@ -807,7 +805,7 @@ test(
     const { policy, outside, target } = await workspace(
       t,
       "implementation",
-      "apple-container-vm",
+      nativeVmBackend(),
     );
     const code = `const f=require('node:fs'),c=require('node:child_process'),p=${JSON.stringify(path.join(outside, "sentinel.txt"))};let denied=0;for(const fn of [()=>f.readFileSync(p),()=>f.writeFileSync(p,'bad'),()=>f.readdirSync(${JSON.stringify(outside)}),()=>f.statSync(p),()=>f.writeFileSync('/tmp/agent-outside.txt','bad'),()=>f.writeFileSync('frozen.txt','bad')])try{fn()}catch(e){if(['EPERM','EACCES','ENOENT','EROFS'].includes(e.code))denied++}const q=c.spawnSync(process.execPath,['-e',"try{require('node:fs').readFileSync(process.argv[1]);process.exit(9)}catch(e){process.exit(e.code==='ENOENT'?0:8)}",p]);const bg=c.spawn(process.execPath,['-e',"setTimeout(()=>require('node:fs').writeFileSync('late-write.txt','bad'),2000)"],{detached:true,stdio:'ignore'});bg.unref();console.log(JSON.stringify({denied,child:q.status,secret:!!process.env.AGENT_GRAPH_PROGRAM_IO}));`;
     const result = run("node -e " + sq(code), policy);
@@ -837,7 +835,7 @@ test(
   { skip: vmSkip },
   async (t) => {
     for (const role of ["test", "review"] as const) {
-      const { policy, target } = await workspace(t, role, "apple-container-vm");
+      const { policy, target } = await workspace(t, role, nativeVmBackend());
       const result = run(
         "node -e " +
           sq(
@@ -858,11 +856,7 @@ test(
   "controller cleans only an orphaned policy VM and retains invalid completion evidence",
   { skip: vmSkip },
   async (t) => {
-    const { policy } = await workspace(
-      t,
-      "implementation",
-      "apple-container-vm",
-    );
+    const { policy } = await workspace(t, "implementation", nativeVmBackend());
     const name = `agio-${policy.id.slice(0, 16)}-orphan-fixture`;
     const child = spawnSync(
       policy.vm!.binary,
@@ -885,18 +879,7 @@ test(
     assert.equal(child.status, 0, child.stderr);
     const tracker = new ProgramIoTracker(policy);
     assert.equal(tracker.finish().invalidReceipts, 1);
-    const list = spawnSync(
-      policy.vm!.binary,
-      ["list", "--all", "--format", "json"],
-      { encoding: "utf8" },
-    );
-    assert.equal(list.status, 0, list.stderr);
-    assert.ok(
-      !JSON.parse(list.stdout).some(
-        (item: { id?: string; configuration?: { id?: string } }) =>
-          (item.id ?? item.configuration?.id) === name,
-      ),
-    );
+    assert.ok(!listVms(policy.vm!).includes(name));
   },
 );
 test("VM runtime status separates missing, stale and corrupt descriptors without starting anything", async (t) => {
@@ -910,7 +893,7 @@ test("VM runtime status separates missing, stale and corrupt descriptors without
   });
   process.env.AGENT_GRAPH_IO_VM_RUNTIME = file;
   assert.equal(vmRuntimeStatus(), "missing");
-  if (!fs.existsSync("/opt/homebrew/bin/container")) return;
+  if (!fs.existsSync(VM_BINARY)) return;
   fs.writeFileSync(file, "{not json");
   assert.equal(vmRuntimeStatus(), "stale");
   fs.writeFileSync(file, JSON.stringify({ lockDigest: "other" }));
@@ -1457,20 +1440,10 @@ test(
     }
   },
 );
-const vmNames = (policy: ProgramIoPolicy): string[] => {
-  const list = spawnSync(
-    policy.vm!.binary,
-    ["list", "--all", "--format", "json"],
-    { encoding: "utf8", timeout: 15000 },
+const vmNames = (policy: ProgramIoPolicy): string[] =>
+  listVms(policy.vm!).filter((name) =>
+    name.startsWith(vmCommandName(policy.id, "")),
   );
-  assert.equal(list.status, 0, list.stderr);
-  return JSON.parse(list.stdout)
-    .map(
-      (item: { id?: string; configuration?: { id?: string } }) =>
-        item.id ?? item.configuration?.id,
-    )
-    .filter((name: string) => name.startsWith(vmCommandName(policy.id, "")));
-};
 async function untilStarted(policy: ProgramIoPolicy): Promise<void> {
   const file = path.join(policy.directory, "receipts.jsonl"),
     deadline = Date.now() + 30000;
@@ -1558,7 +1531,7 @@ test(
   "VM: a signed broker that outlives the CLI ends its VM and still counts as interrupted",
   { skip: vmSkip },
   async (t) => {
-    const { policy } = await workspace(t, "test", "apple-container-vm");
+    const { policy } = await workspace(t, "test", nativeVmBackend());
     const broker = startBroker("sleep 60", policy);
     await untilStarted(policy);
     const closed = new Promise((resolve) => broker.once("close", resolve));
@@ -1576,7 +1549,7 @@ test(
   "VM: a VM left running without a platform stop stays invalid",
   { skip: vmSkip },
   async (t) => {
-    const { policy } = await workspace(t, "test", "apple-container-vm");
+    const { policy } = await workspace(t, "test", nativeVmBackend());
     const broker = startBroker("sleep 60", policy);
     await untilStarted(policy);
     await untilVmListed(policy);
@@ -1593,7 +1566,7 @@ test(
   "VM: parallel ls and a denied find end the test CLI without a false isolation violation",
   { skip: vmSkip },
   async (t) => {
-    const { policy, root } = await workspace(t, "test", "apple-container-vm");
+    const { policy, root } = await workspace(t, "test", nativeVmBackend());
     const cli = path.join(root, "parallel-fixture.cjs");
     fs.writeFileSync(
       cli,

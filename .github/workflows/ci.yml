@@ -29,6 +29,24 @@ jobs:
           name: platform-${{ runner.os }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
           retention-days: 90
           path: artifacts/verification/
+  isolation-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: podman --version
+      - run: npm run sandbox:prepare
+      - run: npm run verify:vm
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: isolation-linux-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 90
+          path: artifacts/verification/
   browser:
     runs-on: ubuntu-latest
     steps:

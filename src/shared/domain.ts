@@ -202,7 +202,7 @@ export interface NativeScopeAudit {
 }
 export interface ProgramIoAudit {
   version: 1;
-  backend: "macos-seatbelt" | "apple-container-vm";
+  backend: "macos-seatbelt" | "apple-container-vm" | "linux-podman-container";
   policyId: string;
   profileDigest: string;
   cwd: string;

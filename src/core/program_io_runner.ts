@@ -30,7 +30,7 @@ async function main(): Promise<void> {
     !policy.preflightPassed ||
     Date.now() > policy.expiresAt ||
     sha(policy.profile) !== policy.profileDigest ||
-    process.platform !== "darwin"
+    (!policy.vm && process.platform !== "darwin")
   )
     throw new IoUnavailable(`Missing/expired trusted program policy.`);
   const payload = JSON.parse(

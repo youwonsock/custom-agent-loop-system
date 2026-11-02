@@ -348,7 +348,8 @@ export function programIoEvidenceProblem(state: SessionState): string | null {
       if (
         !a ||
         a.version !== 1 ||
-        a.backend !== "apple-container-vm" ||
+        (a.backend !== "apple-container-vm" &&
+          a.backend !== "linux-podman-container") ||
         a.cwd !== root ||
         !a.preflightPassed ||
         typeof a.policyId !== "string" ||

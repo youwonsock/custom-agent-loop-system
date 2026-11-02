@@ -11,7 +11,7 @@ import { AppError, messageOf } from "../core/errors";
 import { graphDiagnostics } from "../core/graph";
 import { LocalConnection, SessionAction, StudioEvent } from "../shared/domain";
 import { SessionCoordinator, StartRequest } from "./coordinator";
-import { vmRuntimeAvailable } from "../core/program_io_vm";
+import { isolationSupported, vmRuntimeAvailable } from "../core/program_io_vm";
 import { IsolationSupport } from "../shared/isolation";
 export interface ServerOptions {
   root: string;
@@ -92,10 +92,7 @@ export async function createServer(options: ServerOptions): Promise<{
       defaultTarget: options.defaultTarget ?? process.cwd(),
       isolation: {
         platform: process.platform,
-        programIoVm:
-          process.platform === "darwin" &&
-          process.arch === "arm64" &&
-          vmRuntimeAvailable(),
+        programIoVm: isolationSupported() && vmRuntimeAvailable(),
       } satisfies IsolationSupport,
       graphs: await store.graphs(),
       connections: await store.connections(),

@@ -87,7 +87,11 @@ const programIoCommand = (v: unknown): boolean =>
 export const validProgramIoAudit = (v: unknown): boolean =>
   isObj(v) &&
   v.version === 1 &&
-  member(v.backend, ["macos-seatbelt", "apple-container-vm"]) &&
+  member(v.backend, [
+    "macos-seatbelt",
+    "apple-container-vm",
+    "linux-podman-container",
+  ]) &&
   text(v.policyId) &&
   text(v.profileDigest) &&
   text(v.cwd) &&
