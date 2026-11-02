@@ -22,7 +22,7 @@ node dist/src/server/cli.js ui --no-open
 node dist/src/server/cli.js ui --port 4320 --root /absolute/path/to/workspace
 ```
 
-After installing the npm package, run `agent-loop ui`. Data is stored in `~/.agent-loop/graph-workspace`. Data from earlier versions is not read or converted: an earlier session stays on disk but does not appear in the list.
+After installing the npm package, run `agent-loop ui`. Data is stored in `~/.agent-loop/graph-workspace`. Data from earlier versions is not read or converted: an earlier session or graph stays on disk but does not appear in the list.
 
 On macOS you can build a launcher with `npm run build:launcher:mac` and open **Agent Graph Studio.app** from the project folder. It needs the Xcode Command Line Tools and uses the Node.js from your login shell.
 

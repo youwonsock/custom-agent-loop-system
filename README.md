@@ -121,7 +121,7 @@ agent-loop resume --session SESSION_ID
 agent-loop verify-node-tests --target /absolute/project
 ```
 
-`--root`를 사용하면 GUI와 CLI가 같은 저장 영역을 공유합니다. 그래프는 version 2, 연결 저장소는 version 1, 실행 상태는 stateVersion 4입니다. 이전 버전과 호환하지 않습니다. 이전 세션은 목록에 나타나지 않고 파일만 남으며, `automation` 플래그가 빠진 그래프는 거부합니다. 변환 도구는 없습니다. 소유권 잠금·heartbeat와 파일 기반 제어 큐로 중복 실행과 Stop/Interrupt 요청 손실을 방지합니다.
+`--root`를 사용하면 GUI와 CLI가 같은 저장 영역을 공유합니다. 그래프는 version 2, 연결 저장소는 version 1, 실행 상태는 stateVersion 4입니다. 이전 버전과 호환하지 않습니다. 이전 세션은 목록에 나타나지 않고 파일만 남으며, `automation` 플래그가 빠진 그래프는 저장을 거부하고, 저장된 파일이면 목록에 나타나지 않습니다. 변환 도구는 없습니다. 소유권 잠금·heartbeat와 파일 기반 제어 큐로 중복 실행과 Stop/Interrupt 요청 손실을 방지합니다.
 
 ## 내부 책임과 상태 보존
 
