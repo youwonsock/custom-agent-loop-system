@@ -17,6 +17,7 @@ async function withParts(s: Awaited<ReturnType<typeof setup>>) {
 }
 async function commitTarget(target: string) {
   git(target, "init", "-q");
+  git(target, "config", "core.autocrlf", "false");
   git(target, "config", "user.name", "t");
   git(target, "config", "user.email", "t@example.com");
   // The fixture keeps its call count here, which is not part of the project.
