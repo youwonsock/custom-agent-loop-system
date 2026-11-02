@@ -230,6 +230,8 @@ export function vmCommandArguments(
       ? [
           "--security-opt",
           "no-new-privileges",
+          // Podman otherwise adds a writable /tmp, which the VM does not have.
+          "--read-only-tmpfs=false",
           "--userns",
           "keep-id",
           "--user",
@@ -282,7 +284,10 @@ export function vmCommandArguments(
 export function removeVm(vm: VmRuntime, name: string): boolean {
   const removed = spawnSync(
     vm.binary,
-    [usesPodman(vm.binary) ? "rm" : "delete", "--force", name],
+    // Without --time 0 Podman waits ten seconds, and the command keeps running.
+    usesPodman(vm.binary)
+      ? ["rm", "--force", "--time", "0", name]
+      : ["delete", "--force", name],
     {
       encoding: "utf8",
       timeout: 15000,

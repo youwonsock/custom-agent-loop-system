@@ -222,3 +222,11 @@ Haiku 5.5로 `nodeTests`를 포함한 자율 프리셋을 VM 모드로 1회 실�
 
 한계: Edit·Write·Read는 VM이 아니라 호스트에서 실행되므로 훅의 경로 검사가 경계다. 훅 자체가 실패하면 호출을 거부한다.
 
+## Linux 격리 — 2026-11-02
+
+같은 서명 실행기와 기록을 rootless Podman으로 구동한다. Ubuntu CI 작업 `isolation-linux`가 이미지를 빌드하고 격리 스위트를 돌린다. macOS 전용인 Seatbelt 사례는 건너뛴다. 사람이 적는 값에 기대는 macOS VM 기록과 달리 CI가 직접 실행한다.
+
+첫 실행에서 Podman과의 차이 두 가지가 드러났다. `--read-only`가 쓰기 가능한 `/tmp`를 더해 주고, `rm --force`가 10초를 기다리는 동안 중단된 명령이 계속 실행됐다. 둘 다 고쳤다.
+
+실제 모델로 Linux에서 돌리지는 않았다. Windows는 시작하지 않았다.
+

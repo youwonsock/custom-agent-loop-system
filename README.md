@@ -28,7 +28,7 @@ node dist/src/server/cli.js ui --port 4320 --root /absolute/path/to/workspace
 
 npm 패키지 설치 후에는 `agent-loop ui`로 실행합니다. 기본 저장 영역은 `~/.agent-loop/graph-workspace`입니다. 이전 버전의 설정과 세션은 읽거나 자동 변환하지 않습니다.
 
-새 **자율 웹 제작·검증 프리셋**의 Kilo 실행은 별도 VM 런타임 준비가 필요합니다. 현재 지원 환경은 Apple Silicon macOS 26과 Apple container 1.6.0입니다. `container` 설치 후 소스에서 `npm run sandbox:prepare`를 실행합니다(설치 패키지는 `node dist/src/core/program_io_setup.js`). 최초 이미지 생성에는 네트워크와 8GiB 이상의 여유 공간이 필요합니다. 준비되지 않은 환경은 모델 호출 전에 BLOCKED로 정지합니다. 실행 화면은 실행 전에 이 조건과, Kilo가 아닌 연결에는 각 CLI의 네이티브 샌드박스만 적용된다는 점을 안내합니다. 명령과 자식 프로그램은 네트워크·호스트 홈·소켓을 공유하지 않는 VM에서 실행하며, 공급자 CLI의 인증·통신은 호스트 제어 영역에 남습니다. [설정과 지원 범위](docs/AUTONOMOUS_WORKFLOW.md#kilo-프로그램-내부-io-격리)를 확인하세요.
+새 **자율 웹 제작·검증 프리셋**의 Kilo 실행은 별도 격리 런타임 준비가 필요합니다. 지원 환경은 Apple Silicon macOS 26과 Apple container 1.6.0, 그리고 Linux와 rootless Podman입니다. Linux는 VM이 아니라 호스트 커널을 공유하는 컨테이너이므로 경계가 더 약합니다. `container` 또는 `podman` 설치 후 소스에서 `npm run sandbox:prepare`를 실행합니다(설치 패키지는 `node dist/src/core/program_io_setup.js`). 최초 이미지 생성에는 네트워크와 8GiB 이상의 여유 공간이 필요합니다. 준비되지 않은 환경은 모델 호출 전에 BLOCKED로 정지합니다. 실행 화면은 실행 전에 이 조건과, Kilo가 아닌 연결에는 각 CLI의 네이티브 샌드박스만 적용된다는 점을 안내합니다. 명령과 자식 프로그램은 네트워크·호스트 홈·소켓을 공유하지 않는 VM에서 실행하며, 공급자 CLI의 인증·통신은 호스트 제어 영역에 남습니다. [설정과 지원 범위](docs/AUTONOMOUS_WORKFLOW.md#kilo-프로그램-내부-io-격리)를 확인하세요.
 
 ## 지원 범위
 
@@ -36,7 +36,7 @@ npm 패키지 설치 후에는 `agent-loop ui`로 실행합니다. 기본 저장
 
 **Claude 실행에는 기본으로 OS 격리가 없습니다.** 앱이 넘기는 Claude 도구 허용 목록은 무인 실행을 위한 것이며, `node` 실행을 허용하므로 임의 코드를 막지 못합니다. 신뢰할 수 있는 프로젝트에서 실행하고, Claude Code의 Bash 샌드박스를 함께 쓰는 것을 권장합니다.
 
-그래프 설정의 **Claude 명령 VM 실행**을 켜면 Claude의 Bash 명령을 Kilo와 같은 VM에서 실행합니다. 훅이 모든 도구 호출을 먼저 보고, 파일 도구는 대상 프로젝트 안으로 제한하며, 나머지 도구는 거부합니다. 지금은 macOS 전용이고 VM에 네트워크가 없으며 병렬 작업은 쓸 수 없습니다. 의존성은 VM 안에서 설치할 수 없고, 호스트에서 빌드한 네이티브 모듈은 VM에서 동작하지 않습니다.
+그래프 설정의 **Claude 명령 VM 실행**을 켜면 Claude의 Bash 명령을 Kilo와 같은 VM에서 실행합니다. 훅이 모든 도구 호출을 먼저 보고, 파일 도구는 대상 프로젝트 안으로 제한하며, 나머지 도구는 거부합니다. VM에 네트워크가 없고 병렬 작업은 쓸 수 없습니다. 의존성은 VM 안에서 설치할 수 없고, 호스트에서 빌드한 네이티브 모듈은 VM에서 동작하지 않습니다.
 
 자율 그래프의 도구 실행 제한은 기본 5분이고, 긴 테스트가 있는 프로젝트는 실행 화면의 **도구 실행 제한**으로 늘릴 수 있습니다. Bash 샌드박스는 터미널(PTY)을 거부하므로, 프로젝트의 테스트가 직접 터미널을 열면 샌드박스 안에서 실패합니다. 앱 자신은 터미널을 열 수 없으면 파이프로 CLI를 실행합니다.
 

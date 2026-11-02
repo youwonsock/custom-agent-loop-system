@@ -114,9 +114,7 @@ export default function GraphSettings({
                   })
                 }
               />
-              {t(
-                "Claude의 Bash 명령을 VM에서 실행 (macOS 전용, 네트워크 없음)",
-              )}
+              {t("Claude의 Bash 명령을 격리 환경에서 실행 (네트워크 없음)")}
             </label>
             <label>
               {t("자동 수정 횟수")}

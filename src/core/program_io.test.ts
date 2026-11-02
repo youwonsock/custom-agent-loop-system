@@ -868,8 +868,7 @@ test(
         "--network",
         "none",
         "--read-only",
-        "--progress",
-        "none",
+        ...(process.platform === "linux" ? [] : ["--progress", "none"]),
         policy.vm!.image,
         "sleep",
         "60",
@@ -1478,11 +1477,7 @@ for (const [when, vmUp] of [
     `VM: a broker killed ${when} leaves no VM and a signed start, and no broker starts another`,
     { skip: vmSkip },
     async (t) => {
-      const { policy, target } = await workspace(
-        t,
-        "test",
-        "apple-container-vm",
-      );
+      const { policy, target } = await workspace(t, "test", nativeVmBackend());
       fs.mkdirSync(path.join(target, "verification"), { recursive: true });
       const broker = startBroker(
         "sleep 2; echo late > verification/late.txt; sleep 60",
