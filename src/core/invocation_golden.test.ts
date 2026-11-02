@@ -48,6 +48,7 @@ function normalizer(root: string, target: string, extra: string) {
     [extra, "<EXTRA>"],
     [root, "<ROOT>"],
     [fs.realpathSync(root), "<ROOT>"],
+    [path.resolve(__dirname, "../../.."), "<REPO>"],
     [os.homedir(), "<USER_HOME>"],
   ];
   const forms = tokens
@@ -140,6 +141,15 @@ const variants: Array<{
     name: "full-access",
     services: ["codex", "claude", "opencode", "kilo"],
     opts: () => ({ fullAccess: true }),
+  },
+  {
+    name: "unattended",
+    services: ["claude"],
+    posixOnly: true,
+    opts: () => ({
+      claudeUnattended: { browserVerification: true },
+      verificationCommands: ["python3 -m pytest"],
+    }),
   },
   {
     name: "native-http",

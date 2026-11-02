@@ -15,6 +15,10 @@ export interface RunPolicy {
   guardOwnedProcesses: boolean;
   /** Codex local HTTP for browser verification (proxy-restricted to loopback). */
   localHttpAccess: boolean;
+  /** Claude in an automation preset: nobody is there to answer a permission prompt. */
+  claudeUnattended: boolean;
+  /** The preset runs the platform's browser check. */
+  browserVerification: boolean;
   /** Kilo native filesystem tools restricted to the target roots. */
   kiloScopeGuard: boolean;
   /** Kilo tool programs confined to an isolated VM. */
@@ -34,6 +38,8 @@ export function runPolicy(
     nativeApprovalReview: !!a?.nativeApprovalReview,
     guardOwnedProcesses: !!a?.guardOwnedProcesses,
     localHttpAccess: connection?.type === "codex" && !!a?.browserVerification,
+    claudeUnattended: connection?.type === "claude" && !!a,
+    browserVerification: !!a?.browserVerification,
     kiloScopeGuard: connection?.type === "kilo" && !!a?.targetScopeGuard,
     kiloProgramIo: connection?.type === "kilo" && !!a?.programIoGuard,
   };

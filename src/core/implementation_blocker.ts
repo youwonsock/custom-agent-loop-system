@@ -40,9 +40,9 @@ export function implementationBlocker(
   }
   if (body.startsWith("```"))
     body = body.replace(/^```(?:json)?\s*/, "").replace(/\s*```$/, "");
-  // A bare AGENT_REPORT heading over prose or a list is a summary, not this JSON
-  // report. It may still say it is blocked, and that must not pass as a handoff.
-  if (!marker[0].startsWith("[") && !body.startsWith("{")) {
+  // An AGENT_REPORT over prose or a list is a summary, not this JSON report. It may
+  // still say it is blocked, and that must not pass as a handoff.
+  if (!body.startsWith("{")) {
     if (/\bverdict\b[\s*:`"'=-]*blocked\b/i.test(body))
       throw Error(
         "구현 blocker는 독립된 VERDICT: BLOCKED와 BLOCKED_KIND: 줄로 보고하세요.",

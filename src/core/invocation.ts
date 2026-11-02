@@ -50,6 +50,7 @@ export async function buildInvocation(
     opts,
     env,
     readonly,
+    role: node.type,
     executable,
     ...(programIo ? { programIo } : {}),
   };

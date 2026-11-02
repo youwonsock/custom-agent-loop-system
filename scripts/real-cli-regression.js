@@ -19,7 +19,6 @@ const { StudioStore } = require(dist("core/store.js"));
 const { queryModels } = require(dist("core/catalog.js"));
 const { createAutonomousGraph } = require(dist("core/graph.js"));
 const { SessionCoordinator } = require(dist("server/coordinator.js"));
-const { browserVerificationCommand } = require(dist("core/browser_command.js"));
 
 const webGoal = [
   "Build a small counter web app. server.mjs starts an HTTP server on process.env.PORT, prints its http://127.0.0.1:<port> URL and serves index.html.",
@@ -37,7 +36,6 @@ const webScenario = {
   limitMs: 60 * 60 * 1000,
   maxAttempts: 24,
   automation: () => undefined,
-  claudeAllow: ["Bash(node:*)", "Bash(mkdir:*)"],
 };
 const SCENARIOS = {
   slugify: {
@@ -61,7 +59,6 @@ const SCENARIOS = {
       programIoGuard: false,
       ...profile.automation,
     }),
-    claudeAllow: [],
     passed: () => true,
   },
   "tiny-web": {
@@ -93,17 +90,6 @@ const PROFILES = {
     binary: "claude",
     pick: (m) => /haiku/i.test(m.id),
     automation: {},
-    // Headless Claude cannot ask, and it ignores a project's allow list until the
-    // folder is trusted. The wrapper grants exactly this list without changing trust.
-    allowedTools: [
-      "Edit",
-      "Write",
-      "Bash(npm test)",
-      "Bash(npm test:*)",
-      "Bash(node --test:*)",
-      "Bash(ls:*)",
-      "Bash(cat:*)",
-    ],
   },
   kilo: {
     binary: "kilo",
@@ -170,23 +156,6 @@ function passed(profile, scenario, summary) {
     summary.status !== "BLOCKED"
   );
 }
-// Claude's Bash sandbox refuses local ports and stops Chromium from starting. The
-// run allows the ports and takes only the platform's own browser check outside it.
-const sandboxSettings = () => ({
-  sandbox: {
-    network: { allowLocalBinding: true },
-    excludedCommands: [browserVerificationCommand()],
-  },
-});
-function allowListWrapper(output, installed, tools) {
-  const wrapper = path.join(output, "claude-allow-list.sh");
-  fs.writeFileSync(
-    wrapper,
-    `#!/bin/sh\nexec ${JSON.stringify(installed)} "$@" --allowedTools ${JSON.stringify(tools.join(","))} --settings ${JSON.stringify(JSON.stringify(sandboxSettings()))}\n`,
-    { mode: 0o755 },
-  );
-  return wrapper;
-}
 async function main() {
   const profile = process.argv[2],
     config = PROFILES[profile],
@@ -217,12 +186,7 @@ async function main() {
   const installed = execFileSync("/usr/bin/which", [config.binary], {
     encoding: "utf8",
   }).trim();
-  const binary = config.allowedTools
-    ? allowListWrapper(output, installed, [
-        ...config.allowedTools,
-        ...scenario.claudeAllow,
-      ])
-    : installed;
+  const binary = installed;
   const connection = await store.saveConnection({
     id: profile,
     label: `Regression ${profile}`,

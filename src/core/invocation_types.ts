@@ -16,6 +16,8 @@ export interface InvocationOptions {
   guardOwnedProcesses?: boolean;
   verificationAliases?: Record<string, string>;
   scopeRoots?: string[];
+  /** An automated Claude role in ask mode: it cannot stop to ask, so grant up front. */
+  claudeUnattended?: { browserVerification: boolean };
   programIoGuard?: {
     directory: string;
     protectedFiles: string[];
@@ -36,6 +38,7 @@ export interface InvocationContext {
   opts: InvocationOptions;
   env: Record<string, string>;
   readonly: boolean;
+  role: string;
   executable: Awaited<ReturnType<typeof resolveExecutable>>;
   programIo?: ProgramIoPolicy;
 }

@@ -206,7 +206,9 @@ function contractSections({ state }: PromptContext): string[] {
     );
   if (state.graph.automation?.verificationContract)
     lines.push(
-      "=== FROZEN VERIFICATION CONTRACT ===",
+      state.verificationContract?.status === "locked"
+        ? "=== FROZEN VERIFICATION CONTRACT ==="
+        : "=== VERIFICATION CONTRACT EXAMPLE, NOT YET FROZEN ===",
       state.verificationContract?.status === "locked"
         ? JSON.stringify(state.verificationContract.manifest)
         : JSON.stringify(exampleManifest(state)),

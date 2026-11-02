@@ -189,6 +189,8 @@ const implementationHandoff: Gate = (j): Judged => {
 };
 const structuredReport: Gate = (j): Judged => {
   const { node, answer, contract } = j;
+  // Only verifiers owe this report. Elsewhere the same tag around a summary is harmless.
+  if (!isVerifierRole(node.type)) return;
   try {
     const rendered = renderStructuredReport(
       answer.output,

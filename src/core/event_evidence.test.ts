@@ -324,5 +324,6 @@ test("permission denials name only refused file tools", () => {
     ],
   });
   assert.deepEqual(tracker.deniedWrites, ["server.mjs"]);
+  assert.deepEqual(tracker.deniedCommands, ["rm x"]);
   assert.equal(tracker.finish(), false);
 });

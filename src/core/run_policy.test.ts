@@ -27,6 +27,15 @@ test("CLI-specific decisions apply only to the CLI that implements them", () => 
   });
 });
 
+test("only Claude in an automation preset runs unattended", () => {
+  const preset = createAutonomousGraph();
+  assert.equal(runPolicy(preset, { type: "claude" }).claudeUnattended, true);
+  assert.equal(runPolicy(preset, { type: "kilo" }).claudeUnattended, false);
+  assert.equal(runPolicy(preset).claudeUnattended, false);
+  const manual = { ...preset, automation: undefined };
+  assert.equal(runPolicy(manual, { type: "claude" }).claudeUnattended, false);
+});
+
 test("graph-level decisions follow their flags independently of the CLI", () => {
   const graph = createAutonomousGraph();
   graph.automation!.testSourceGuard = false;
