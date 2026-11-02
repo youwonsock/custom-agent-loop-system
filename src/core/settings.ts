@@ -62,17 +62,41 @@ export function executionSettings(
   return s;
 }
 
+/** A longer tool limit brings the phase window and recovery budget along with it. */
+export function fitToolLimit(
+  overrides?: Partial<ExecutionSettings>,
+  base?: Partial<ExecutionSettings>,
+): Partial<ExecutionSettings> | undefined {
+  if (overrides?.toolTimeoutMs === undefined) return overrides;
+  const s = { ...defaults, ...base, ...overrides };
+  const phaseTimeoutMs = Math.max(s.phaseTimeoutMs, s.toolTimeoutMs + 300000);
+  const waits = s.retryBackoffMs
+    .slice(0, s.maxAgentAttempts - 1)
+    .reduce((a, b) => a + b, 0);
+  return {
+    ...overrides,
+    phaseTimeoutMs,
+    phaseRecoveryBudgetMs: Math.max(
+      s.phaseRecoveryBudgetMs,
+      phaseTimeoutMs * s.maxAgentAttempts + Math.ceil(waits * 1.2),
+    ),
+  };
+}
+
 /** The tested web workflow profile. */
 export function autonomousExecutionSettings(
   overrides?: Partial<ExecutionSettings>,
 ): ExecutionSettings {
-  return executionSettings({
+  const profile = {
     maxIterations: 10,
     phaseTimeoutMs: 600000,
     toolTimeoutMs: 300000,
     phaseRecoveryBudgetMs: 1860000,
     maxAutomaticRecoveryCycles: 1,
     automaticRecoveryBackoffMs: [15000],
-    ...overrides,
+  };
+  return executionSettings({
+    ...profile,
+    ...fitToolLimit(overrides, profile),
   });
 }

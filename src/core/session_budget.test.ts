@@ -45,4 +45,13 @@ test("whole-session deadlines and native attempts include report retries without
   assert.equal(JSON.stringify(b), copy);
   assert.equal(autonomousExecutionSettings().maxAutomaticRecoveryCycles, 1);
   assert.equal(autonomousExecutionSettings().phaseTimeoutMs, 600000);
+  const longer = autonomousExecutionSettings({ toolTimeoutMs: 1200000 });
+  assert.equal(longer.toolTimeoutMs, 1200000);
+  assert.equal(longer.phaseTimeoutMs, 1500000);
+  assert.ok(longer.phaseRecoveryBudgetMs >= 3 * 1500000);
+  assert.equal(
+    autonomousExecutionSettings({ toolTimeoutMs: 60000 }).phaseTimeoutMs,
+    600000,
+    "a shorter limit leaves the window alone",
+  );
 });

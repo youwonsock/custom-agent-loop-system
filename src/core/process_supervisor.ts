@@ -154,16 +154,23 @@ class BoundedRawLog {
   }
 }
 function spawnChild(options: ProcessSupervisorOptions): SupervisedChild {
-  return options.transport === "pipe"
-    ? spawnPipeChild(options.binary, options.args, options.cwd, options.env)
-    : pty.spawn(options.binary, options.args, {
-        name: "xterm-256color",
-        cols: options.cols,
-        rows: options.rows,
-        cwd: options.cwd,
-        env: options.env,
-        useConpty: options.useConpty,
-      });
+  const pipes = () =>
+    spawnPipeChild(options.binary, options.args, options.cwd, options.env);
+  if (options.transport === "pipe") return pipes();
+  try {
+    return pty.spawn(options.binary, options.args, {
+      name: "xterm-256color",
+      cols: options.cols,
+      rows: options.rows,
+      cwd: options.cwd,
+      env: options.env,
+      useConpty: options.useConpty,
+    });
+  } catch {
+    // A sandbox can refuse a terminal. The CLIs run in print mode and do not need
+    // one, and a binary that is really missing fails again here with its own error.
+    return pipes();
+  }
 }
 export class ProcessSupervisor {
   async run(options: ProcessSupervisorOptions): Promise<SupervisorResult> {

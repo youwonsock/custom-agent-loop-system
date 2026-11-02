@@ -19,6 +19,8 @@ export default function RunComposer({
     setMaxIterations,
     sessionMinutes,
     setSessionMinutes,
+    toolMinutes,
+    setToolMinutes,
     maxSessionAttempts,
     setMaxSessionAttempts,
     starting,
@@ -126,6 +128,19 @@ export default function RunComposer({
             max={10080}
             value={sessionMinutes}
             onChange={(e) => setSessionMinutes(Number(e.target.value))}
+          />
+        </label>
+        <label>
+          도구 실행 제한 (분)
+          <input
+            aria-label="도구 실행 제한"
+            title="긴 테스트가 있는 프로젝트에서 늘립니다. 비우면 기본값을 씁니다"
+            type="number"
+            min={1}
+            max={1440}
+            placeholder="기본값"
+            value={toolMinutes ?? ""}
+            onChange={(e) => setToolMinutes(Number(e.target.value) || null)}
           />
         </label>
         <label>
