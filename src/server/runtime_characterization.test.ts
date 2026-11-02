@@ -1,10 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import * as fs from "node:fs/promises";
-import * as os from "node:os";
 import * as path from "node:path";
 import { randomUUID } from "node:crypto";
-import { createServer } from "./app";
+import { sessionWaitMs, setup as startStudio } from "./app_harness.test";
 import { AgentGraphDocument, SessionState } from "../shared/domain";
 import { autonomousDefaults } from "../shared/graph_defaults";
 import { delay } from "../core/resilience";
@@ -26,9 +25,6 @@ import { delay } from "../core/resilience";
 //   evidenceGates   product hash diff for automation without testSourceGuard            this file
 //   classifyFailure still names orphaned_process, but no failure reaches it: the supervisor
 //                   sets outcome and failureKind together, and evidenceGates stops on that outcome
-const origin = "http://127.0.0.1:4317";
-const binary = path.resolve(__dirname, "../../../test/fixture_cli.cjs");
-const sessionWaitMs = process.platform === "win32" ? 45_000 : 10_000;
 const quickSettings = {
   maxAgentAttempts: 1,
   maxCompletionRecoveryAttempts: 1,
@@ -47,26 +43,9 @@ const quickSettings = {
   leaseTtlMs: 500,
 };
 async function setup(t: { after(fn: () => Promise<unknown>): void }) {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "runtime-char-")),
-    target = path.join(root, "project");
-  await fs.mkdir(target);
-  const server = await createServer({
-    root,
-    origin,
-    defaultTarget: target,
-    monitor: false,
-  });
-  t.after(async () => {
-    await server.app.close();
-    await fs.rm(root, { recursive: true, force: true });
-  });
-  await server.store.saveConnection({
-    id: "fixture",
-    label: "Fixture CLI",
-    type: "codex",
-    binary,
-  });
-  return { ...server, target };
+  const s = await startStudio();
+  t.after(s.cleanup);
+  return s;
 }
 type Server = Awaited<ReturnType<typeof setup>>;
 async function start(
