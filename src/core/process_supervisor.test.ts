@@ -97,7 +97,7 @@ function runFake(
     maxBytes?: number;
     absolute?: number;
     conpty?: boolean;
-    transportMode?: "pty" | "pipe";
+    transportMode?: "pty" | "pipe" | "no-terminal";
   },
 ): Promise<CaseResult> {
   const helper = path.join(
@@ -301,6 +301,25 @@ test("an active tool uses the longer tool timeout and reports tool_timeout when 
     phase: 1_000,
   });
   assert.equal(stalled.outcome, "tool_timeout");
+});
+
+test("a command the CLI moved to the background counts as a tool until it ends", async () => {
+  const limits = { transport: 750, idle: 500, tool: 120, phase: 1_000 };
+  const running = await runFake("background-task-hang", limits);
+  assert.equal(running.outcome, "tool_timeout");
+  assert.match(running.failureMessage!, /Tool execution/);
+  const ended = await runFake("background-task-ends", {
+    ...limits,
+    idle: 120,
+    tool: 500,
+  });
+  assert.equal(ended.outcome, "idle_timeout");
+});
+
+test("a refused terminal falls back to pipes instead of failing the attempt", async () => {
+  const result = await runFake("success", { transportMode: "no-terminal" });
+  assert.equal(result.outcome, "succeeded");
+  assert.match(result.assistantText, /\S/);
 });
 
 test("forced termination handles a process that ignores graceful signals", async () => {

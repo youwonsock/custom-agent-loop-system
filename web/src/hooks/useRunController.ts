@@ -42,6 +42,7 @@ export function useRunController(
     [maxIterations, setMaxIterations] = useState(20),
     [starting, setStarting] = useState(false),
     [sessionMinutes, setSessionMinutes] = useState(60),
+    [toolMinutes, setToolMinutes] = useState<number | null>(null),
     [maxSessionAttempts, setMaxSessionAttempts] = useState(24),
     [selectedRun, setSelectedRun] = useState<string | null>(null);
   const [run, setRun] = useState<SessionState | undefined>();
@@ -71,6 +72,7 @@ export function useRunController(
         settings: {
           maxIterations,
           sessionTimeoutMs: sessionMinutes * 60000,
+          ...(toolMinutes ? { toolTimeoutMs: toolMinutes * 60000 } : {}),
           maxSessionAttempts,
         },
       });
@@ -209,6 +211,8 @@ export function useRunController(
     setMaxIterations,
     sessionMinutes,
     setSessionMinutes,
+    toolMinutes,
+    setToolMinutes,
     maxSessionAttempts,
     setMaxSessionAttempts,
     starting,

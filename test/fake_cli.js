@@ -422,6 +422,30 @@ switch (mode) {
     });
     setInterval(() => {}, 1000);
     break;
+  case "background-task-hang":
+    emit({
+      type: "system",
+      subtype: "task_started",
+      task_id: "background",
+      task_type: "local_bash",
+    });
+    setInterval(() => {}, 1000);
+    break;
+  case "background-task-ends":
+    emit({
+      type: "system",
+      subtype: "task_started",
+      task_id: "background",
+      task_type: "local_bash",
+    });
+    emit({
+      type: "system",
+      subtype: "task_notification",
+      task_id: "background",
+      status: "completed",
+    });
+    setInterval(() => {}, 1000);
+    break;
   case "ignore-termination":
     process.on("SIGTERM", () => {});
     process.on("SIGINT", () => {});

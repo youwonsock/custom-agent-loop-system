@@ -7,27 +7,35 @@ interface ProcessRow {
   parent: number;
   started: string;
 }
+/** Empty when the table cannot be read: a sandbox can refuse to start `ps`. */
 function processTable(): Promise<ProcessRow[]> {
   return new Promise((resolve) => {
-    execFile(
-      "ps",
-      ["-A", "-o", "pid=,ppid=,lstart="],
-      { timeout: 2000 },
-      (error, stdout) => {
-        if (error) return resolve([]);
-        const rows: ProcessRow[] = [];
-        for (const line of stdout.split("\n")) {
-          const match = /^\s*(\d+)\s+(\d+)\s+(.+?)\s*$/.exec(line);
-          if (match)
-            rows.push({
-              pid: Number(match[1]),
-              parent: Number(match[2]),
-              started: match[3]!,
-            });
-        }
-        resolve(rows);
-      },
-    );
+    const refused = () => resolve([]);
+    const read = () =>
+      execFile(
+        "ps",
+        ["-A", "-o", "pid=,ppid=,lstart="],
+        { timeout: 2000 },
+        (error, stdout) => {
+          if (error) return refused();
+          const rows: ProcessRow[] = [];
+          for (const line of stdout.split("\n")) {
+            const match = /^\s*(\d+)\s+(\d+)\s+(.+?)\s*$/.exec(line);
+            if (match)
+              rows.push({
+                pid: Number(match[1]),
+                parent: Number(match[2]),
+                started: match[3]!,
+              });
+          }
+          resolve(rows);
+        },
+      );
+    try {
+      read();
+    } catch {
+      refused();
+    }
   });
 }
 const signal = (pid: number, name: NodeJS.Signals) => {

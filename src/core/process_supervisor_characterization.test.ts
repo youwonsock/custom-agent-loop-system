@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { execFileSync } from "node:child_process";
 import {
   ProcessSupervisor,
   ProcessSupervisorOptions,
@@ -53,6 +54,14 @@ const controlRequest = (
     request: { type, ...(message ? { message } : {}) },
   }) as unknown as ClaimedControlRequest;
 
+const processTableReadable = (() => {
+  try {
+    execFileSync("ps", ["-p", String(process.pid)], { stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
+})();
 test("a clean exit succeeds and a nonzero exit reports its code", async (t) => {
   const clean = await supervise(t, "console.log('ok');");
   assert.equal(clean.result.outcome, "succeeded");
@@ -205,7 +214,12 @@ const alive = (pid: number) => {
 };
 test(
   "a background process the CLI leaves behind is ended only when reaping is on",
-  { skip: process.platform === "win32" ? "POSIX only" : false },
+  {
+    skip:
+      process.platform === "win32"
+        ? "POSIX only"
+        : !processTableReadable && "a sandbox refuses ps",
+  },
   async (t) => {
     const kept = await supervise(t, leakServer);
     const keptPid = leakedPid(kept.result.output);

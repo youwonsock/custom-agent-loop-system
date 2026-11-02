@@ -13,6 +13,10 @@ const phaseTimeoutMs = Number(process.argv[6]);
 const cols = Number(process.argv[7] || 1000);
 const maxInMemoryOutputBytes = Number(process.argv[8] || 1024 * 1024);
 const absoluteDeadlineMs = Number(process.argv[9] || phaseTimeoutMs);
+if (process.argv[11] === "no-terminal")
+  require("node-pty").spawn = () => {
+    throw new Error("posix_spawnp failed.");
+  };
 
 void (async () => {
   const dir = await fs.mkdtemp(

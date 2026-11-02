@@ -25,6 +25,7 @@ import { AppError, messageOf } from "../core/errors";
 import {
   executionSettings,
   autonomousExecutionSettings,
+  fitToolLimit,
 } from "../core/settings";
 import {
   CONTRACT_FILE,
@@ -123,7 +124,7 @@ export class SessionCoordinator extends EventEmitter {
           );
         const settings = graph.automation
             ? autonomousExecutionSettings(input.settings)
-            : executionSettings(input.settings),
+            : executionSettings(fitToolLimit(input.settings)),
           now = new Date().toISOString();
         if (
           input.accessMode !== undefined &&

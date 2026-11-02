@@ -154,16 +154,23 @@ class BoundedRawLog {
   }
 }
 function spawnChild(options: ProcessSupervisorOptions): SupervisedChild {
-  return options.transport === "pipe"
-    ? spawnPipeChild(options.binary, options.args, options.cwd, options.env)
-    : pty.spawn(options.binary, options.args, {
-        name: "xterm-256color",
-        cols: options.cols,
-        rows: options.rows,
-        cwd: options.cwd,
-        env: options.env,
-        useConpty: options.useConpty,
-      });
+  const pipes = () =>
+    spawnPipeChild(options.binary, options.args, options.cwd, options.env);
+  if (options.transport === "pipe") return pipes();
+  try {
+    return pty.spawn(options.binary, options.args, {
+      name: "xterm-256color",
+      cols: options.cols,
+      rows: options.rows,
+      cwd: options.cwd,
+      env: options.env,
+      useConpty: options.useConpty,
+    });
+  } catch {
+    // A sandbox can refuse a terminal. The CLIs run in print mode and do not need
+    // one, and a binary that is really missing fails again here with its own error.
+    return pipes();
+  }
 }
 export class ProcessSupervisor {
   async run(options: ProcessSupervisorOptions): Promise<SupervisorResult> {
@@ -255,6 +262,7 @@ class SupervisedAttempt {
   private readonly autoInjected: SupervisorResult["autoInjected"] = [];
   private readonly seenProgress = new Set<string>();
   private readonly seenProgressOrder: string[] = [];
+  private readonly backgroundTasks = new Set<string>();
   private outputTail = "";
   private cliSessionId: string | null = null;
   private lastOutputAt: string;
@@ -640,15 +648,32 @@ class SupervisedAttempt {
       if (removed) this.seenProgress.delete(removed);
     }
     this.lastProgressAt = new Date().toISOString();
-    this.activity = nextActivity;
+    this.activity = this.backgroundTasks.size ? "tool_execution" : nextActivity;
     this.resetActivityTimer();
     this.armProgressWindowTimer();
     this.notifyProgress();
     return true;
   }
 
+  /** A command the CLI moved to the background reports nothing until it ends. */
+  private observeBackgroundTask(event: AnyObj): void {
+    if (event.type !== "system" || typeof event.task_id !== "string") return;
+    if (event.subtype === "task_started" && event.task_type === "local_bash")
+      this.backgroundTasks.add(event.task_id);
+    else if (
+      event.subtype !== "task_notification" ||
+      !this.backgroundTasks.delete(event.task_id)
+    )
+      return;
+    this.activity = this.backgroundTasks.size
+      ? "tool_execution"
+      : "model_generation";
+    this.resetActivityTimer();
+  }
+
   private processEvent(raw: AnyObj): void {
     const event = this.ioTracker ? this.ioTracker.normalize(raw) : raw;
+    this.observeBackgroundTask(event);
     this.applyGuards(event);
     this.diagnosticCollector.observeEvent(event);
     this.recordUsage(event);
