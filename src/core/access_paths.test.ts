@@ -3,7 +3,12 @@ import * as os from "node:os";
 import test from "node:test";
 import assert from "node:assert/strict";
 import * as path from "node:path";
-import { isWithin, outsidePaths } from "./access_paths";
+import {
+  isWithin,
+  namedByFileAccess,
+  outsidePaths,
+  reachableOnThisMachine,
+} from "./access_paths";
 import { inside } from "./verification_sources";
 
 test("web root document mappings do not request filesystem root access", () => {
@@ -119,4 +124,23 @@ test("verification paths stay inside the target, including through symlinks", as
   await fs.symlink(path.join(base, "game-other"), path.join(root, "link"));
   await assert.rejects(inside(root, "link"), /symlink leaves/);
   await assert.rejects(inside(root, "link/below", true), /symlink leaves/);
+});
+test("only a path under an existing top-level entry can reach this machine", () => {
+  const root = path.parse(process.cwd()).root;
+  for (const file of [
+    root,
+    os.tmpdir(),
+    path.join(os.tmpdir(), "not-created-yet", "file.txt"),
+    process.cwd(),
+  ])
+    assert.equal(reachableOnThisMachine(file), true, file);
+  for (const name of ["no-such-page-e2b1", "i-e2b1", "secret-e2b1/id"])
+    assert.equal(reachableOnThisMachine(root + name), false, name);
+});
+test("only a path after FILE_ACCESS on its own line counts as named for access", () => {
+  const text =
+    "Read /a-e2b1 first\nUse FILE_ACCESS: /b-e2b1\n/c-e2b1 FILE_ACCESS:";
+  assert.equal(namedByFileAccess(text, "/b-e2b1"), true);
+  assert.equal(namedByFileAccess(text, "/a-e2b1"), false);
+  assert.equal(namedByFileAccess(text, "/c-e2b1"), false);
 });

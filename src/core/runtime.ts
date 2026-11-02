@@ -44,7 +44,11 @@ import {
 } from "./requirement_ledger";
 import { Completion } from "./completion";
 import { AppError, messageOf } from "./errors";
-import { outsidePaths } from "./access_paths";
+import {
+  namedByFileAccess,
+  outsidePaths,
+  reachableOnThisMachine,
+} from "./access_paths";
 import { mergeProjectReceipts } from "./verification_evidence";
 import { modelPricing } from "./model_pricing";
 import { productionHashes } from "./verification_sources";
@@ -198,6 +202,7 @@ export class GraphRuntime implements GateHost {
       ...intentRoots,
     ]).filter(
       (file) =>
+        (reachableOnThisMachine(file) || namedByFileAccess(text, file)) &&
         path.resolve(file) !== path.resolve(__dirname, "../server/cli.js"),
     );
   }

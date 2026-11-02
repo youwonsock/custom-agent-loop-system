@@ -114,7 +114,7 @@ export function validateManifest(
     )
   )
     throw Error(
-      "보호된 인수 검사 파일을 직접 실행하는 검사가 필요합니다. npm script 이름만으로 검사 충분성을 보장하지 않습니다.",
+      "보호된 인수 검사 파일을 직접 실행하는 검사가 필요합니다. npm script 이름만으로 검사 충분성을 보장하지 않습니다. 소스를 빌드해 실행하는 프로젝트는 빌드와 테스트를 실행하는 .agent-graph/verify-acceptance.mjs를 작성해 protectedFiles에 넣고 node .agent-graph/verify-acceptance.mjs를 검사로 등록하세요.",
     );
   const manifest: VerificationManifest = {
     version: 1,
@@ -238,9 +238,25 @@ async function fileHash(root: string, name: string): Promise<string> {
     throw Error(`검증 보호 파일이 너무 큽니다: ${name}`);
   return sha(await fs.readFile(file));
 }
-/** A mandatory requirement that an authored-test contract must run as npm test. */
+/** The project already has its own test command, other than npm init's placeholder. */
+export async function hasOwnTestScript(target: string): Promise<boolean> {
+  try {
+    const pkg: unknown = JSON.parse(
+      await fs.readFile(path.join(target, "package.json"), "utf8"),
+    );
+    const script = plain(pkg) && plain(pkg.scripts) ? pkg.scripts.test : null;
+    return (
+      typeof script === "string" &&
+      !!script.trim() &&
+      !/no test specified/i.test(script)
+    );
+  } catch {
+    return false;
+  }
+}
+/** A mandatory requirement that a contract must run as npm test. */
 export function requirementNamingNpmTest(state: SessionState) {
-  if (!state.graph.automation?.authoredNodeTests) return undefined;
+  if (!state.graph.automation?.verificationContract) return undefined;
   return state.requirements.items.find(
     (r) => r.mandatory && /\bnpm test\b/.test(r.text),
   );
@@ -274,7 +290,7 @@ export async function lockContract(
   const namesNpmTest = requirementNamingNpmTest(state);
   if (namesNpmTest && !hasNpmTest)
     throw Error(
-      `${namesNpmTest.id}가 npm test를 요구하므로 고정 계약에 npm test 검사와 nodeTests 정책이 필요합니다.`,
+      `${namesNpmTest.id}가 npm test를 요구하므로 고정 계약에 npm test 검사가 필요합니다.`,
     );
   // A frozen file cannot be repaired, so a broken spec must fail while it still can.
   if (state.graph.automation?.browserVerification)

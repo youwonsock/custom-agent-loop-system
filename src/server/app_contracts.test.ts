@@ -625,6 +625,13 @@ test("autonomous plans repair unrequested external paths before asking an operat
     /목표가 요청하지 않은 외부 경로/,
   );
 });
+test("plan text that reads like a path but names nothing on this machine is not rejected", async (t) => {
+  const s = await setup();
+  t.after(s.cleanup);
+  const id = await launch(s, await contracted(s), "fixture:plan-prose-paths");
+  const state = await wait(() => s.store.readSession(id), "SUCCESS");
+  assert.equal(state.visits[0]!.attempts.length, 1);
+});
 test("unrequested external plans exhaust bounded recovery without granting access or starting implementation", async (t) => {
   const s = await setup();
   t.after(s.cleanup);
@@ -651,10 +658,12 @@ test("an explicit original-goal external path retains its access approval gate i
   const id = await launch(
     s,
     graph,
-    "Build an artifact using FILE_ACCESS: /tmp/requested-reference.txt",
+    "Build an artifact using FILE_ACCESS: /no-such-e2b1/requested-reference.txt",
   );
   const held = await wait(() => s.store.readSession(id), "WAITING_USER");
-  assert.deepEqual(held.pendingAccess!.paths, ["/tmp/requested-reference.txt"]);
+  assert.deepEqual(held.pendingAccess!.paths, [
+    "/no-such-e2b1/requested-reference.txt",
+  ]);
   assert.equal(
     held.visits.find((v) => v.nodeId === "implementation")!.attempts.length,
     0,

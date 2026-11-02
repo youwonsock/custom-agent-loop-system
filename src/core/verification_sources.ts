@@ -1,7 +1,8 @@
 import * as fs from "node:fs/promises";
-import { createReadStream } from "node:fs";
+import { createReadStream, existsSync } from "node:fs";
 import * as path from "node:path";
 import { createHash } from "node:crypto";
+import { spawnSync } from "node:child_process";
 import { isWithin } from "./access_paths";
 export async function inside(
   root: string,
@@ -34,6 +35,23 @@ export async function inside(
     throw new Error("Verification symlink leaves target project.");
   return real;
 }
+const BUILD_OUTPUT = [
+  "dist",
+  "build",
+  "out",
+  ".next",
+  ".nuxt",
+  ".vite",
+  ".cache",
+];
+function gitIgnores(root: string, name: string): boolean {
+  return (
+    spawnSync("git", ["check-ignore", "-q", "--", `${name}/`], {
+      cwd: root,
+      stdio: "ignore",
+    }).status === 0
+  );
+}
 export async function sourceHashes(
   root: string,
   output: string,
@@ -51,19 +69,14 @@ export async function sourceHashes(
     ".DS_Store",
   ]);
   if (productionOnly)
-    for (const name of [
-      "test",
-      "tests",
-      ".agent-graph",
-      "dist",
-      "build",
-      "out",
-      ".next",
-      ".nuxt",
-      ".vite",
-      ".cache",
-    ])
+    for (const name of ["test", "tests", ".agent-graph", ...BUILD_OUTPUT])
       ignored.add(name);
+  // A test role has to build. A build folder git ignores is output, but one the
+  // project tracks may hold its real code, so that one stays guarded.
+  else
+    for (const name of BUILD_OUTPUT)
+      if (existsSync(path.join(root, name)) && gitIgnores(root, name))
+        ignored.add(name);
   async function walk(dir: string): Promise<void> {
     for (const entry of (await fs.readdir(dir, { withFileTypes: true })).sort(
       (a, b) => a.name.localeCompare(b.name),

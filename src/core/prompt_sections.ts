@@ -204,6 +204,13 @@ function contractSections({ state }: PromptContext): string[] {
       `Installed own-suite verifier command: ${nodeTestVerificationCommand()}`,
       `nodeTests schema: {checkId:'self_tests',suiteCheckId:'node',scopes:[{id:'behavior',file:'test/behavior.test.mjs',requirements:['REQ-001'],cases:['behavior:boundary'],challenges:[{id:'wrong-result',adapter:'tests/probes/defect.mjs',targets:['module.mjs']}]}]}. Register those separate check IDs, protect EVERY adapter. An adapter exports async mutate({root,enabled,id}) and returns a map whose keys are declared target paths and whose values are each file's full source, in both modes: enabled=false returns the source unchanged (the no-op control), enabled=true returns it with the defect. Working example for targets:['module.mjs']: ${ADAPTER_EXAMPLE} In the schema, behavior, behavior:boundary, wrong-result and module.mjs are placeholders: every case must be the exact name of a top-level test in the scope file and start with its scope id and a colon, as in behavior:boundary. Scope test files stay out of protectedFiles, challenge ids are unique across all scopes, and targets must be real production files of this project. A defect counts as detected only when an assertion fails directly inside a required case, not in a subtest or another test. Create no file just to match the example. Run every registered check yourself before handing off, including the installed verifier: protected files such as adapters and .agent-graph/browser.json are frozen once testing starts, so a wrong one cannot be repaired later. Never change test/package files or undeclared targets. npm scripts.test must be node --test --test-concurrency=1 followed by EVERY scope file in policy order. If adapters are model-authored, identify that origin honestly; do not label them external acceptance.`,
     );
+  if (
+    state.graph.automation?.verificationContract &&
+    !state.graph.automation.authoredNodeTests
+  )
+    lines.push(
+      "Existing tests: if this project already has an npm test script, keep it unchanged and register it, or a narrower existing test command, as a check. Add new tests in the project's existing test layout. Never rewrite the script or add wrapper files inside the project to satisfy this contract. One check must directly run a protected file: if the project builds before testing, write .agent-graph/verify-acceptance.mjs to run the build and the relevant tests, protect it, and register node .agent-graph/verify-acceptance.mjs.",
+    );
   if (state.graph.automation?.verificationContract)
     lines.push(
       state.verificationContract?.status === "locked"
@@ -221,18 +228,19 @@ function contractSections({ state }: PromptContext): string[] {
 function exampleManifest(state: PromptContext["state"]) {
   const requirements = state.requirements.items.map((r) => r.id);
   const browser = state.graph.automation?.browserVerification;
-  const npmTest = !!requirementNamingNpmTest(state);
+  const npmTest = !!requirementNamingNpmTest(state),
+    authored = npmTest && !!state.graph.automation?.authoredNodeTests;
   return {
     version: 1,
     protectedFiles: [
       "tests/verify-acceptance.mjs",
       ...(browser ? [".agent-graph/browser.json"] : []),
-      ...(npmTest ? ["tests/probes/defect.mjs"] : []),
+      ...(authored ? ["tests/probes/defect.mjs"] : []),
     ],
     checks: [
-      ...(npmTest
+      ...(npmTest ? [{ id: "node", command: "npm test", requirements }] : []),
+      ...(authored
         ? [
-            { id: "node", command: "npm test", requirements },
             {
               id: "self_tests",
               command: nodeTestVerificationCommand(),
@@ -255,7 +263,7 @@ function exampleManifest(state: PromptContext["state"]) {
           ]
         : []),
     ],
-    ...(npmTest
+    ...(authored
       ? {
           nodeTests: {
             checkId: "self_tests",
