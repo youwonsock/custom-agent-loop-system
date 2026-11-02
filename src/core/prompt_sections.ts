@@ -76,7 +76,7 @@ function identitySections({
       ? "The operator granted full filesystem access for this session."
       : `Write only inside these approved roots: ${[state.targetProjectPath, ...state.additionalAllowedPaths].join(", ")}. Report exact additional paths if needed.`,
     "=== ROLE CONTRACT ===",
-    node.type === "test" && state.graph.automation?.testSourceGuard
+    node.type === "test" && state.graph.automation
       ? "Execute the exact registered foreground checks against frozen sources and inspect results. Never write or repair product, documentation (including README), tests, package or configuration. Missing deliverables/coverage and failed assertions are FAIL with concrete file, requirement and diagnostics for implementation. " +
         (nativeBrowserReview
           ? "Apply the native Chromium approval procedure below BEFORE reporting a browser-launch permission blocker. "
@@ -147,7 +147,7 @@ function guardSections({ state, node, visit }: PromptContext): string[] {
       JSON.stringify(state.verificationContract.manifest.requiredFiles),
       "Implementation must prepare every listed nonempty regular target file, including documentation, before handoff. File presence alone proves no behavior or documentation quality; tests and independent review remain mandatory. Review and approval must independently read EACH required file with native read or standalone cat/Get-Content and judge its content against the linked requirements. When required, README must describe actual launch, rules, controls and test commands matching the real scripts. Test/review/approval report omissions; they never repair them.",
     );
-  if (state.graph.automation?.guardOwnedProcesses)
+  if (state.graph.automation)
     lines.push(
       "PROCESS OWNERSHIP: Broad process-name termination is blocked before execution in implementation and test. Never use pkill/killall/taskkill /IM/Stop-Process -Name or kill via pgrep. Close only owned server objects/child handles or recorded owned PIDs. Keep HTTP tests isolated with PORT=0 and cleanup registered before assertions; never kill another listener to make a test pass.",
     );
@@ -167,7 +167,7 @@ function guardSections({ state, node, visit }: PromptContext): string[] {
       }),
       "This deadline survives retries and automatic recovery and preserves time/calls for verification and approval. Do not restart or expand it.",
     );
-  if (state.graph.automation?.testSourceGuard && node.type === "implementation")
+  if (state.graph.automation && node.type === "implementation")
     lines.push(
       "Implementation owns ALL source and authored-test repairs. Read the last failed verification diagnostics FIRST and repair that concrete cause; preserve completed work. Use targeted checks for feedback, then hand off promptly with the final standalone [PHASE_DONE]. Do not spend the entire role budget re-running every frozen check or polishing a final test report here. The test role will execute the complete registered suite against frozen sources; known failures may be handed off honestly and will return to implementation. Never claim final success from implementation.",
     );
@@ -299,7 +299,7 @@ function autonomousSections({
   if (state.graph.automation) {
     lines.push(
       "=== AUTONOMOUS WORKFLOW ===",
-      `After starting, complete implementation, tests, review and final approval without requesting routine operator feedback. Repair product defects in implementation; ${state.graph.automation.testSourceGuard ? `ALL product/test/package/config edits belong to implementation. Test sources are frozen; test only executes registered checks and inspects results. The first failed product check stops the CLI and returns to implementation; do not repair, retry product failures or run custom diagnostic code in test.${nativeBrowserReview ? " The native Chromium approval procedure above is the sole scoped permission-recovery exception; obtain review before launching the registered browser verifier." : ""}` : "tests may add acceptance coverage but must not edit production code or frozen checks."} Never create an operator-only evidence prerequisite unless the original user goal explicitly requires a human. Existing human approval/access gates remain binding. Never relabel an actual permission error as product failure.`,
+      `After starting, complete implementation, tests, review and final approval without requesting routine operator feedback. Repair product defects in implementation; ${state.graph.automation ? `ALL product/test/package/config edits belong to implementation. Test sources are frozen; test only executes registered checks and inspects results. The first failed product check stops the CLI and returns to implementation; do not repair, retry product failures or run custom diagnostic code in test.${nativeBrowserReview ? " The native Chromium approval procedure above is the sole scoped permission-recovery exception; obtain review before launching the registered browser verifier." : ""}` : "tests may add acceptance coverage but must not edit production code or frozen checks."} Never create an operator-only evidence prerequisite unless the original user goal explicitly requires a human. Existing human approval/access gates remain binding. Never relabel an actual permission error as product failure.`,
       structured
         ? "For fixable product/test-setup blockers use JSON verdict BLOCKED and blockedKind product or test_setup. Real permissions, authentication, external services and explicitly human evidence use blockedKind external and remain blocked."
         : "For a fixable product/test-setup blocker, report BLOCKED_KIND: product or BLOCKED_KIND: test_setup with concrete evidence and VERDICT: BLOCKED; it follows the failed verification repair path. Real permissions, authentication, external services and explicitly human evidence use BLOCKED_KIND: external and remain blocked.",
@@ -315,8 +315,7 @@ function autonomousSections({
       );
       if (writable)
         lines.push(
-          (node.type === "implementation" ||
-          !state.graph.automation.testSourceGuard
+          (node.type === "implementation"
             ? "Create the spec only if absent; preserve any acceptance spec supplied by the user. "
             : "Implementation creates the spec; test never authors/changes it. Preserve supplied specs. ") +
             " Run unit tests first, then the exact browser command last as a single foreground call, without redirect, echo/status wrappers or file edits afterward. If it fails on product assertions, report FAIL for implementation. The verifier resolves Playwright from its own installation as a fallback: target-local require('playwright') failure is NOT an environment blocker. Execute the command before investigating dependencies. Do not inspect platform source or search for installations when a valid successful native verifier receipt already exists. Only its actual missing-tool error warrants preparing Playwright/Chromium through normal approved tools; never bypass a denied approval.",

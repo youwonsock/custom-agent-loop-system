@@ -55,7 +55,6 @@ function gitIgnores(root: string, name: string): boolean {
 export async function sourceHashes(
   root: string,
   output: string,
-  productionOnly = false,
 ): Promise<Record<string, string>> {
   const hashes: Record<string, string> = {};
   const ignored = new Set([
@@ -68,29 +67,17 @@ export async function sourceHashes(
     "coverage",
     ".DS_Store",
   ]);
-  if (productionOnly)
-    for (const name of ["test", "tests", ".agent-graph", ...BUILD_OUTPUT])
-      ignored.add(name);
   // A test role has to build. A build folder git ignores is output, but one the
   // project tracks may hold its real code, so that one stays guarded.
-  else
-    for (const name of BUILD_OUTPUT)
-      if (existsSync(path.join(root, name)) && gitIgnores(root, name))
-        ignored.add(name);
+  for (const name of BUILD_OUTPUT)
+    if (existsSync(path.join(root, name)) && gitIgnores(root, name))
+      ignored.add(name);
   async function walk(dir: string): Promise<void> {
     for (const entry of (await fs.readdir(dir, { withFileTypes: true })).sort(
       (a, b) => a.name.localeCompare(b.name),
     )) {
       const file = path.join(dir, entry.name);
-      if (
-        file === output ||
-        ignored.has(entry.name) ||
-        (productionOnly &&
-          /\.(?:test|spec)\.[cm]?[jt]sx?$|^playwright\.config\./.test(
-            entry.name,
-          ))
-      )
-        continue;
+      if (file === output || ignored.has(entry.name)) continue;
       if (entry.isSymbolicLink())
         throw new Error(
           `Source symlinks require an explicit project copy: ${path.relative(root, file)}`,
@@ -108,10 +95,4 @@ export async function sourceHashes(
   }
   await walk(root);
   return hashes;
-}
-export async function productionHashes(
-  target: string,
-): Promise<Record<string, string>> {
-  const root = await fs.realpath(target);
-  return sourceHashes(root, path.join(root, "verification", "browser"), true);
 }

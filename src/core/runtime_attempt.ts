@@ -25,8 +25,8 @@ export function invocationOptionsFor(
     allowedPaths: state.additionalAllowedPaths,
     nativeApprovalReview: policy.nativeApprovalReview,
     localHttpAccess: policy.localHttpAccess,
-    testSourcesReadOnly: policy.testSourceGuard && node.type === "test",
-    guardOwnedProcesses: policy.guardOwnedProcesses,
+    testSourcesReadOnly: policy.automated && node.type === "test",
+    guardOwnedProcesses: policy.automated,
     ...(policy.claudeUnattended
       ? {
           claudeUnattended: {

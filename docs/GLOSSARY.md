@@ -17,7 +17,7 @@
 | receipt | CLI 이벤트에서 관측한 명령과 종료 코드. 모델의 보고가 아니다 | `CommandReceipt` |
 | 검증 계약 | 필수 검사와 보호 파일을 고정한 `.agent-graph/verification.json` | `verificationContract` |
 | 보호 파일 | 계약 잠금 후 해시가 바뀌면 세션을 차단하는 파일 | `protectedFiles` |
-| 고정 테스트 | 테스트 역할이 소스를 바꾸지 못하게 하는 정책 | `testSourceGuard` |
+| 고정 테스트 | 테스트 역할이 소스를 바꾸지 못하게 하는 정책. 자동화 그래프에 항상 적용 | `policy.automated` |
 | 대상 범위 보호 | Kilo의 파일 도구를 대상 프로젝트로 제한 | `targetScopeGuard` |
 | 프로그램 I/O 격리 | Kilo의 명령을 VM에서 실행 | `programIoGuard` |
 | 재진입 지점 | 검증 실패 후 자동 수정이 돌아가는 노드 | `entrypoints.reentry` |

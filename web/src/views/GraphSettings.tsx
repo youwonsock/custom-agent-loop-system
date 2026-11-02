@@ -73,45 +73,6 @@ export default function GraphSettings({
             <label className="checkbox">
               <input
                 type="checkbox"
-                aria-label="테스트 소스 수정 차단"
-                checked={Boolean(draft.automation.testSourceGuard)}
-                onChange={(e) =>
-                  change((g) => {
-                    g.automation!.testSourceGuard = e.target.checked;
-                  })
-                }
-              />
-              테스트는 소스 고정·실패 즉시 구현으로 반환
-            </label>
-            <label className="checkbox">
-              <input
-                type="checkbox"
-                aria-label="검토 승인 예산 보존"
-                checked={Boolean(draft.automation.reserveFinalizationBudget)}
-                onChange={(e) =>
-                  change((g) => {
-                    g.automation!.reserveFinalizationBudget = e.target.checked;
-                  })
-                }
-              />
-              단계별 마감으로 후속 검토·승인 시간 보존
-            </label>
-            <label className="checkbox">
-              <input
-                type="checkbox"
-                aria-label="일괄 프로세스 종료 차단"
-                checked={Boolean(draft.automation.guardOwnedProcesses)}
-                onChange={(e) =>
-                  change((g) => {
-                    g.automation!.guardOwnedProcesses = e.target.checked;
-                  })
-                }
-              />
-              프로세스 이름에 의한 일괄 종료 차단
-            </label>
-            <label className="checkbox">
-              <input
-                type="checkbox"
                 aria-label="Kilo 대상 밖 조회 차단"
                 checked={Boolean(draft.automation.targetScopeGuard)}
                 onChange={(e) =>

@@ -467,10 +467,7 @@ export class GraphRuntime implements GateHost {
       return false;
     }
     if (visit.status === "paused") visit.status = "running";
-    if (
-      runPolicy(this.state.graph).reserveFinalizationBudget &&
-      !visit.stageDeadlineAt
-    ) {
+    if (runPolicy(this.state.graph).automated && !visit.stageDeadlineAt) {
       const end = stageDeadline(this.state, node, visit);
       if (end !== undefined) {
         visit.stageDeadlineAt = new Date(end).toISOString();
@@ -688,7 +685,7 @@ export class GraphRuntime implements GateHost {
         result.assistantText,
         result.events,
         node.type,
-        stage.policy.testSourceGuard,
+        stage.policy.automated,
       );
       const decision = runner.decideRetry({
         failure,
@@ -744,7 +741,7 @@ export class GraphRuntime implements GateHost {
       sourceInputs,
       deadline: Math.min(
         Date.parse(visit.cycleDeadlineAt),
-        policy.reserveFinalizationBudget && visit.stageDeadlineAt
+        policy.automated && visit.stageDeadlineAt
           ? Date.parse(visit.stageDeadlineAt)
           : Infinity,
       ),
@@ -777,7 +774,7 @@ export class GraphRuntime implements GateHost {
     invocation: Invocation,
   ): Promise<AttemptRun> {
     const s = this.state.settings,
-      sourceGuard = policy.testSourceGuard;
+      sourceGuard = policy.automated;
     const run: Omit<AttemptRun, "result"> = {
       attempt,
       policyReason: null,
@@ -841,7 +838,7 @@ export class GraphRuntime implements GateHost {
             ],
           }
         : {}),
-      ...(policy.guardOwnedProcesses
+      ...(policy.automated
         ? {
             reapDescendants: true,
             eventPolicy: (event: Record<string, unknown>) => {
@@ -952,7 +949,7 @@ export class GraphRuntime implements GateHost {
     attempt.fileMutation = result.evidence.fileMutation;
     if (
       result.evidence.fileMutation &&
-      !(policy.testSourceGuard && node.type === "test")
+      !(policy.automated && node.type === "test")
     ) {
       visit.verifiedCommands = [];
       delete visit.nodeTestProof;

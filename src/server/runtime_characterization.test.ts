@@ -22,7 +22,6 @@ import { delay } from "../core/resilience";
 //   execute loop    IO_UNAVAILABLE -> BLOCKED, visit paused, recovery untouched         this file
 //   evidenceGates   orphaned process (uncovered), control request, VM receipts (macOS only),
 //                   scope, protected writes, frozen-test policy, stage budget (uncovered)
-//   evidenceGates   product hash diff for automation without testSourceGuard            this file
 //   classifyFailure still names orphaned_process, but no failure reaches it: the supervisor
 //                   sets outcome and failureKind together, and evidenceGates stops on that outcome
 const quickSettings = {
@@ -118,9 +117,6 @@ test("an unavailable invocation adapter blocks the session before any attempt is
     maxRepairCycles: 1,
     verificationContract: false,
     authoredNodeTests: false,
-    testSourceGuard: false,
-    reserveFinalizationBudget: false,
-    guardOwnedProcesses: false,
     targetScopeGuard: false,
     programIoGuard: false,
   };
@@ -150,110 +146,10 @@ test("an unavailable invocation adapter blocks the session before any attempt is
   );
 });
 
-test("without the test source guard, a hidden test-role product edit is found by hash diff and rejected back to implementation", async (t) => {
-  const s = await setup(t);
-  const graph = await s.store.createGraph({ template: "autonomous" });
+function lightAutonomous(graph: AgentGraphDocument) {
   graph.automation!.verificationContract = false;
   graph.automation!.authoredNodeTests = false;
   graph.automation!.browserVerification = false;
-  graph.automation!.testSourceGuard = false;
-  const state = await settle(
-    s,
-    await start(s, graph, "fixture:auto-source-edit build the app"),
-  );
-  const tests = state.visits.filter((v) => v.nodeId === "test");
-  assert.ok(tests.length >= 1);
-  const first = tests[0]!;
-  assert.equal(first.attempts.length, 1);
-  assert.equal(
-    first.attempts[0]!.fileMutation,
-    true,
-    "the product hash diff must mark the attempt as mutating",
-  );
-  assert.ok(
-    (await fs.readFile(path.join(s.target, "styles.css"), "utf8")).includes(
-      "unexpected test-role production edit",
-    ),
-  );
-  assert.match(
-    first.output,
-    /\[ORCHESTRATOR\] 테스트 역할의 제품 파일 변경을 반려했습니다: styles\.css/,
-  );
-  // Observed on the current runtime; a change here is a behaviour change, not a refactor.
-  // The rejected visit keeps its own receipt; the following implementation visit invalidates it.
-  assert.deepEqual(
-    {
-      status: state.status,
-      visits: state.visits.map((v) => ({
-        node: v.nodeId,
-        status: v.status,
-        verdict: v.verdict,
-        mutation: v.attempts.map((a) => a.fileMutation ?? false),
-        receipts: (v.verifiedCommands ?? []).map((c) => c.command),
-      })),
-    },
-    {
-      status: "SUCCESS",
-      visits: [
-        {
-          node: "planning",
-          status: "succeeded",
-          verdict: null,
-          mutation: [false],
-          receipts: [],
-        },
-        {
-          node: "implementation",
-          status: "succeeded",
-          verdict: null,
-          mutation: [false],
-          receipts: [],
-        },
-        {
-          node: "test",
-          status: "failed",
-          verdict: "FAIL",
-          mutation: [true],
-          receipts: ["node --test acceptance.test.cjs"],
-        },
-        {
-          node: "implementation",
-          status: "succeeded",
-          verdict: null,
-          mutation: [false],
-          receipts: [],
-        },
-        {
-          node: "test",
-          status: "succeeded",
-          verdict: "PASS",
-          mutation: [false],
-          receipts: ["node --test acceptance.test.cjs"],
-        },
-        {
-          node: "review",
-          status: "succeeded",
-          verdict: "APPROVED",
-          mutation: [false],
-          receipts: [],
-        },
-        {
-          node: "approval",
-          status: "succeeded",
-          verdict: "APPROVED",
-          mutation: [false],
-          receipts: [],
-        },
-      ],
-    },
-  );
-});
-
-function lightAutonomous(graph: AgentGraphDocument, sourceGuard: boolean) {
-  graph.automation!.verificationContract = false;
-  graph.automation!.authoredNodeTests = false;
-  graph.automation!.browserVerification = false;
-  graph.automation!.testSourceGuard = sourceGuard;
 }
 const attemptsOf = (state: SessionState, node: string) =>
   state.visits
@@ -264,30 +160,24 @@ const attemptsOf = (state: SessionState, node: string) =>
       failure: a.failureKind ?? null,
     }));
 
-for (const [role, sourceGuard] of [
-  ["planning", true],
-  ["planning", false],
-  ["review", false],
-  ["approval", false],
-] as const)
-  test(`${role} with the source guard ${sourceGuard ? "on" : "off"} is rejected for a file change no event shows`, async (t) => {
-    const s = await setup(t);
-    const graph = await s.store.createGraph({ template: "autonomous" });
-    lightAutonomous(graph, sourceGuard);
-    const state = await settle(
-      s,
-      await start(s, graph, `fixture:${role}-hidden-edit build the app`),
-    );
-    assert.deepEqual(attemptsOf(state, role)[0], {
-      mutation: true,
-      failure: "role_violation",
-    });
+test("planning is rejected for a file change no event shows", async (t) => {
+  const s = await setup(t);
+  const graph = await s.store.createGraph({ template: "autonomous" });
+  lightAutonomous(graph);
+  const state = await settle(
+    s,
+    await start(s, graph, "fixture:planning-hidden-edit build the app"),
+  );
+  assert.deepEqual(attemptsOf(state, "planning")[0], {
+    mutation: true,
+    failure: "role_violation",
   });
+});
 
 test("a read-only role without a hidden change is not flagged", async (t) => {
   const s = await setup(t);
   const graph = await s.store.createGraph({ template: "autonomous" });
-  lightAutonomous(graph, false);
+  lightAutonomous(graph);
   const state = await settle(s, await start(s, graph, "build the app"));
   assert.equal(state.status, "SUCCESS", state.statusReason ?? "");
   for (const role of ["planning", "review", "approval"])
@@ -303,7 +193,7 @@ test(
   async (t) => {
     const s = await setup(t);
     const graph = await s.store.createGraph({ template: "autonomous" });
-    lightAutonomous(graph, true);
+    lightAutonomous(graph);
     const state = await settle(
       s,
       await start(s, graph, "fixture:review-symlink build the app"),

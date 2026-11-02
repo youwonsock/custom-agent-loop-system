@@ -52,9 +52,6 @@ export interface AgentGraphDocument {
     browserVerification: boolean;
     verificationContract: boolean;
     authoredNodeTests: boolean;
-    testSourceGuard: boolean;
-    reserveFinalizationBudget: boolean;
-    guardOwnedProcesses: boolean;
     targetScopeGuard: boolean;
     programIoGuard: boolean;
   };

@@ -38,9 +38,6 @@ export const autonomousDefaults = (
   browserVerification: true,
   verificationContract: true,
   authoredNodeTests: true,
-  testSourceGuard: true,
-  reserveFinalizationBudget: true,
-  guardOwnedProcesses: true,
   targetScopeGuard: true,
   programIoGuard: true,
 });
