@@ -1006,6 +1006,18 @@ test("installed CLIs are looked up only on request and registered one at a time"
       ],
     });
   });
+  let queries = 0;
+  await page.route("**/api/connections/*/models/query", (route) => {
+    queries++;
+    return route.fulfill({
+      json: {
+        connectionId: route.request().url().split("/").at(-3),
+        targetProjectPath: path.resolve("."),
+        models: [],
+        queriedAt: new Date().toISOString(),
+      },
+    });
+  });
   await page.goto("/");
   await page.getByRole("button", { name: "CLI 연결", exact: false }).click();
   await expect(page.getByLabel("연결 이름")).toBeVisible();
@@ -1017,6 +1029,7 @@ test("installed CLIs are looked up only on request and registered one at a time"
   expect(lookups).toBe(1);
   await list.getByRole("button", { name: "Codex 등록" }).click();
   await expect(list.getByText("등록됨")).toBeVisible();
+  await expect.poll(() => queries).toBe(1);
   const saved = await page.evaluate(async (file) => {
     const all: Array<{ id: string; binary: string }> = await (
       await fetch("/api/connections")

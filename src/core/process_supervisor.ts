@@ -255,6 +255,7 @@ class SupervisedAttempt {
   private readonly autoInjected: SupervisorResult["autoInjected"] = [];
   private readonly seenProgress = new Set<string>();
   private readonly seenProgressOrder: string[] = [];
+  private readonly backgroundTasks = new Set<string>();
   private outputTail = "";
   private cliSessionId: string | null = null;
   private lastOutputAt: string;
@@ -640,15 +641,32 @@ class SupervisedAttempt {
       if (removed) this.seenProgress.delete(removed);
     }
     this.lastProgressAt = new Date().toISOString();
-    this.activity = nextActivity;
+    this.activity = this.backgroundTasks.size ? "tool_execution" : nextActivity;
     this.resetActivityTimer();
     this.armProgressWindowTimer();
     this.notifyProgress();
     return true;
   }
 
+  /** A command the CLI moved to the background reports nothing until it ends. */
+  private observeBackgroundTask(event: AnyObj): void {
+    if (event.type !== "system" || typeof event.task_id !== "string") return;
+    if (event.subtype === "task_started" && event.task_type === "local_bash")
+      this.backgroundTasks.add(event.task_id);
+    else if (
+      event.subtype !== "task_notification" ||
+      !this.backgroundTasks.delete(event.task_id)
+    )
+      return;
+    this.activity = this.backgroundTasks.size
+      ? "tool_execution"
+      : "model_generation";
+    this.resetActivityTimer();
+  }
+
   private processEvent(raw: AnyObj): void {
     const event = this.ioTracker ? this.ioTracker.normalize(raw) : raw;
+    this.observeBackgroundTask(event);
     this.applyGuards(event);
     this.diagnosticCollector.observeEvent(event);
     this.recordUsage(event);

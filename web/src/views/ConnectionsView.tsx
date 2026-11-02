@@ -56,6 +56,7 @@ export default function ConnectionsView({
         binary,
       });
       setConnections((values) => [...values, c]);
+      await query(c.id);
     });
 
   return (

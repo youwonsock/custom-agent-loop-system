@@ -45,6 +45,32 @@ test("API rejects missing cookies, foreign Host and Origin, and protects revisio
     ).statusCode,
     403,
   );
+  const port = host.split(":")[1];
+  assert.equal(
+    (
+      await s.app.inject({
+        method: "POST",
+        url: "/api/graphs",
+        headers: {
+          host: `localhost:${port}`,
+          origin: `http://localhost:${port}`,
+        },
+        payload: { name: "bad" },
+      })
+    ).statusCode,
+    401,
+    "localhost passes the Host and Origin checks, and still needs the cookie",
+  );
+  assert.equal(
+    (
+      await s.app.inject({
+        url: "/api/bootstrap",
+        headers: { host: "localhost:1" },
+      })
+    ).statusCode,
+    403,
+    "another port is a different origin",
+  );
   const doc = { ...s.graph, name: "changed" };
   assert.equal(
     (

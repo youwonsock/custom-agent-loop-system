@@ -36,11 +36,19 @@ export async function createServer(options: ServerOptions): Promise<{
   const app = Fastify({ bodyLimit: 4 * 1024 * 1024, logger: false });
   await app.register(cookie);
   app.addHook("onRequest", async (request, reply) => {
+    // The server only listens on loopback, so localhost names the same address.
+    const { host: own, port, protocol } = new URL(origin);
+    const named = `localhost:${port}`;
     const host = request.headers.host;
-    if (host !== new URL(origin).host)
+    if (host !== own && host !== named)
       throw new AppError(403, "허용되지 않은 Host입니다.");
     const given = request.headers.origin;
-    if (given && given !== origin && given !== options.devOrigin)
+    if (
+      given &&
+      given !== origin &&
+      given !== `${protocol}//${named}` &&
+      given !== options.devOrigin
+    )
       throw new AppError(403, "허용되지 않은 Origin입니다.");
     reply.header("X-Content-Type-Options", "nosniff");
     reply.header("Referrer-Policy", "same-origin");

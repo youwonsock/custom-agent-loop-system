@@ -303,6 +303,19 @@ test("an active tool uses the longer tool timeout and reports tool_timeout when 
   assert.equal(stalled.outcome, "tool_timeout");
 });
 
+test("a command the CLI moved to the background counts as a tool until it ends", async () => {
+  const limits = { transport: 750, idle: 500, tool: 120, phase: 1_000 };
+  const running = await runFake("background-task-hang", limits);
+  assert.equal(running.outcome, "tool_timeout");
+  assert.match(running.failureMessage!, /Tool execution/);
+  const ended = await runFake("background-task-ends", {
+    ...limits,
+    idle: 120,
+    tool: 500,
+  });
+  assert.equal(ended.outcome, "idle_timeout");
+});
+
 test("forced termination handles a process that ignores graceful signals", async () => {
   const result = await runFake("ignore-termination", {
     transport: 100,
