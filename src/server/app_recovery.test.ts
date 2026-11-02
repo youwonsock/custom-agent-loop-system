@@ -830,3 +830,31 @@ test("snapshot decoding rejects malformed v3 data and preserves compatible legac
   await assert.rejects(s.store.readSession(id), /JSON이 손상/);
   await fs.writeFile(file, JSON.stringify(valid));
 });
+
+test("a failed session write leaves the caller's copy able to report that failure", async (t) => {
+  const s = await setup();
+  t.after(s.cleanup);
+  const id = await launch(s, await minimal(s), "write failure");
+  await wait(() => s.store.readSession(id), "SUCCESS");
+  const state = await s.store.readSession(id);
+  const { revision, updatedAt } = state;
+  // The live module: the namespace import here only exposes read-only getters.
+  const rename = t.mock.method(
+    require("node:fs/promises") as typeof fs,
+    "rename",
+    async () => {
+      throw Object.assign(new Error("disk full"), { code: "ENOSPC" });
+    },
+    { times: 1 },
+  );
+  await assert.rejects(s.store.writeSession(state), /disk full/);
+  assert.equal(rename.mock.callCount(), 1);
+  assert.equal(state.revision, revision);
+  assert.equal(state.updatedAt, updatedAt);
+  state.statusReason = "reported after the failed write";
+  await s.store.writeSession(state);
+  assert.equal(state.revision, (revision ?? 0) + 1);
+  const saved = await s.store.readSession(id);
+  assert.equal(saved.statusReason, "reported after the failed write");
+  assert.equal(saved.revision, state.revision);
+});
