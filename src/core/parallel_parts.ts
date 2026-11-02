@@ -136,9 +136,7 @@ export async function removeParts(
   const list = await git(target, "worktree", "list", "--porcelain").catch(
     () => "",
   );
-  for (const entry of list.split(/
-
-+/)) {
+  for (const entry of list.split(/\n\n+/)) {
     const directory = /^worktree (.+)$/m.exec(entry)?.[1],
       branch = /^branch refs\/heads\/(.+)$/m.exec(entry)?.[1];
     if (directory && branch?.startsWith(`${prefix}/`))
