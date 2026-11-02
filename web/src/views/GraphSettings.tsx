@@ -67,7 +67,8 @@ export default function GraphSettings({
                   })
                 }
               />
-              npm 테스트에 자체 영역·결함 탐지 계약 필수
+              npm 테스트에 자체 영역·결함 탐지 계약 필수 (이미 테스트 스크립트가
+              있는 프로젝트에는 적용 안 함)
             </label>
             <label className="checkbox">
               <input

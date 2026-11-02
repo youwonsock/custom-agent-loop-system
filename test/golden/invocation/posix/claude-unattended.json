@@ -30,7 +30,7 @@
       "--model",
       "golden-model",
       "--allowedTools",
-      "Edit,Write,NotebookEdit,Bash(npm:*),Bash(npx:*),Bash(mkdir:*),Bash(ls:*),Bash(cat:*),Bash(head:*),Bash(tail:*),Bash(wc:*),Bash(pwd),Bash(git status:*),Bash(git diff:*),Bash(git log:*),Bash(node:*),Bash(npm test),Bash(npm test:*),Bash(python3 -m pytest)",
+      "Edit,Write,NotebookEdit,Bash(npm:*),Bash(npx:*),Bash(mkdir:*),Bash(ls:*),Bash(cat:*),Bash(head:*),Bash(tail:*),Bash(wc:*),Bash(grep:*),Bash(sed -n:*),Bash(echo:*),Bash(date:*),Bash(pwd),Bash(git status:*),Bash(git diff:*),Bash(git log:*),Bash(node:*),Bash(npm test),Bash(npm test:*),Bash(python3 -m pytest)",
       "--settings",
       "{\"sandbox\":{\"network\":{\"allowLocalBinding\":true},\"excludedCommands\":[\"node '<REPO>/dist/src/server/cli.js' verify-browser --spec .agent-graph/browser.json\"]}}"
     ],
@@ -51,7 +51,7 @@
       "--model",
       "golden-model",
       "--allowedTools",
-      "Bash(ls:*),Bash(cat:*),Bash(head:*),Bash(tail:*),Bash(wc:*),Bash(pwd),Bash(git status:*),Bash(git diff:*),Bash(git log:*),Bash(node:*),Bash(npm test),Bash(npm test:*),Bash(python3 -m pytest)",
+      "Bash(ls:*),Bash(cat:*),Bash(head:*),Bash(tail:*),Bash(wc:*),Bash(grep:*),Bash(sed -n:*),Bash(echo:*),Bash(date:*),Bash(pwd),Bash(git status:*),Bash(git diff:*),Bash(git log:*),Bash(node:*),Bash(npm test),Bash(npm test:*),Bash(python3 -m pytest)",
       "--settings",
       "{\"sandbox\":{\"network\":{\"allowLocalBinding\":true},\"excludedCommands\":[\"node '<REPO>/dist/src/server/cli.js' verify-browser --spec .agent-graph/browser.json\"]}}"
     ],

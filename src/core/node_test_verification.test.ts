@@ -532,6 +532,61 @@ test("a malformed node test scope names the field to repair", () => {
     /unique across all scopes: "wrong-value"/,
   );
 });
+test("a goal naming npm test still needs that check when the authored policy is off", async (t) => {
+  const s = await setup(t),
+    old = structuredClone(s.manifest);
+  delete old.nodeTests;
+  old.protectedFiles.push("probes/verify-acceptance.mjs");
+  await fs.writeFile(path.join(s.root, "probes/verify-acceptance.mjs"), "\n");
+  old.checks = [
+    {
+      id: "acceptance",
+      command: "node probes/verify-acceptance.mjs",
+      requirements: ["REQ-001"],
+    },
+  ];
+  await fs.writeFile(
+    path.join(s.root, ".agent-graph/verification.json"),
+    JSON.stringify(old),
+  );
+  const state = {
+    targetProjectPath: s.root,
+    requirements: deriveRequirementLedger("npm test passes"),
+    graph: createAutonomousGraph(),
+  } as SessionState;
+  state.graph.automation!.browserVerification = false;
+  state.graph.automation!.authoredNodeTests = false;
+  await assert.rejects(lockContract(state, "supplied"), /REQ-001.*npm test/);
+  const visit = {
+    id: "implementation",
+    nodeId: "implementation",
+    attempts: [],
+    output: "",
+  } as unknown as NodeVisit;
+  const prompt = buildNodePrompt(
+    {
+      ...state,
+      goal: "npm test passes",
+      visits: [visit],
+      accessMode: "ask",
+      additionalAllowedPaths: [],
+    } as unknown as SessionState,
+    state.graph.nodes.find((n) => n.type === "implementation")!,
+    visit,
+  );
+  assert.match(prompt, /Existing tests: .*keep it unchanged/);
+  assert.doesNotMatch(prompt, /"nodeTests"/);
+  old.checks.push({
+    id: "node",
+    command: "npm test",
+    requirements: ["REQ-001"],
+  });
+  await fs.writeFile(
+    path.join(s.root, ".agent-graph/verification.json"),
+    JSON.stringify(old),
+  );
+  assert.equal((await lockContract(state, "supplied")).status, "locked");
+});
 test("a requirement naming npm test cannot be locked by a contract that never runs it", async (t) => {
   const s = await setup(t),
     old = structuredClone(s.manifest);

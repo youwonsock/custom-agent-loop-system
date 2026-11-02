@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { randomUUID } from "node:crypto";
+import { hasOwnTestScript } from "../core/verification_contract";
 import {
   quickSettings,
   setup,
@@ -243,4 +244,45 @@ test("observed outside Kilo discovery blocks the workflow instead of repairing a
   assert.equal(done.visits.length, 1);
   assert.equal(done.visits[0]!.attempts[0]!.scopeAudit!.outsideCalls, 1);
   assert.deepEqual(done.processedRequests, []);
+});
+
+test("a project's own test script turns the authored-test policy off for that run only", async (t) => {
+  const s = await setup();
+  t.after(s.cleanup);
+  const file = path.join(s.target, "package.json");
+  const cases: Array<[string, boolean]> = [
+    ['{"scripts":{"test":"npm run build && node --test dist"}}', true],
+    [
+      '{"scripts":{"test":"echo \\"Error: no test specified\\" && exit 1"}}',
+      false,
+    ],
+    ['{"scripts":{"start":"node ."}}', false],
+    ['{"name":"p"}', false],
+    ["{ not json", false],
+  ];
+  for (const [content, expected] of cases) {
+    await fs.writeFile(file, content);
+    assert.equal(await hasOwnTestScript(s.target), expected, content);
+  }
+  await fs.rm(file);
+  assert.equal(await hasOwnTestScript(s.target), false);
+
+  let graph = await s.store.createGraph({ template: "autonomous" });
+  graph.defaultBinding = s.graph.defaultBinding;
+  graph = await s.store.saveGraph(graph.id, graph, graph.revision);
+  await fs.writeFile(file, cases[0]![0]);
+  const id = await launch(s, graph, "keep the existing tests");
+  const session = await s.store.readSession(id);
+  assert.equal(session.graph.automation?.authoredNodeTests, false);
+  assert.equal(
+    (await s.store.graph(graph.id)).automation?.authoredNodeTests,
+    true,
+  );
+
+  await fs.rm(file);
+  const fresh = await launch(s, graph, "start a new project");
+  assert.equal(
+    (await s.store.readSession(fresh)).graph.automation?.authoredNodeTests,
+    true,
+  );
 });

@@ -26,7 +26,11 @@ import {
   executionSettings,
   autonomousExecutionSettings,
 } from "../core/settings";
-import { CONTRACT_FILE, lockContract } from "../core/verification_contract";
+import {
+  CONTRACT_FILE,
+  lockContract,
+  hasOwnTestScript,
+} from "../core/verification_contract";
 import {
   createSessionBudget,
   sessionBudgetReason,
@@ -158,6 +162,14 @@ export class SessionCoordinator extends EventEmitter {
           convergence: { stagnantCycles: 0, history: [] },
         };
         state.executionBudget = createSessionBudget(settings, Date.parse(now));
+        // The authored-test policy dictates what npm test runs, which would overwrite
+        // an existing project's own command. This run's snapshot only; the graph keeps
+        // the setting for new projects.
+        if (
+          state.graph.automation?.authoredNodeTests &&
+          (await hasOwnTestScript(target))
+        )
+          state.graph.automation.authoredNodeTests = false;
         if (graph.automation?.verificationContract) {
           state.verificationContract = { version: 1, status: "pending" };
           if (
