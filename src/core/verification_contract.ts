@@ -1,5 +1,7 @@
+import { execFile } from "node:child_process";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { promisify } from "node:util";
 import {
   CommandReceipt,
   SessionState,
@@ -254,6 +256,37 @@ export async function hasOwnTestScript(target: string): Promise<boolean> {
     return false;
   }
 }
+const run = promisify(execFile);
+/**
+ * A frozen adapter cannot be repaired either. Read without running it: this process
+ * is outside any isolation, and the adapter is model-authored code.
+ */
+async function adapterProblem(
+  root: string,
+  manifest: VerificationManifest,
+): Promise<string | null> {
+  const adapters = new Set(
+    manifest.nodeTests?.scopes.flatMap((s) =>
+      s.challenges.map((c) => c.adapter),
+    ),
+  );
+  for (const adapter of adapters) {
+    const file = await inside(root, adapter);
+    try {
+      await run(process.execPath, ["--check", file], { timeout: 10_000 });
+    } catch (error) {
+      const detail = String((error as { stderr?: string }).stderr ?? "");
+      return `Mutation adapter ${adapter} does not parse: ${detail.slice(0, 400)}`;
+    }
+    if (
+      !/\bexport\s+(?:async\s+function|function|const)\s+mutate\b|\bexport\s*\{[^}]*\bmutate\b/.test(
+        await fs.readFile(file, "utf8"),
+      )
+    )
+      return `Mutation adapter ${adapter} must export a mutate function.`;
+  }
+  return null;
+}
 /** A mandatory requirement that a contract must run as npm test. */
 export function requirementNamingNpmTest(state: SessionState) {
   if (!state.graph.automation?.verificationContract) return undefined;
@@ -292,6 +325,8 @@ export async function lockContract(
     throw Error(
       `${namesNpmTest.id}가 npm test를 요구하므로 고정 계약에 npm test 검사가 필요합니다.`,
     );
+  const adapter = await adapterProblem(root, manifest);
+  if (adapter) throw Error(adapter);
   // A frozen file cannot be repaired, so a broken spec must fail while it still can.
   if (state.graph.automation?.browserVerification)
     try {
