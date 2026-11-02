@@ -6,7 +6,7 @@ import { randomUUID } from "node:crypto";
 import { sessionWaitMs, setup as startStudio } from "./app_harness.test";
 import { AgentGraphDocument, SessionState } from "../shared/domain";
 import { autonomousDefaults } from "../shared/graph_defaults";
-import { delay } from "../core/resilience";
+import { delay } from "../core/session/resilience";
 
 // Characterization of GraphRuntime.execute() exits that the scenario suite in
 // app_*.test.ts does not reach. Each case pins the whole resulting session state

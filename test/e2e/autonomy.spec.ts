@@ -4,7 +4,7 @@ import * as fs from "node:fs/promises";
 import { createServer } from "../../dist/src/server/app";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { checkProcessLiveness } from "../../dist/src/core/resilience";
+import { checkProcessLiveness } from "../../dist/src/core/session/resilience";
 
 test("autonomous preset UI persists browser checks, repair budget and native review policy", async ({
   page,

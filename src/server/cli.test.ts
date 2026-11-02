@@ -5,7 +5,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { StudioStore } from "../core/store";
+import { StudioStore } from "../core/session/store";
 
 const execute = promisify(execFile);
 test("public CLI init, graphs, models, run and resume share the standalone workspace", async (t) => {

@@ -1,0 +1,557 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { createGraph, createAutonomousGraph } from "../runtime/graph";
+import { validateCompletion, parsePlans } from "./completion";
+import { implementationBlocker } from "../runtime/implementation_blocker";
+import { deriveRequirementLedger } from "./requirement_ledger";
+import { emptyEvidence } from "./event_evidence";
+import { SupervisorResult } from "../process/process_supervisor";
+import { cliDiagnostic, emptyCliDiagnostics } from "../process/cli_diagnostics";
+const result = (text: string): SupervisorResult => ({
+  pid: 1,
+  outcome: "succeeded",
+  failureKind: null,
+  failureMessage: null,
+  exitCode: 0,
+  output: text,
+  assistantText: text,
+  events: [],
+  cliSessionId: null,
+  startedAt: "",
+  endedAt: "",
+  timedOut: false,
+  cancelled: false,
+  rawLogPath: "",
+  controlRequest: null,
+  autoInjected: [],
+  evidence: emptyEvidence(),
+  diagnostics: emptyCliDiagnostics(),
+});
+test("a bare AGENT_REPORT list is a summary, unless it says it is blocked", () => {
+  assert.equal(
+    implementationBlocker(
+      "Done.\n\nAGENT_REPORT\n- role: implementation\n- verdict: READY_FOR_TEST\n- blockers: none\n\n[PHASE_DONE]",
+    ),
+    null,
+  );
+  for (const line of ["- verdict: BLOCKED", "**Verdict:** BLOCKED"])
+    assert.throws(
+      () => implementationBlocker(`AGENT_REPORT\n${line}\n\n[PHASE_DONE]`),
+      /VERDICT: BLOCKED/,
+    );
+  assert.equal(
+    implementationBlocker("[AGENT_REPORT]\n- not json\n[/AGENT_REPORT]"),
+    null,
+  );
+  assert.throws(
+    () =>
+      implementationBlocker(
+        "[AGENT_REPORT]\n- verdict: BLOCKED\n[/AGENT_REPORT]",
+      ),
+    /VERDICT: BLOCKED/,
+  );
+  assert.throws(
+    () => implementationBlocker("[AGENT_REPORT]\n- not closed"),
+    /닫는 표식/,
+  );
+  assert.equal(
+    implementationBlocker('AGENT_REPORT\n{"verdict":"BLOCKED"}')?.kind,
+    "external",
+  );
+});
+test("implementation external blockers cannot hand off successfully with PHASE_DONE, including observed bare JSON", () => {
+  const node = createAutonomousGraph().nodes.find(
+      (n) => n.type === "implementation",
+    )!,
+    req = deriveRequirementLedger("goal").items;
+  for (const output of [
+    "BLOCKED_KIND: external\nVERDICT: BLOCKED\n[PHASE_DONE]",
+    'Before\nAGENT_REPORT\n{"role":"implementation","verdict":"BLOCKED","blocked_kind":"external","handoff":"listen EPERM"}\n[PHASE_DONE]',
+    '[AGENT_REPORT]\n{"version":1,"verdict":"BLOCKED","blockedKind":"external","handoff":"listen EPERM"}\n[/AGENT_REPORT]\n[PHASE_DONE]',
+  ]) {
+    const c = validateCompletion(node, result(output), {
+      goal: "goal",
+      requirements: req,
+      commands: [],
+      priorTestProof: [],
+      automation: createAutonomousGraph().automation,
+    });
+    assert.equal(c.verdict, "BLOCKED");
+    assert.ok(c.environmentBlocked);
+  }
+  const product = validateCompletion(
+    node,
+    result(
+      'AGENT_REPORT\n{"verdict":"BLOCKED","blockedKind":"product","handoff":"fix validation"}\n[PHASE_DONE]',
+    ),
+    {
+      goal: "goal",
+      requirements: req,
+      commands: [],
+      priorTestProof: [],
+      automation: createAutonomousGraph().automation,
+    },
+  );
+  assert.equal(product.valid, false);
+  assert.equal(product.environmentBlocked, null);
+  const example = validateCompletion(
+    node,
+    result(
+      'Example only:\n```\nAGENT_REPORT\n{"verdict":"BLOCKED"}\n```\nImplemented.\n[PHASE_DONE]',
+    ),
+    {
+      goal: "goal",
+      requirements: req,
+      commands: [],
+      priorTestProof: [],
+      automation: createAutonomousGraph().automation,
+    },
+  );
+  assert.equal(example.environmentBlocked, null);
+});
+test("autonomous implementation accepts only an unambiguous terminal prose marker without approving tests", () => {
+  const graph = createAutonomousGraph(),
+    requirements = deriveRequirementLedger("build acceptance").items;
+  const implementation = graph.nodes.find((n) => n.type === "implementation")!;
+  for (const text of [
+    "All checks pass. Implementation complete. [PHASE_DONE]",
+    "All fixed requirements satisfied based on observed evidence. Implementation complete with all checks passing. [PHASE_DONE]",
+    "구현을 완료했습니다.\r\n검사 결과를 확인했습니다. [PHASE_DONE]",
+  ]) {
+    const original = result(text);
+    const c = validateCompletion(implementation, original, {
+      goal: "goal",
+      requirements,
+      commands: [],
+      priorTestProof: [],
+      automation: graph.automation,
+    });
+    assert.equal(c.valid, true);
+    assert.equal(c.verdict, null);
+    assert.ok(c.output.endsWith("\n[PHASE_DONE]"));
+    assert.equal(
+      original.assistantText,
+      text,
+      "raw assistant evidence is preserved",
+    );
+    assert.equal(
+      validateCompletion(implementation, original, {
+        goal: "goal",
+        requirements,
+      }).valid,
+      false,
+      "manual profiles remain strict",
+    );
+  }
+  for (const text of [
+    "echo [PHASE_DONE]",
+    "done [PHASE_DONE]",
+    "Done. [PHASE_DONE] trailing",
+    "Done.",
+    "Done. `[PHASE_DONE]`",
+    "```\nDone. [PHASE_DONE]",
+    "Done. [PHASE_DONE]\nAgain. [PHASE_DONE]",
+  ]) {
+    assert.equal(
+      validateCompletion(implementation, result(text), {
+        goal: "goal",
+        requirements,
+        commands: [],
+        priorTestProof: [],
+        automation: graph.automation,
+      }).valid,
+      false,
+      text,
+    );
+  }
+  for (const type of ["test", "review", "approval"] as const) {
+    const node = graph.nodes.find((n) => n.type === type)!;
+    assert.equal(
+      validateCompletion(node, result("Done. [PHASE_DONE]"), {
+        goal: "goal",
+        requirements,
+        commands: [],
+        priorTestProof: [],
+        automation: graph.automation,
+      }).valid,
+      false,
+    );
+  }
+  for (const changed of [
+    { ...result("Done. [PHASE_DONE]"), exitCode: 1 },
+    {
+      ...result("Done. [PHASE_DONE]"),
+      outcome: "idle_timeout" as const,
+      failureKind: "idle_timeout" as const,
+    },
+  ])
+    assert.equal(
+      validateCompletion(implementation, changed, {
+        goal: "goal",
+        requirements,
+        commands: [],
+        priorTestProof: [],
+        automation: graph.automation,
+      }).valid,
+      false,
+    );
+});
+test("assistant completion and requirement gates reject weak PASS or APPROVED", () => {
+  const g = createGraph(),
+    requirements = deriveRequirementLedger("build acceptance").items;
+  assert.equal(
+    validateCompletion(g.nodes[1]!, result("echo [PHASE_DONE]"), {
+      goal: "goal",
+      requirements,
+    }).valid,
+    false,
+  );
+  assert.equal(
+    validateCompletion(g.nodes[2]!, result("VERDICT: PASS\n[PHASE_DONE]"), {
+      goal: "goal",
+      requirements,
+    }).verdict,
+    "FAIL",
+  );
+  assert.equal(
+    validateCompletion(g.nodes[4]!, result("APPROVED\n[PHASE_DONE]"), {
+      goal: "goal",
+      requirements,
+    }).verdict,
+    "REJECTED",
+  );
+  const changed = result("APPROVED\n[PHASE_DONE]");
+  changed.evidence.fileMutation = true;
+  assert.equal(
+    validateCompletion(g.nodes[4]!, changed, { goal: "goal", requirements })
+      .valid,
+    false,
+  );
+});
+test("planning options are complete, sequential and scoped to fixed REQ IDs", () => {
+  const plans =
+    "## OPTION 1: A\nREQ-001 first strategy\n## OPTION 2: B\nREQ-001 second strategy\n## OPTION 3: C\nREQ-001 third strategy\n[PHASE_DONE]";
+  assert.equal(parsePlans(plans).length, 3);
+  assert.equal(
+    validateCompletion(createGraph().nodes[0]!, result(plans), {
+      goal: "goal",
+      requirements: deriveRequirementLedger("goal").items,
+    }).valid,
+    true,
+  );
+});
+test("required web research relies on observed completion, independent of native tool settings", () => {
+  const g = createGraph(),
+    r = result(
+      "SOURCE: https://example.com/source\nVERIFIED_FACT: observed\nAPPROVED\n[PHASE_DONE]",
+    );
+  assert.equal(
+    validateCompletion(g.nodes[4]!, r, {
+      goal: "인터넷 검색",
+      requirements: [],
+    }).valid,
+    false,
+  );
+  r.evidence.completedSearches = 1;
+  assert.equal(
+    validateCompletion(g.nodes[4]!, r, {
+      goal: "인터넷 검색",
+      requirements: [],
+    }).valid,
+    true,
+  );
+  const blocked = result("RESEARCH_BLOCKED\n[PHASE_DONE]");
+  assert.equal(
+    validateCompletion(g.nodes[0]!, blocked, {
+      goal: "인터넷 검색",
+      requirements: [],
+    }).researchBlocked,
+    true,
+  );
+});
+
+test("a terminal provider failure rejects otherwise complete output even with CLI exit zero", () => {
+  const r = result("APPROVED\n[PHASE_DONE]");
+  r.diagnostics.terminalError = cliDiagnostic({
+    statusCode: 401,
+    message: "Unauthorized",
+  });
+  const completion = validateCompletion(createGraph().nodes[4]!, r, {
+    goal: "goal",
+    requirements: [],
+  });
+  assert.equal(completion.valid, false);
+  assert.equal(completion.failureKind, "auth");
+});
+
+test("missing markers and read-only mutations expose typed failure causes", () => {
+  const node = createGraph().nodes[3]!;
+  assert.equal(
+    validateCompletion(node, result("unfinished"), {
+      goal: "goal",
+      requirements: [],
+    }).failureKind,
+    "incomplete_response",
+  );
+  const changed = result("unfinished");
+  changed.evidence.fileMutation = true;
+  assert.equal(
+    validateCompletion(node, changed, { goal: "goal", requirements: [] })
+      .failureKind,
+    "role_violation",
+  );
+});
+test("missing or malformed positive evidence uses bounded report recovery while real negative evidence stays a verdict", () => {
+  const requirements = deriveRequirementLedger("one\ntwo").items;
+  const block = (id: string, status = "SATISFIED") =>
+    `[REQUIREMENT_EVIDENCE]\nREQ_ID: ${id}\nSTATUS: ${status}\nEVIDENCE: observed check\nCHECK_COMMAND: npm test\n[/REQUIREMENT_EVIDENCE]`;
+  for (const type of ["test", "review", "approval"] as const) {
+    const node = createGraph().nodes.find((n) => n.type === type)!;
+    const verdict = type === "test" ? "VERDICT: PASS" : "APPROVED";
+    const malformed = validateCompletion(
+      node,
+      result(
+        `${block("REQ-001")}\n${block("REQ_ID: REQ-002")}\n${verdict}\n[PHASE_DONE]`,
+      ),
+      { goal: "goal", requirements },
+    );
+    assert.equal(malformed.valid, false);
+    assert.equal(malformed.failureKind, "incomplete_response");
+    assert.match(malformed.reason!, /REQ-002/);
+    const repairedResult = result(
+      `${block("REQ-001")}\n${block("REQ-002")}\n${verdict}\n[PHASE_DONE]`,
+    );
+    const receipts = [
+      { id: "check", command: "npm test", exitCode: 0, environmentError: null },
+    ];
+    const repaired = validateCompletion(node, repairedResult, {
+      goal: "goal",
+      requirements,
+      commands: receipts,
+      priorTestProof: receipts,
+    });
+    assert.equal(repaired.valid, true);
+    assert.equal(repaired.verdict, type === "test" ? "PASS" : "APPROVED");
+    const negative = validateCompletion(
+      node,
+      result(
+        `${block("REQ-001")}\n${block("REQ-002", "FAILED")}\n${verdict}\n[PHASE_DONE]`,
+      ),
+      { goal: "goal", requirements },
+    );
+    assert.equal(negative.valid, true);
+    assert.equal(negative.verdict, type === "test" ? "FAIL" : "REJECTED");
+    const mixed = validateCompletion(
+      node,
+      result(`${block("REQ-001", "FAILED")}\n${verdict}\n[PHASE_DONE]`),
+      { goal: "goal", requirements },
+    );
+    assert.equal(mixed.valid, true);
+    assert.equal(mixed.verdict, type === "test" ? "FAIL" : "REJECTED");
+  }
+});
+
+test("prose PASS cannot replace native command execution and approval needs current test proof", () => {
+  const graph = createGraph(),
+    requirements = deriveRequirementLedger("pointer swipes").items;
+  const report =
+    "[REQUIREMENT_EVIDENCE]\nREQ_ID: REQ-001\nSTATUS: SATISFIED\nEVIDENCE: pointer swipes are implemented\nCHECK_COMMAND: npm test\n[/REQUIREMENT_EVIDENCE]\n";
+  const r = result(report + "VERDICT: PASS\n[PHASE_DONE]");
+  assert.equal(
+    validateCompletion(graph.nodes[2]!, r, { goal: "goal", requirements })
+      .valid,
+    false,
+  );
+  r.evidence.commands = [
+    { id: "real", command: "npm test", exitCode: 1, environmentError: null },
+  ];
+  assert.equal(
+    validateCompletion(graph.nodes[2]!, r, { goal: "goal", requirements })
+      .verdict,
+    "FAIL",
+  );
+  r.evidence.commands[0]!.exitCode = 0;
+  assert.equal(
+    validateCompletion(graph.nodes[2]!, r, { goal: "goal", requirements })
+      .verdict,
+    "PASS",
+  );
+  const approval = result(report + "APPROVED\n[PHASE_DONE]");
+  assert.equal(
+    validateCompletion(graph.nodes[4]!, approval, {
+      goal: "goal",
+      requirements,
+    }).verdict,
+    "REJECTED",
+  );
+  assert.equal(
+    validateCompletion(graph.nodes[4]!, approval, {
+      goal: "goal",
+      requirements,
+      commands: [],
+      priorTestProof: r.evidence.commands,
+    }).verdict,
+    "APPROVED",
+  );
+});
+
+test("observed environment failure holds even a claimed PASS without retrying report formatting", () => {
+  const r = result("VERDICT: PASS");
+  r.evidence.commands = [
+    {
+      id: "native",
+      command: "npm test",
+      exitCode: 1,
+      environmentError: "listen EPERM",
+    },
+  ];
+  const completion = validateCompletion(createGraph().nodes[2]!, r, {
+    goal: "goal",
+    requirements: [],
+  });
+  assert.equal(completion.verdict, "BLOCKED");
+  assert.match(completion.environmentBlocked!, /listen EPERM/);
+  assert.equal(completion.valid, true);
+});
+
+test("real CLI markdown reports and redirected checks retain verdicts without false format recovery", () => {
+  const node = createGraph().nodes[2]!,
+    requirements = deriveRequirementLedger("acceptance").items;
+  const text =
+    "[REQUIREMENT_EVIDENCE]\nREQ_ID: REQ-001\nSTATUS: SATISFIED\nEVIDENCE: observed test\nCHECK_COMMAND: `npm test`\n[/REQUIREMENT_EVIDENCE]\n**VERDICT: PASS**\n[PHASE_DONE]";
+  const r = result(text);
+  r.evidence.commands = [
+    {
+      id: "real",
+      command: "npm test > verification/test-output.txt 2>&1",
+      exitCode: 0,
+      environmentError: null,
+    },
+  ];
+  assert.equal(
+    validateCompletion(node, r, { goal: "goal", requirements }).verdict,
+    "PASS",
+  );
+  const blocked = result(
+    text
+      .replace("STATUS: SATISFIED", "STATUS: BLOCKED")
+      .replace("VERDICT: PASS", "VERDICT: FAIL"),
+  );
+  const held = validateCompletion(node, blocked, {
+    goal: "goal",
+    requirements,
+  });
+  assert.equal(held.verdict, "BLOCKED");
+  assert.match(held.environmentBlocked!, /테스트 역할이/);
+});
+
+for (const type of ["review", "approval"] as const)
+  test(`${type} cannot approve observed failed or blocked verification`, () => {
+    const node = createGraph().nodes.find((n) => n.type === type)!;
+    const requirements = deriveRequirementLedger("acceptance").items;
+    const output =
+      "[REQUIREMENT_EVIDENCE]\nREQ_ID: REQ-001\nSTATUS: SATISFIED\nEVIDENCE: claimed\n[/REQUIREMENT_EVIDENCE]\nAPPROVED\n[PHASE_DONE]";
+    const prior = [
+      {
+        id: "passed",
+        command: "npm test",
+        exitCode: 0,
+        environmentError: null,
+      },
+    ];
+    for (const exitCode of [1, null]) {
+      const completion = validateCompletion(node, result(output), {
+        goal: "goal",
+        requirements,
+        commands: [{ ...prior[0]!, exitCode }],
+        priorTestProof: prior,
+      });
+      assert.equal(completion.verdict, "REJECTED");
+    }
+    const blocked = validateCompletion(node, result(output), {
+      goal: "goal",
+      requirements,
+      commands: [
+        { ...prior[0]!, exitCode: 1, environmentError: "listen EPERM" },
+      ],
+      priorTestProof: prior,
+    });
+    assert.equal(blocked.verdict, "BLOCKED");
+    assert.ok(blocked.environmentBlocked);
+  });
+
+test("planning recovery identifies unresolved IDs per option without accepting numeric prefixes", () => {
+  const requirements = deriveRequirementLedger("one\ntwo").items;
+  const node = createGraph().nodes[0]!;
+  node.planning = { requiresApproval: false, optionsCount: 1 };
+  for (const text of ["REQ-001/003", "REQ-001 REQ-0020"]) {
+    const c = validateCompletion(
+      node,
+      result(`## OPTION 1: Plan\n${text}\n[PHASE_DONE]`),
+      { goal: "goal", requirements },
+    );
+    assert.equal(c.valid, false);
+    assert.match(c.reason!, /OPTION 1: REQ-002/);
+    assert.match(c.reason!, /REQ-006, REQ-007/);
+  }
+  assert.equal(
+    validateCompletion(
+      node,
+      result(
+        "## OPTION 1: Plan\nREQ-001 first check\nREQ-002 second check\n[PHASE_DONE]",
+      ),
+      { goal: "goal", requirements },
+    ).valid,
+    true,
+  );
+});
+
+test("plan-only reference normalization accepts known lists and ranges without rewriting output", () => {
+  const requirements = deriveRequirementLedger("one\ntwo\nthree").items,
+    node = createGraph().nodes[0]!;
+  node.planning = { requiresApproval: false, optionsCount: 1 };
+  for (const refs of [
+    "REQ-001/002/003",
+    "REQ-001,002,003",
+    "REQ-001..003",
+    "REQ-001–REQ-003",
+  ]) {
+    const text = `## OPTION 1: Strategy\n${refs}: implement and verify the original goal\n[PHASE_DONE]`;
+    const c = validateCompletion(node, result(text), {
+      goal: "goal",
+      requirements,
+    });
+    assert.equal(c.valid, true, refs);
+    assert.equal(c.output, text);
+  }
+  for (const refs of [
+    "REQ-001..999",
+    "REQ-003..001",
+    "REQ-001/003",
+    "REQ-001 REQ-0020",
+  ])
+    assert.equal(
+      validateCompletion(
+        node,
+        result(`## OPTION 1: Strategy\n${refs}\n[PHASE_DONE]`),
+        { goal: "goal", requirements },
+      ).valid,
+      false,
+      refs,
+    );
+});
+test("plan abbreviation support never expands test evidence or permits success without fixed-ID blocks", () => {
+  const requirements = deriveRequirementLedger("one\ntwo").items;
+  const r = result(
+    "[REQUIREMENT_EVIDENCE]\nREQ_ID: REQ-001/002\nSTATUS: SATISFIED\nEVIDENCE: observed\nCHECK_COMMAND: npm test\n[/REQUIREMENT_EVIDENCE]\nVERDICT: PASS\n[PHASE_DONE]",
+  );
+  r.evidence.commands = [
+    { id: "test", command: "npm test", exitCode: 0, environmentError: null },
+  ];
+  const c = validateCompletion(createGraph().nodes[2]!, r, {
+    goal: "goal",
+    requirements,
+  });
+  assert.equal(c.valid, false);
+  assert.notEqual(c.verdict, "PASS");
+});

@@ -2,6 +2,18 @@
 
 2026-10-31 기준. 사용자 기능과 조건은 [README](../README.md), [실행 조건](EXECUTION_CONDITIONS.md), [자율 실행](AUTONOMOUS_WORKFLOW.md)을 기준으로 한다. 이 문서는 코드를 수정하는 사람을 위한 내부 구조다.
 
+
+## `src/core` 폴더
+
+| 폴더 | 내용 |
+| --- | --- |
+| `runtime/` | 실행 루프, 게이트, 그래프, 프롬프트, 모델 조회, 병렬 작업 |
+| `session/` | 저장소, 세션 스키마와 상태 전이, 잠금과 소유권, 예산, 설정 |
+| `verification/` | 검증 계약, 완료 판정, 명령·읽기 증거, 브라우저와 Node 검사 |
+| `invocation/` | CLI별 인자와 환경, Kilo 훅과 대상 범위 |
+| `process/` | CLI 프로세스 감독, 출력 처리, 공급자 이벤트 |
+| `program_io/` | 프로그램 격리: 서명, 실행기, VM·Podman, 기록 대조, Claude 훅 |
+
 ## 프로세스
 
 ```mermaid

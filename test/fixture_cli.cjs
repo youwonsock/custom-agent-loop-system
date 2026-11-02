@@ -642,7 +642,7 @@ if (args[0] === "debug" && args[1] === "config") {
             ? "cd " + cwd + " && " + check.command
             : check.command;
           const words =
-            require("../dist/src/core/verification_evidence.js").literalShellWords(
+            require("../dist/src/core/verification/verification_evidence.js").literalShellWords(
               observedCommand,
             );
           const executed =

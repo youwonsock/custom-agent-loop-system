@@ -3,17 +3,17 @@ import * as path from "node:path";
 import * as os from "node:os";
 import { spawn } from "node:child_process";
 import { createServer } from "./app";
-import { StudioStore } from "../core/store";
+import { StudioStore } from "../core/session/store";
 import { SessionCoordinator } from "./coordinator";
-import { readJsonFile } from "../core/resilience";
-import { runBrowserVerification } from "../core/browser_verification";
+import { readJsonFile } from "../core/session/resilience";
+import { runBrowserVerification } from "../core/verification/browser_verification";
 import {
   runNodeTestVerification,
   summarizeNodeTestReport,
-} from "../core/node_test_verification";
-import { validateManifest } from "../core/verification_contract";
-import { inside } from "../core/verification_sources";
-import { queryModels } from "../core/catalog";
+} from "../core/verification/node_test_verification";
+import { validateManifest } from "../core/verification/verification_contract";
+import { inside } from "../core/verification/verification_sources";
+import { queryModels } from "../core/runtime/catalog";
 const args = process.argv.slice(2),
   command = args[0] ?? "ui";
 function option(key: string, fallback?: string): string | undefined {

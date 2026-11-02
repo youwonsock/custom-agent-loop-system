@@ -15,9 +15,9 @@ const { execFileSync } = require("node:child_process");
 
 const repository = path.resolve(__dirname, "..");
 const dist = (file) => path.join(repository, "dist/src", file);
-const { StudioStore } = require(dist("core/store.js"));
-const { queryModels } = require(dist("core/catalog.js"));
-const { createAutonomousGraph } = require(dist("core/graph.js"));
+const { StudioStore } = require(dist("core/session/store.js"));
+const { queryModels } = require(dist("core/runtime/catalog.js"));
+const { createAutonomousGraph } = require(dist("core/runtime/graph.js"));
 const { SessionCoordinator } = require(dist("server/coordinator.js"));
 
 const webGoal = [
@@ -89,6 +89,17 @@ const PROFILES = {
     pick: (m) => /haiku/i.test(m.id),
     automation: {},
   },
+  opencode: {
+    binary: "opencode",
+    // OpenCode reports no price, so this goes by the name of its free models.
+    pick: (m) => /^opencode\/.*-free$/.test(m.id),
+    automation: {},
+  },
+  codex: {
+    binary: "codex",
+    pick: () => true,
+    automation: {},
+  },
   kilo: {
     binary: "kilo",
     pick: (m) => m.pricing?.status === "free",
@@ -141,7 +152,8 @@ function summarize(state) {
 }
 function passed(profile, scenario, summary) {
   if (!scenario.passed(summary)) return false;
-  if (profile === "claude") return summary.status === "SUCCESS";
+  // Only Kilo has VM evidence to check by default.
+  if (profile !== "kilo") return summary.status === "SUCCESS";
   const vm = summary.vm;
   return (
     !!vm &&
@@ -161,7 +173,7 @@ async function main() {
     scenario = SCENARIOS[scenarioName];
   if (!config || !scenario)
     throw new Error(
-      "Usage: real-cli-regression.js claude|kilo [--scenario slugify|tiny-web|tiny-web-tests] [--claude-vm] [--model text]",
+      "Usage: real-cli-regression.js claude|kilo|opencode|codex [--scenario slugify|tiny-web|tiny-web-tests] [--claude-vm] [--model text]",
     );
   const stamp = new Date().toISOString().replace(/[:.]/g, "-"),
     output = path.join(

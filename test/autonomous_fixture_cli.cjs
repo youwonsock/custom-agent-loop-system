@@ -27,7 +27,7 @@ const reqs = [
 ];
 const {
   browserVerificationCommand,
-} = require("../dist/src/core/browser_command.js");
+} = require("../dist/src/core/verification/browser_command.js");
 let verdict = "SATISFIED",
   text = "",
   check = browserVerificationCommand();

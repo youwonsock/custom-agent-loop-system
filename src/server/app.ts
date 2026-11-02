@@ -5,13 +5,16 @@ import staticFiles from "@fastify/static";
 import { randomBytes } from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { StudioStore } from "../core/store";
-import { discoverClis, queryModels } from "../core/catalog";
-import { AppError, messageOf } from "../core/errors";
-import { graphDiagnostics } from "../core/graph";
+import { StudioStore } from "../core/session/store";
+import { discoverClis, queryModels } from "../core/runtime/catalog";
+import { AppError, messageOf } from "../core/session/errors";
+import { graphDiagnostics } from "../core/runtime/graph";
 import { LocalConnection, SessionAction, StudioEvent } from "../shared/domain";
 import { SessionCoordinator, StartRequest } from "./coordinator";
-import { isolationSupported, vmRuntimeAvailable } from "../core/program_io_vm";
+import {
+  isolationSupported,
+  vmRuntimeAvailable,
+} from "../core/program_io/program_io_vm";
 import { IsolationSupport } from "../shared/isolation";
 export interface ServerOptions {
   root: string;

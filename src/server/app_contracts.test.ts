@@ -3,8 +3,8 @@ import assert from "node:assert/strict";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { randomUUID } from "node:crypto";
-import { delay } from "../core/resilience";
-import { nodeTestVerificationCommand } from "../core/node_test_command";
+import { delay } from "../core/session/resilience";
+import { nodeTestVerificationCommand } from "../core/verification/node_test_command";
 import {
   sessionWaitMs,
   quickSettings,
@@ -529,7 +529,8 @@ test("the whole-session deadline also cancels model-catalog preflight without an
   const pid = Number(
     await fs.readFile(path.join(s.target, ".fixture-query-pid"), "utf8"),
   );
-  const { checkProcessLiveness } = await import("../core/resilience.js");
+  const { checkProcessLiveness } =
+    await import("../core/session/resilience.js");
   assert.equal(checkProcessLiveness(pid), "dead");
 });
 

@@ -40,7 +40,7 @@
 
 ## 제한값
 
-기본값은 `runtime_defaults.json`, 허용 범위는 `src/core/settings.ts`와 `src/core/graph.ts`가 기준이다. 자율 프리셋의 값은 `autonomousExecutionSettings`가 덮어쓴다.
+기본값은 `runtime_defaults.json`, 허용 범위는 `src/core/session/settings.ts`와 `src/core/runtime/graph.ts`가 기준이다. 자율 프리셋의 값은 `autonomousExecutionSettings`가 덮어쓴다.
 
 | 값 | 기본 | 자율 프리셋 | 허용 범위 |
 | --- | --- | --- | --- |
