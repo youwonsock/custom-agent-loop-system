@@ -57,6 +57,8 @@ export interface StartRequest {
   targetProjectPath: string;
   accessMode?: "ask" | "full_access";
   settings?: Partial<ExecutionSettings>;
+  /** Spending limit in USD. Only CLIs that report their cost can honour it. */
+  maxCostUsd?: number;
 }
 export class SessionCoordinator extends EventEmitter {
   private readonly published = new Map<string, SessionSummary>();
@@ -122,6 +124,19 @@ export class SessionCoordinator extends EventEmitter {
             400,
             "그래프가 참조하는 실행 연결이 없습니다. 연결을 다시 지정하세요.",
           );
+        if (
+          input.maxCostUsd !== undefined &&
+          !(Number.isFinite(input.maxCostUsd) && input.maxCostUsd > 0)
+        )
+          throw new AppError(400, "금액 예산은 0보다 커야 합니다.");
+        if (
+          input.maxCostUsd !== undefined &&
+          connections.some((c) => c.type === "codex")
+        )
+          throw new AppError(
+            400,
+            "Codex는 비용을 보고하지 않아 금액 예산을 쓸 수 없습니다.",
+          );
         const settings = graph.automation
             ? autonomousExecutionSettings(input.settings)
             : executionSettings(fitToolLimit(input.settings)),
@@ -162,7 +177,11 @@ export class SessionCoordinator extends EventEmitter {
           interruptMessage: null,
           requirements: deriveRequirementLedger(input.goal),
           convergence: { stagnantCycles: 0, history: [] },
-          executionBudget: createSessionBudget(settings, Date.parse(now)),
+          executionBudget: createSessionBudget(
+            settings,
+            Date.parse(now),
+            input.maxCostUsd ?? null,
+          ),
         };
         // The authored-test policy dictates what npm test runs, which would overwrite
         // an existing project's own command. This run's snapshot only; the graph keeps

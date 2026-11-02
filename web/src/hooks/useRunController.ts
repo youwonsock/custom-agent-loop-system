@@ -43,6 +43,7 @@ export function useRunController(
     [starting, setStarting] = useState(false),
     [sessionMinutes, setSessionMinutes] = useState(60),
     [toolMinutes, setToolMinutes] = useState<number | null>(null),
+    [maxCostUsd, setMaxCostUsd] = useState<number | null>(null),
     [maxSessionAttempts, setMaxSessionAttempts] = useState(24),
     [selectedRun, setSelectedRun] = useState<string | null>(null);
   const [run, setRun] = useState<SessionState | undefined>();
@@ -69,6 +70,7 @@ export function useRunController(
         goal,
         targetProjectPath: target,
         accessMode,
+        ...(maxCostUsd ? { maxCostUsd } : {}),
         settings: {
           maxIterations,
           sessionTimeoutMs: sessionMinutes * 60000,
@@ -213,6 +215,8 @@ export function useRunController(
     setSessionMinutes,
     toolMinutes,
     setToolMinutes,
+    maxCostUsd,
+    setMaxCostUsd,
     maxSessionAttempts,
     setMaxSessionAttempts,
     starting,

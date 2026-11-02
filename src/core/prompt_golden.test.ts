@@ -193,6 +193,7 @@ function lockedSession(): SessionState {
     startedAt: "2025-12-31T23:00:00.000Z",
     deadlineAt: "2026-01-01T00:30:00.000Z",
     maxAttempts: 24,
+    maxCostUsd: null,
     exhaustedReason: null,
   };
   state.visits = [

@@ -962,6 +962,8 @@ export class GraphRuntime implements GateHost {
       );
     attempt.assistantTextBytes = result.evidence.assistantTextBytes;
     attempt.maxTokens = result.evidence.maxTokens;
+    if (result.evidence.costUsd !== null)
+      attempt.costUsd = result.evidence.costUsd;
   }
   /**
    * Evidence checks between the CLI exit and completion parsing. `undefined`

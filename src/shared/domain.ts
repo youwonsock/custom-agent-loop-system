@@ -175,6 +175,8 @@ export interface SessionBudget {
   startedAt: string;
   deadlineAt: string;
   maxAttempts: number;
+  /** Spending limit in USD, as the CLIs report it. Null means no limit. */
+  maxCostUsd: number | null;
   exhaustedReason: string | null;
 }
 export interface CommandReceipt {
@@ -248,6 +250,8 @@ export interface AttemptRecord {
   actualModelId: string | null;
   assistantTextBytes: number;
   maxTokens: number;
+  /** Absent when the CLI reported no cost for this attempt. */
+  costUsd?: number;
 }
 export interface PlanChoice {
   id: number;

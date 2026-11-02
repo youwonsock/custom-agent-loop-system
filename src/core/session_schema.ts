@@ -133,6 +133,7 @@ function attempt(v: unknown): boolean {
     nullableText(v.actualModelId) &&
     count(v.assistantTextBytes) &&
     count(v.maxTokens) &&
+    (v.costUsd === undefined || Number.isFinite(v.costUsd)) &&
     (v.commands === undefined || array(v.commands, receipt)) &&
     (v.completionAccepted === undefined ||
       typeof v.completionAccepted === "boolean") &&
@@ -327,6 +328,8 @@ export function decodeSession(
     Date.parse(b.deadlineAt) > Date.parse(b.startedAt) &&
     count(b.maxAttempts) &&
     (b.maxAttempts as number) > 0 &&
+    (b.maxCostUsd === null ||
+      (Number.isFinite(b.maxCostUsd) && (b.maxCostUsd as number) > 0)) &&
     nullableText(b.exhaustedReason), "executionBudget");
   if (s.verificationContract !== undefined) {
     require(validContractSnapshot(

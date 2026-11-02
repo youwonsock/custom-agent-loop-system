@@ -7,6 +7,7 @@ import {
   completedSearch,
   claudeCompletedSearch,
   observeTokens,
+  observeCost,
   observeModel,
 } from "./event_evidence";
 import {
@@ -530,6 +531,7 @@ export class SupervisedAttempt {
       evidence.completedSearches++;
     }
     evidence.maxTokens = Math.max(evidence.maxTokens, observeTokens(event));
+    evidence.costUsd = observeCost(event, evidence.costUsd);
     const reportedModel = observeModel(event);
     if (reportedModel) evidence.actualModelId = reportedModel;
   }

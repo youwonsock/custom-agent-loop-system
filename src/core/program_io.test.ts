@@ -1232,6 +1232,7 @@ test("the evidence gate halts on invalid receipts and lets an interrupted comman
         executionBudget: {
           deadlineAt: "2999-01-01T00:00:00.000Z",
           maxAttempts: 1000,
+          maxCostUsd: null,
           exhaustedReason: null,
         },
       },

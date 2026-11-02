@@ -21,6 +21,8 @@ export default function RunComposer({
     setSessionMinutes,
     toolMinutes,
     setToolMinutes,
+    maxCostUsd,
+    setMaxCostUsd,
     maxSessionAttempts,
     setMaxSessionAttempts,
     starting,
@@ -141,6 +143,19 @@ export default function RunComposer({
             placeholder="기본값"
             value={toolMinutes ?? ""}
             onChange={(e) => setToolMinutes(Number(e.target.value) || null)}
+          />
+        </label>
+        <label>
+          금액 한도 (USD)
+          <input
+            aria-label="금액 한도"
+            title="CLI가 보고한 비용 기준이며 시도 사이에 확인합니다. 구독 요금과 다를 수 있습니다"
+            type="number"
+            min={0}
+            step={0.01}
+            placeholder="없음"
+            value={maxCostUsd ?? ""}
+            onChange={(e) => setMaxCostUsd(Number(e.target.value) || null)}
           />
         </label>
         <label>

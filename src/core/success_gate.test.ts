@@ -65,6 +65,7 @@ function completed(): SessionState {
       startedAt: "2026-01-01T00:00:00.000Z",
       deadlineAt: "2999-01-01T00:00:00.000Z",
       maxAttempts: 1000,
+      maxCostUsd: null,
       exhaustedReason: null,
     },
     graph: createGraph(),

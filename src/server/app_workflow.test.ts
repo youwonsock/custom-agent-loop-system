@@ -359,6 +359,26 @@ test("recovered terminal snapshots fail closed without current test evidence and
   );
 });
 
+test("a spending limit is refused for a CLI that reports no cost, or when it is not positive", async (t) => {
+  const s = await setup();
+  t.after(s.cleanup);
+  for (const [maxCostUsd, message] of [
+    [5, /Codex/],
+    [0, /0보다/],
+  ] as const) {
+    const response = await s.request("POST", "/api/sessions", {
+      requestId: randomUUID(),
+      graphId: s.graph.id,
+      expectedRevision: s.graph.revision,
+      goal: "goal",
+      targetProjectPath: s.target,
+      maxCostUsd,
+    });
+    assert.equal(response.statusCode, 400);
+    assert.match(response.body, message);
+  }
+});
+
 test("legacy failure edges cannot turn test FAIL or approval REJECTED into SUCCESS", async (t) => {
   const s = await setup();
   t.after(s.cleanup);
