@@ -1,3 +1,4 @@
+import { t } from "../i18n";
 import {
   NODE_TYPES,
   type AgentGraphDocument,
@@ -54,7 +55,7 @@ export default function GraphsView({
             <div>
               <span className="eyebrow">AGENT WORKFLOW</span>
               <input
-                aria-label="그래프 이름"
+                aria-label={t("그래프 이름")}
                 className="graph-title"
                 disabled={graphBusy}
                 value={draft.name}
@@ -64,37 +65,39 @@ export default function GraphsView({
                   })
                 }
               />
-              <p>역할을 정의하고 에이전트의 다음 단계를 연결하세요.</p>
+              <p>{t("역할을 정의하고 에이전트의 다음 단계를 연결하세요.")}</p>
             </div>
             <div className="heading-actions">
               <span className={`save-status ${conflict ? "conflict" : ""}`}>
                 <i className="dot" />
-                {conflict || saveStatus === "저장 실패"
+                {conflict || saveStatus === t("저장 실패")
                   ? saveStatus
                   : dirty.current
-                    ? saveStatus === "저장됨"
-                      ? "저장 대기"
+                    ? saveStatus === t("저장됨")
+                      ? t("저장 대기")
                       : saveStatus
-                    : "저장됨"}
+                    : t("저장됨")}
               </span>
               <button
                 className="button subtle"
                 onClick={() => void attempt(copyGraph)}
               >
-                복제
+                {t("복제")}
               </button>
               <button
                 className="button subtle"
                 onClick={() => void attempt(exportGraph)}
               >
-                내보내기
+                {t("내보내기")}
               </button>
               <button
                 className="button danger subtle"
                 onClick={() => {
                   if (
                     confirm(
-                      "이 그래프를 삭제할까요? 실행 기록의 snapshot은 보존됩니다.",
+                      t(
+                        "이 그래프를 삭제할까요? 실행 기록의 snapshot은 보존됩니다.",
+                      ),
                     )
                   )
                     void attempt(async () => {
@@ -112,21 +115,22 @@ export default function GraphsView({
                     });
                 }}
               >
-                삭제
+                {t("삭제")}
               </button>
             </div>
           </div>
           {conflict && (
             <div className="conflict-banner">
               <p>
-                다른 창에서 그래프를 변경했습니다. 현재 초안은 보존되어
-                있습니다.
+                {t(
+                  "다른 창에서 그래프를 변경했습니다. 현재 초안은 보존되어 있습니다.",
+                )}
               </p>
               <button
                 className="button small"
                 onClick={() => void attempt(copyGraph)}
               >
-                새 그래프로 저장
+                {t("새 그래프로 저장")}
               </button>
               <button
                 className="button subtle small"
@@ -138,7 +142,7 @@ export default function GraphsView({
                   })
                 }
               >
-                서버 버전 다시 읽기
+                {t("서버 버전 다시 읽기")}
               </button>
             </div>
           )}
@@ -150,35 +154,35 @@ export default function GraphsView({
             <section className="canvas-column">
               <div className="canvas-toolbar">
                 <div className="node-add-buttons">
-                  {NODE_TYPES.map((t) => (
+                  {NODE_TYPES.map((type) => (
                     <button
-                      key={t}
-                      title={`${typeMeta[t].label} 노드 추가`}
-                      onClick={() => addNode(t)}
+                      key={type}
+                      title={t("{0} 노드 추가", typeMeta[type].label)}
+                      onClick={() => addNode(type)}
                       style={
                         {
-                          "--node-color": typeMeta[t].color,
+                          "--node-color": typeMeta[type].color,
                         } as React.CSSProperties
                       }
                     >
-                      <span>{typeMeta[t].icon}</span>
-                      {typeMeta[t].label}
+                      <span>{typeMeta[type].icon}</span>
+                      {typeMeta[type].label}
                       <i>＋</i>
                     </button>
                   ))}
                 </div>
                 <div className="history-buttons">
                   <button
-                    aria-label="실행 취소"
-                    title="실행 취소"
+                    aria-label={t("실행 취소")}
+                    title={t("실행 취소")}
                     disabled={!past.current.length}
                     onClick={undo}
                   >
                     ↶
                   </button>
                   <button
-                    aria-label="재실행"
-                    title="재실행"
+                    aria-label={t("재실행")}
+                    title={t("재실행")}
                     disabled={!future.current.length}
                     onClick={redo}
                   >
@@ -209,14 +213,16 @@ export default function GraphsView({
               />
               <div className="canvas-bottom">
                 <span>
-                  {draft.nodes.length}개 노드 <i>·</i> {draft.edges.length}개
-                  연결
+                  {draft.nodes.length}
+                  {t("개 노드 ")}
+                  <i>·</i> {draft.edges.length}
+                  {t("개 연결")}
                 </span>
                 <button
                   className="text-button"
                   onClick={() => void attempt(() => newGraph(true))}
                 >
-                  빈 그래프 만들기
+                  {t("빈 그래프 만들기")}
                 </button>
               </div>
             </section>
@@ -228,13 +234,13 @@ export default function GraphsView({
       {view === "graphs" && !draft && (
         <div className="empty-state">
           <span>◈</span>
-          <h2>첫 그래프를 만들어보세요</h2>
-          <p>계획부터 승인까지, 원하는 에이전트 흐름을 구성하세요.</p>
+          <h2>{t("첫 그래프를 만들어보세요")}</h2>
+          <p>{t("계획부터 승인까지, 원하는 에이전트 흐름을 구성하세요.")}</p>
           <button
             className="button primary"
             onClick={() => void attempt(() => newGraph())}
           >
-            새 그래프 만들기
+            {t("새 그래프 만들기")}
           </button>
         </div>
       )}

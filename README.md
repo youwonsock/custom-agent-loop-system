@@ -1,6 +1,8 @@
 # Agent Graph Studio
 
-로컬 코딩 CLI를 에이전트 그래프로 연결하는 독립 웹 앱입니다. 브라우저에서 역할과 성공·실패 경로를 편집하고, 내 컴퓨터의 Node.js 워커가 Codex·Claude Code·OpenCode·Kilo를 실행합니다. VS Code나 VSIX는 필요하지 않습니다.
+[English](README.en.md)
+
+로컬 코딩 CLI를 에이전트 그래프로 연결하는 독립 웹 앱입니다. 브라우저에서 역할과 성공·실패 경로를 편집하고, 내 컴퓨터의 Node.js 워커가 Codex·Claude Code·OpenCode·Kilo를 실행합니다. VS Code나 VSIX는 필요하지 않습니다. 화면은 한국어와 영어를 제공합니다(상단의 언어 버튼). 실행 중 기록되는 사유, 모델 프롬프트, `docs/` 문서는 한국어입니다.
 
 ## 시작
 

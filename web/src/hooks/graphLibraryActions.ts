@@ -1,3 +1,4 @@
+import { t } from "../i18n";
 import { flushSync } from "react-dom";
 import type { AgentGraphDocument } from "../../../src/shared/domain";
 import { api } from "../api";
@@ -46,24 +47,24 @@ export function graphLibraryActions(
       await flush();
       const g = await api<AgentGraphDocument>("/graphs", "POST", {
         name: empty
-          ? "새 빈 그래프"
+          ? t("새 빈 그래프")
           : autonomous
-            ? "자율 제작·검증 루프"
-            : "새 상호검증 루프",
+            ? t("자율 제작·검증 루프")
+            : t("새 상호검증 루프"),
         empty,
         ...(autonomous ? { template: "autonomous" } : {}),
       });
       await refreshGraphs();
       installDraft(g, false);
       setView("graphs");
-      setNotice("새 그래프를 만들었습니다. 역할과 모델을 설정하세요.");
+      setNotice(t("새 그래프를 만들었습니다. 역할과 모델을 설정하세요."));
     });
   const copyGraph = () =>
     graphAction(async () => {
       const current = draftRef.current;
       if (!current) return;
       const copy = await api<AgentGraphDocument>("/graphs", "POST", {
-        document: { ...current, name: `${current.name} 복사본` },
+        document: { ...current, name: t("{0} 복사본", current.name) },
       });
       if (boot) localStorage.removeItem(backupKey(boot.root, current.id));
       dirty.current = false;
@@ -71,7 +72,7 @@ export function graphLibraryActions(
       setConflict(false);
       await refreshGraphs();
       installDraft(copy, false);
-      setNotice("초안을 새 그래프로 저장했습니다.");
+      setNotice(t("초안을 새 그래프로 저장했습니다."));
     });
   const importGraph = (file: File) =>
     graphAction(async () => {
@@ -84,7 +85,7 @@ export function graphLibraryActions(
       await refreshGraphs();
       installDraft(imported, false);
       setView("graphs");
-      setNotice("새 ID로 그래프를 가져왔습니다. 로컬 연결을 확인하세요.");
+      setNotice(t("새 ID로 그래프를 가져왔습니다. 로컬 연결을 확인하세요."));
     });
   const exportGraph = async () => {
     const g = await flush();

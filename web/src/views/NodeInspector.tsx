@@ -1,3 +1,4 @@
+import { t } from "../i18n";
 import { NODE_TYPES, type AgentNode } from "../../../src/shared/domain";
 import { id } from "../api";
 import { typeMeta } from "../nodeMeta";
@@ -30,12 +31,13 @@ export default function NodeInspector({
         className="inspector-type"
         style={{ color: typeMeta[selected.type].color }}
       >
-        {typeMeta[selected.type].icon} {typeMeta[selected.type].label} 에이전트
+        {typeMeta[selected.type].icon} {typeMeta[selected.type].label}
+        {t(" 에이전트")}
       </div>
       <label>
-        노드 이름
+        {t("노드 이름")}
         <input
-          aria-label="노드 이름"
+          aria-label={t("노드 이름")}
           value={selected.name}
           onChange={(e) =>
             updateNode((n) => {
@@ -45,9 +47,9 @@ export default function NodeInspector({
         />
       </label>
       <label>
-        역할 이름
+        {t("역할 이름")}
         <input
-          aria-label="역할 이름"
+          aria-label={t("역할 이름")}
           value={selected.roleName}
           onChange={(e) =>
             updateNode((n) => {
@@ -57,9 +59,9 @@ export default function NodeInspector({
         />
       </label>
       <label>
-        실행 유형
+        {t("실행 유형")}
         <select
-          aria-label="실행 유형"
+          aria-label={t("실행 유형")}
           value={selected.type}
           onChange={(e) =>
             updateNode((n) => {
@@ -81,11 +83,11 @@ export default function NodeInspector({
         </select>
       </label>
       <label>
-        역할 지침
+        {t("역할 지침")}
         <textarea
-          aria-label="역할 지침"
+          aria-label={t("역할 지침")}
           rows={5}
-          placeholder="이 에이전트의 책임과 작업 지침을 작성하세요."
+          placeholder={t("이 에이전트의 책임과 작업 지침을 작성하세요.")}
           value={selected.instructions}
           onChange={(e) =>
             updateNode((n) => {
@@ -96,7 +98,7 @@ export default function NodeInspector({
       </label>
       {selected.type === "planning" && (
         <fieldset>
-          <legend>계획 승인</legend>
+          <legend>{t("계획 승인")}</legend>
           <label className="checkbox">
             <input
               type="checkbox"
@@ -110,12 +112,12 @@ export default function NodeInspector({
                 })
               }
             />
-            사용자가 계획을 승인한 뒤 진행
+            {t("사용자가 계획을 승인한 뒤 진행")}
           </label>
           <label>
-            계획 선택지 수
+            {t("계획 선택지 수")}
             <input
-              aria-label="계획 선택지 수"
+              aria-label={t("계획 선택지 수")}
               type="number"
               min={1}
               max={20}
@@ -133,15 +135,15 @@ export default function NodeInspector({
         </fieldset>
       )}
       <fieldset>
-        <legend>다음 단계</legend>
+        <legend>{t("다음 단계")}</legend>
         {(["success", "failure"] as const).map((outcome) => (
           <label key={outcome}>
-            {outcome === "success" ? "성공 시" : "실패 시"}
+            {outcome === "success" ? t("성공 시") : t("실패 시")}
             <select
               aria-label={
                 outcome === "success"
-                  ? "성공 시 다음 단계"
-                  : "실패 시 다음 단계"
+                  ? t("성공 시 다음 단계")
+                  : t("실패 시 다음 단계")
               }
               value={
                 draft.edges.find(
@@ -166,14 +168,14 @@ export default function NodeInspector({
                 })
               }
             >
-              <option value="">경로 연결 필요</option>
+              <option value="">{t("경로 연결 필요")}</option>
               {draft.nodes.map((n) => (
                 <option key={n.id} value={n.id}>
                   {n.name || n.id}
                 </option>
               ))}
-              <option value="SUCCESS">✓ 완료</option>
-              <option value="PAUSED">Ⅱ 일시정지</option>
+              <option value="SUCCESS">{t("✓ 완료")}</option>
+              <option value="PAUSED">{t("Ⅱ 일시정지")}</option>
             </select>
           </label>
         ))}
@@ -192,11 +194,11 @@ export default function NodeInspector({
             })
           }
         />
-        그래프 기본 연결·모델 사용
+        {t("그래프 기본 연결·모델 사용")}
       </label>
       {selected.binding ? (
         <BindingEditor
-          label="노드 실행 설정"
+          label={t("노드 실행 설정")}
           binding={selected.binding}
           connections={connections}
           catalogs={catalogs}
@@ -213,7 +215,7 @@ export default function NodeInspector({
       ) : (
         <p className="field-hint">
           {draft.defaultBinding?.modelId ??
-            "그래프 설정에서 공통 모델을 먼저 선택하세요."}
+            t("그래프 설정에서 공통 모델을 먼저 선택하세요.")}
         </p>
       )}
       <button
@@ -223,7 +225,7 @@ export default function NodeInspector({
           setSelectedNode(null);
         }}
       >
-        노드 삭제
+        {t("노드 삭제")}
       </button>
     </>
   );

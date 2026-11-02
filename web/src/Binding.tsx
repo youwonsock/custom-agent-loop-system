@@ -1,3 +1,4 @@
+import { t } from "./i18n";
 import type {
   ExecutionBinding,
   LocalConnection,
@@ -11,7 +12,7 @@ export function BindingEditor({
   onChange,
   onQuery,
   querying,
-  label = "실행 설정",
+  label = t("실행 설정"),
 }: {
   binding?: ExecutionBinding;
   connections: LocalConnection[];
@@ -37,9 +38,9 @@ export function BindingEditor({
     <fieldset className="binding-fields">
       <legend>{label}</legend>
       <label>
-        로컬 CLI 연결
+        {t("로컬 CLI 연결")}
         <select
-          aria-label={`${label} 연결`}
+          aria-label={t("{0} 연결", label)}
           value={binding?.connectionId ?? ""}
           onChange={(e) =>
             onChange(
@@ -49,7 +50,7 @@ export function BindingEditor({
             )
           }
         >
-          <option value="">연결 선택</option>
+          <option value="">{t("연결 선택")}</option>
           {connections.map((c) => (
             <option key={c.id} value={c.id}>
               {c.label} · {c.type}
@@ -57,7 +58,7 @@ export function BindingEditor({
           ))}
           {binding?.connectionId && !connection && (
             <option value={binding.connectionId}>
-              삭제된 연결 · 다시 지정하세요
+              {t("삭제된 연결 · 다시 지정하세요")}
             </option>
           )}
         </select>
@@ -68,10 +69,10 @@ export function BindingEditor({
             className={`catalog-state ${catalog?.status === "ready" ? "ready" : ""}`}
           >
             {querying === connection.id
-              ? "조회 중…"
+              ? t("조회 중…")
               : catalog?.status === "ready"
-                ? `${models.length}개 모델 조회됨`
-                : "모델 조회 필요"}
+                ? t("{0}개 모델 조회됨", models.length)
+                : t("모델 조회 필요")}
           </span>
           <button
             type="button"
@@ -79,14 +80,14 @@ export function BindingEditor({
             onClick={() => onQuery(connection.id)}
             disabled={querying === connection.id}
           >
-            {querying === connection.id ? "조회 중" : "모델 조회"}
+            {querying === connection.id ? t("조회 중") : t("모델 조회")}
           </button>
         </div>
       )}
       <label>
-        모델
+        {t("모델")}
         <select
-          aria-label={`${label} 모델`}
+          aria-label={t("{0} 모델", label)}
           value={binding?.modelId ?? ""}
           disabled={!connection || !models.length}
           onChange={(e) =>
@@ -96,10 +97,11 @@ export function BindingEditor({
             })
           }
         >
-          <option value="">조회된 모델 선택</option>
+          <option value="">{t("조회된 모델 선택")}</option>
           {binding?.modelId && !model && (
             <option disabled value={binding.modelId}>
-              목록에 없는 모델 · {binding.modelId}
+              {t("목록에 없는 모델 · ")}
+              {binding.modelId}
             </option>
           )}
           {models.map((m) => (
@@ -111,9 +113,9 @@ export function BindingEditor({
       </label>
       {model && model.variants.length > 0 && (
         <label>
-          추론 강도
+          {t("추론 강도")}
           <select
-            aria-label={`${label} 추론 강도`}
+            aria-label={t("{0} 추론 강도", label)}
             value={binding?.variant ?? ""}
             onChange={(e) =>
               onChange({
@@ -123,7 +125,7 @@ export function BindingEditor({
               })
             }
           >
-            <option value="">CLI 기본값</option>
+            <option value="">{t("CLI 기본값")}</option>
             {model.variants.map((v) => (
               <option key={v} value={v}>
                 {v}
@@ -135,7 +137,7 @@ export function BindingEditor({
       {catalog?.error && <p className="field-error">{catalog.error}</p>}
       {!connection && (
         <p className="field-hint">
-          CLI 연결 화면에서 설치한 서비스를 등록하세요.
+          {t("CLI 연결 화면에서 설치한 서비스를 등록하세요.")}
         </p>
       )}
     </fieldset>

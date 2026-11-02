@@ -1,3 +1,4 @@
+import { language, setLanguage, t } from "./i18n";
 import { lazy, Suspense } from "react";
 import { useStudioController } from "./hooks/useStudioController";
 import { ViewBoundary } from "./components/ViewBoundary";
@@ -39,10 +40,10 @@ export function App() {
       <div className="boot-screen">
         <div className="brand-mark">◈</div>
         <h1>Agent Graph Studio</h1>
-        <p>{loadError || "로컬 작업 공간을 여는 중…"}</p>
+        <p>{loadError || t("로컬 작업 공간을 여는 중…")}</p>
         {loadError && (
           <button className="button" onClick={() => location.reload()}>
-            다시 연결
+            {t("다시 연결")}
           </button>
         )}
       </div>
@@ -60,14 +61,15 @@ export function App() {
           </div>
         </div>
         <div className="workspace-label">
-          <i className="dot green" /> 로컬 작업 공간
+          <i className="dot green" />
+          {t(" 로컬 작업 공간")}
         </div>
         <nav className="main-nav">
           {(
             [
-              ["graphs", "◈", "그래프 편집"],
-              ["connections", "◉", "CLI 연결"],
-              ["runs", "▷", "실행 기록"],
+              ["graphs", "◈", t("그래프 편집")],
+              ["connections", "◉", t("CLI 연결")],
+              ["runs", "▷", t("실행 기록")],
             ] as const
           ).map(([key, icon, label]) => (
             <button
@@ -89,17 +91,17 @@ export function App() {
           ))}
         </nav>
         <div className="library-heading">
-          <span>그래프 라이브러리</span>
+          <span>{t("그래프 라이브러리")}</span>
           <button
-            aria-label="자율 제작 그래프"
-            title="자율 제작·검증 그래프 만들기"
+            aria-label={t("자율 제작 그래프")}
+            title={t("자율 제작·검증 그래프 만들기")}
             onClick={() => void attempt(() => newGraph(false, true))}
           >
             ↻
           </button>
           <button
-            aria-label="새 그래프"
-            title="새 그래프"
+            aria-label={t("새 그래프")}
+            title={t("새 그래프")}
             onClick={() => void attempt(() => newGraph())}
           >
             ＋
@@ -113,14 +115,16 @@ export function App() {
             >
               <button
                 className="graph-select"
-                aria-label={g.name || "이름 없는 그래프"}
+                aria-label={g.name || t("이름 없는 그래프")}
                 onClick={() => void attempt(() => selectGraph(g))}
               >
                 <span className="graph-glyph">⌘</span>
                 <span>
-                  <strong>{g.name || "이름 없는 그래프"}</strong>
+                  <strong>{g.name || t("이름 없는 그래프")}</strong>
                   <small>
-                    {g.nodes.length}개 에이전트 · rev {g.revision}
+                    {g.nodes.length}
+                    {t("개 에이전트 · rev ")}
+                    {g.revision}
                   </small>
                 </span>
               </button>
@@ -131,7 +135,7 @@ export function App() {
           className="sidebar-import"
           onClick={() => importRef.current?.click()}
         >
-          ↥ 그래프 가져오기
+          {t("↥ 그래프 가져오기")}
         </button>
         <input
           ref={importRef}
@@ -147,9 +151,9 @@ export function App() {
         <div className="sidebar-footer">
           <span>LOCAL FIRST</span>
           <p>
-            실행은 내 컴퓨터에서
+            {t("실행은 내 컴퓨터에서")}
             <br />
-            모델은 연결한 CLI에서
+            {t("모델은 연결한 CLI에서")}
           </p>
           <small title={boot.root}>{boot.root}</small>
         </div>
@@ -157,50 +161,58 @@ export function App() {
       <div className="main-shell">
         <header className="topbar">
           <div className="breadcrumb">
-            작업 공간 <span>/</span>{" "}
+            {t("작업 공간 ")}
+            <span>/</span>{" "}
             {view === "graphs"
-              ? "그래프"
+              ? t("그래프")
               : view === "connections"
-                ? "로컬 서비스"
-                : "세션"}
+                ? t("로컬 서비스")
+                : t("세션")}
             {view === "graphs" && draft && (
               <>
                 <span>/</span>
-                <strong>{draft.name || "이름 없는 그래프"}</strong>
+                <strong>{draft.name || t("이름 없는 그래프")}</strong>
               </>
             )}
           </div>
+          <button
+            className="button"
+            aria-label={t("언어 변경")}
+            onClick={() => setLanguage(language === "en" ? "ko" : "en")}
+          >
+            {language === "en" ? "한국어" : "English"}
+          </button>
           <div className="server-badge">
             <i className="dot green" />
-            로컬 서버 연결됨
+            {t("로컬 서버 연결됨")}
           </div>
         </header>
         <div className="mobile-library">
           <select
-            aria-label="그래프 선택"
+            aria-label={t("그래프 선택")}
             value={draft?.id ?? ""}
             onChange={(e) => {
               const g = graphs.find((g) => g.id === e.target.value);
               if (g) void attempt(() => selectGraph(g));
             }}
           >
-            <option value="">그래프 선택</option>
+            <option value="">{t("그래프 선택")}</option>
             {graphs.map((g) => (
               <option key={g.id} value={g.id}>
-                {g.name || "이름 없는 그래프"}
+                {g.name || t("이름 없는 그래프")}
               </option>
             ))}
           </select>
           <button
             className="button subtle small"
-            aria-label="모바일 새 그래프"
+            aria-label={t("모바일 새 그래프")}
             onClick={() => void attempt(() => newGraph())}
           >
             ＋
           </button>
           <button
             className="button subtle small"
-            aria-label="모바일 그래프 가져오기"
+            aria-label={t("모바일 그래프 가져오기")}
             onClick={() => importRef.current?.click()}
           >
             ↥
@@ -214,7 +226,7 @@ export function App() {
             <span>{error ? "!" : "✓"}</span>
             <p>{error || notice}</p>
             <button
-              aria-label="알림 닫기"
+              aria-label={t("알림 닫기")}
               onClick={() => {
                 setError("");
                 setNotice("");
@@ -228,7 +240,7 @@ export function App() {
           <Suspense
             fallback={
               <div className="empty-state" role="status">
-                화면을 불러오는 중…
+                {t("화면을 불러오는 중…")}
               </div>
             }
           >

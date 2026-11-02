@@ -1,3 +1,4 @@
+import { t } from "../i18n";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { AgentGraphDocument } from "../../../src/shared/domain";
 import { api, ApiError } from "../api";
@@ -14,7 +15,7 @@ export function useGraphDraft({
   const [draft, setDraft] = useState<AgentGraphDocument | null>(null),
     draftRef = useRef<AgentGraphDocument | null>(null),
     dirty = useRef(false),
-    [saveStatus, setSaveStatus] = useState("저장됨"),
+    [saveStatus, setSaveStatus] = useState(t("저장됨")),
     [conflict, setConflict] = useState(false),
     conflictRef = useRef(false),
     saving = useRef<Promise<AgentGraphDocument | null> | null>(null);
@@ -56,7 +57,11 @@ export function useGraphDraft({
       setConflict(hasConflict);
       conflictRef.current = hasConflict;
       setSaveStatus(
-        hasConflict ? "저장 충돌" : restored ? "초안 복원됨" : "저장됨",
+        hasConflict
+          ? t("저장 충돌")
+          : restored
+            ? t("초안 복원됨")
+            : t("저장됨"),
       );
     },
     [boot?.root],
@@ -78,7 +83,7 @@ export function useGraphDraft({
       draftRef.current = next;
       dirty.current = true;
       setDraft(next);
-      setSaveStatus(conflictRef.current ? "저장 충돌" : "저장 대기");
+      setSaveStatus(conflictRef.current ? t("저장 충돌") : t("저장 대기"));
       if (boot)
         try {
           localStorage.setItem(
@@ -87,7 +92,9 @@ export function useGraphDraft({
           );
         } catch {
           setError(
-            "브라우저 초안 저장 공간이 부족합니다. 서버 저장 상태를 확인하세요.",
+            t(
+              "브라우저 초안 저장 공간이 부족합니다. 서버 저장 상태를 확인하세요.",
+            ),
           );
         }
     },
@@ -97,11 +104,11 @@ export function useGraphDraft({
     useCallback(async (): Promise<AgentGraphDocument | null> => {
       if (saving.current) await saving.current;
       if (conflictRef.current)
-        throw new ApiError("저장 충돌을 먼저 해결하세요.", 409);
+        throw new ApiError(t("저장 충돌을 먼저 해결하세요."), 409);
       if (!dirty.current) return draftRef.current;
       const sent = draftRef.current;
       if (!sent) return null;
-      setSaveStatus("저장 중…");
+      setSaveStatus(t("저장 중…"));
       const promise = api<AgentGraphDocument>(`/graphs/${sent.id}`, "PUT", {
         document: sent,
         expectedRevision: sent.revision,
@@ -122,7 +129,7 @@ export function useGraphDraft({
             draftRef.current = next;
             dirty.current = !unchanged;
             setDraft(next);
-            setSaveStatus(unchanged ? "저장됨" : "저장 대기");
+            setSaveStatus(unchanged ? t("저장됨") : t("저장 대기"));
             if (boot) {
               if (unchanged)
                 localStorage.removeItem(backupKey(boot.root, sent.id));
@@ -136,7 +143,7 @@ export function useGraphDraft({
           return saved;
         })
         .catch((e) => {
-          setSaveStatus(e.status === 409 ? "저장 충돌" : "저장 실패");
+          setSaveStatus(e.status === 409 ? t("저장 충돌") : t("저장 실패"));
           if (e.status === 409) {
             conflictRef.current = true;
             setConflict(true);
@@ -163,7 +170,7 @@ export function useGraphDraft({
       await saveLatest();
       if (!dirty.current) return draftRef.current;
     }
-    throw new Error("저장이 완료될 때까지 잠시 기다려주세요.");
+    throw new Error(t("저장이 완료될 때까지 잠시 기다려주세요."));
   };
   const undo = () => {
     const current = draftRef.current,

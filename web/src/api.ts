@@ -1,3 +1,4 @@
+import { t } from "./i18n";
 export class ApiError extends Error {
   constructor(
     message: string,
@@ -24,7 +25,7 @@ export async function api<T>(
   const data = await response.json();
   if (!response.ok)
     throw new ApiError(
-      data.error ?? "요청을 처리할 수 없습니다.",
+      data.error ? t(data.error) : t("요청을 처리할 수 없습니다."),
       response.status,
       data.code,
       data.details,

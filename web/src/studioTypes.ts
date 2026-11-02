@@ -1,3 +1,4 @@
+import { t } from "./i18n";
 import type { SessionSummary } from "../../src/shared/session_updates";
 import { graphDiagnostics } from "../../src/shared/graph_validation";
 import type { IsolationSupport } from "../../src/shared/isolation";
@@ -17,19 +18,19 @@ export interface Bootstrap {
   sessions: SessionSummary[];
 }
 export const statusNames: Record<string, string> = {
-  RUNNING: "실행 중",
-  RECOVERING: "복구 예약",
-  WAITING_USER: "사용자 대기",
-  PAUSED: "일시정지",
-  STOPPED: "중지됨",
-  BLOCKED: "실행 차단",
-  SUCCESS: "완료",
-  FAILED: "실패",
+  RUNNING: t("실행 중"),
+  RECOVERING: t("복구 예약"),
+  WAITING_USER: t("사용자 대기"),
+  PAUSED: t("일시정지"),
+  STOPPED: t("중지됨"),
+  BLOCKED: t("실행 차단"),
+  SUCCESS: t("완료"),
+  FAILED: t("실패"),
 };
 export const pricingNames = {
-  free: "무료 확인",
-  paid: "유료",
-  unknown: "가격 미확인",
+  free: t("무료 확인"),
+  paid: t("유료"),
+  unknown: t("가격 미확인"),
 };
 export const stamp = (value: string) =>
   new Date(value).toLocaleString("ko-KR", {
