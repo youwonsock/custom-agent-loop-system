@@ -39,8 +39,20 @@ test("a bare AGENT_REPORT list is a summary, unless it says it is blocked", () =
       () => implementationBlocker(`AGENT_REPORT\n${line}\n\n[PHASE_DONE]`),
       /VERDICT: BLOCKED/,
     );
-  assert.throws(() =>
+  assert.equal(
     implementationBlocker("[AGENT_REPORT]\n- not json\n[/AGENT_REPORT]"),
+    null,
+  );
+  assert.throws(
+    () =>
+      implementationBlocker(
+        "[AGENT_REPORT]\n- verdict: BLOCKED\n[/AGENT_REPORT]",
+      ),
+    /VERDICT: BLOCKED/,
+  );
+  assert.throws(
+    () => implementationBlocker("[AGENT_REPORT]\n- not closed"),
+    /닫는 표식/,
   );
   assert.equal(
     implementationBlocker('AGENT_REPORT\n{"verdict":"BLOCKED"}')?.kind,

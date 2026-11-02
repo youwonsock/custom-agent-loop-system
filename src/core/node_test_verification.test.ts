@@ -441,7 +441,9 @@ test("the example contract for a goal naming npm test validates, and a miswired 
   );
   const lines = prompt.split("\n");
   const example = JSON.parse(
-    lines[lines.indexOf("=== FROZEN VERIFICATION CONTRACT ===") + 2]!,
+    lines[
+      lines.indexOf("=== VERIFICATION CONTRACT EXAMPLE, NOT YET FROZEN ===") + 2
+    ]!,
   );
   assert.equal(
     validateManifest(example, ["REQ-001"], false).nodeTests!.suiteCheckId,
