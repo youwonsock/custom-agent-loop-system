@@ -17,7 +17,7 @@ import { contractProofMissing } from "./verification_contract";
 import { currentVerificationSources } from "./test_source_guard";
 import { sessionBudgetReason } from "./session_budget";
 import { scopeEvidenceProblem } from "./native_scope";
-import { programIoEvidenceProblem } from "./program_io";
+import { programIoEvidenceProblem } from "./program_io_tracker";
 import { deliverableInspectionProblem } from "./deliverables";
 
 /** Every path to SUCCESS, including recovered snapshots, passes this gate. */

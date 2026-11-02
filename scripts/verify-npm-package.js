@@ -38,6 +38,7 @@ for (const required of [
   "dist/src/core/native_scope.js",
   "dist/src/core/inspection_syntax.js",
   "dist/src/core/program_io.js",
+  "dist/src/core/program_io_tracker.js",
   "dist/src/core/program_io_runner.js",
   "dist/src/core/program_io_bootstrap.js",
   "dist/src/core/program_io_vm.js",

@@ -414,6 +414,32 @@ test("npm contracts require own-suite policy only while the graph asks for autho
   state.graph.automation!.authoredNodeTests = false;
   assert.equal((await lockContract(state, "supplied")).status, "locked");
 });
+test("a broken mutation adapter is refused before it can be frozen, and never run", async (t) => {
+  const s = await setup(t);
+  await fs.writeFile(
+    path.join(s.root, ".agent-graph/verification.json"),
+    JSON.stringify(s.manifest),
+  );
+  const state = {
+    targetProjectPath: s.root,
+    requirements: deriveRequirementLedger("goal"),
+    graph: createAutonomousGraph(),
+  } as SessionState;
+  state.graph.automation!.browserVerification = false;
+  const file = path.join(s.root, adapter);
+  const good = await fs.readFile(file, "utf8");
+  const ran = path.join(s.root, "adapter-ran");
+  await fs.writeFile(file, "export async function mutate( {");
+  await assert.rejects(lockContract(state, "supplied"), /does not parse/);
+  await fs.writeFile(
+    file,
+    `import {writeFileSync} from 'node:fs';writeFileSync(${JSON.stringify(ran)},'');export const other = 1;`,
+  );
+  await assert.rejects(lockContract(state, "supplied"), /export a mutate/);
+  await assert.rejects(fs.access(ran), "the adapter is read, not run");
+  await fs.writeFile(file, good);
+  assert.equal((await lockContract(state, "supplied")).status, "locked");
+});
 test("the example contract for a goal naming npm test validates, and a miswired one names the fix", async (t) => {
   const s = await setup(t);
   const graph = createAutonomousGraph();

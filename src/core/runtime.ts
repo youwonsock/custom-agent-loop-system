@@ -37,7 +37,7 @@ import {
 import { AgentAttemptRunner } from "./agent_attempt_runner";
 import { queryModels } from "./catalog";
 import { buildInvocation } from "./invocation";
-import { buildNodePrompt, buildRecoveryMessage } from "./prompt";
+import { buildRecoveryMessage } from "./prompt";
 import {
   parseRequirementEvidence,
   retainRequirementEvidence,
@@ -51,13 +51,8 @@ import {
 } from "./access_paths";
 import { mergeProjectReceipts } from "./verification_evidence";
 import { modelPricing } from "./model_pricing";
-import { productionHashes } from "./verification_sources";
 import { successBlockers } from "./success_gate";
-import {
-  lockContract,
-  contractViolation,
-  verificationRunnerProblem,
-} from "./verification_contract";
+import { contractViolation } from "./verification_contract";
 import { deliverableProblem } from "./deliverables";
 import {
   prepareVerificationCaptures,
@@ -66,7 +61,6 @@ import {
 import { sessionBudgetReason, pauseForBudget } from "./session_budget";
 import { stageDeadline, stageBudgetReason } from "./stage_budget";
 import { unscopedTerminationEvent } from "./process_command_policy";
-import { nodeTestScript } from "./node_test_policy";
 import { runPolicy } from "./run_policy";
 import {
   TEST_POLICY,
@@ -75,22 +69,24 @@ import {
   sourceDifference,
   testPolicyEvent,
   failedRegisteredCheck,
-  currentVerificationSources,
 } from "./test_source_guard";
-import { isAuditRole, isReadOnly, isVerifierRole } from "../shared/node_roles";
+import { isReadOnly, isVerifierRole } from "../shared/node_roles";
 import { IoUnavailable } from "./program_io_errors";
 import {
   AttemptRun,
   Completed,
   Invocation,
-  InvocationOptions,
   Stage,
   STOPPED,
   Stopped,
-  completed,
   cycleAttempts,
-  failedPreparation,
 } from "./runtime_steps";
+import {
+  invocationOptionsFor,
+  newAttemptRecord,
+  sessionDeadline,
+} from "./runtime_attempt";
+import { preflight } from "./runtime_preflight";
 import {
   GateHost,
   attemptFailure,
@@ -611,9 +607,9 @@ export class GraphRuntime implements GateHost {
     node: AgentNode,
     visit: NodeVisit,
   ): Promise<Stopped | Completed> {
-    const preflight = await this.preflight(node, visit);
-    if (preflight.step !== "ready") return preflight;
-    const stage = this.stage(node, visit, preflight.sourceInputs);
+    const ready = await preflight(this, node, visit);
+    if (ready.step !== "ready") return ready;
+    const stage = this.stage(node, visit, ready.sourceInputs);
     const runner = new AgentAttemptRunner({
       maxAttempts: stage.normalLimit,
       retryBackoffMs: this.state.settings.retryBackoffMs,
@@ -649,7 +645,14 @@ export class GraphRuntime implements GateHost {
           stage.connection,
           stage.binding,
           node,
-          this.invocationOptions(stage, id, recoveryMessage, nextResume),
+          invocationOptionsFor(
+            this.state,
+            this.store,
+            stage,
+            id,
+            recoveryMessage,
+            nextResume,
+          ),
         );
       } catch (error) {
         if (!(error instanceof IoUnavailable)) throw error;
@@ -659,7 +662,10 @@ export class GraphRuntime implements GateHost {
         });
       }
       if (await this.poll()) return STOPPED; // Includes bounded native config preflight time.
-      const attempt = this.newAttempt(
+      const attempt = newAttemptRecord(
+        this.state,
+        this.store,
+        this.pricing.get(node.id),
         stage,
         id,
         completionRecovery,
@@ -718,90 +724,6 @@ export class GraphRuntime implements GateHost {
     }
   }
   /** Gates that need no CLI call; also snapshots the sources a test role must not change. */
-  private async preflight(
-    node: AgentNode,
-    visit: NodeVisit,
-  ): Promise<
-    | Stopped
-    | Completed
-    | { step: "ready"; sourceInputs: Record<string, string> | null }
-  > {
-    const policy = runPolicy(this.state.graph),
-      sourceGuard = policy.testSourceGuard;
-    if (sourceGuard && isAuditRole(node.type)) {
-      const expected = currentVerificationSources(this.state, visit);
-      if (!expected)
-        return completed(
-          this.verificationFailure(
-            node,
-            "현재 테스트 역할의 고정 소스 snapshot이 없습니다. 구현과 전체 테스트를 다시 수행해야 합니다.",
-          ),
-        );
-      const changed = await this.sourceChanges(expected);
-      if (changed.length)
-        return completed(
-          this.verificationFailure(
-            node,
-            `테스트 이후 소스가 변경되어 증거를 무효화했습니다: ${changed.join(", ")}. 구현과 모든 등록 검사를 다시 수행해야 합니다.`,
-          ),
-        );
-    }
-    if (
-      policy.verificationContract &&
-      node.type === "test" &&
-      this.state.verificationContract?.status !== "locked"
-    ) {
-      try {
-        this.state.verificationContract = await lockContract(
-          this.state,
-          "implementation",
-        );
-        await this.save();
-      } catch (error) {
-        return completed(
-          failedPreparation(
-            `검증 계약 준비 실패: ${messageOf(error)}`,
-            `검증 계약 준비 실패: ${messageOf(error)}\n구현 역할에서 .agent-graph/verification.json과 인수 검사를 준비하세요.`,
-          ),
-        );
-      }
-    }
-    if (node.type === "test") {
-      const problem = await verificationRunnerProblem(this.state);
-      if (problem)
-        return completed(
-          failedPreparation(
-            problem,
-            `검증 runner 준비 실패: ${problem}\n구현 역할에서 필수 runner를 수정한 뒤 다시 검증하세요.`,
-          ),
-        );
-    }
-    if (isVerifierRole(node.type)) {
-      const problem = await deliverableProblem(this.state);
-      if (problem) return completed(this.verificationFailure(node, problem));
-    }
-    // Audit roles under the source guard are compared with the test role's snapshot.
-    const watchReadOnly =
-      isReadOnly(node.type) && !(sourceGuard && isAuditRole(node.type));
-    if (!policy.automated || (node.type !== "test" && !watchReadOnly))
-      return { step: "ready", sourceInputs: null };
-    try {
-      return {
-        step: "ready",
-        sourceInputs:
-          sourceGuard || watchReadOnly
-            ? await testSources(this.state.targetProjectPath)
-            : await productionHashes(this.state.targetProjectPath),
-      };
-    } catch (error) {
-      return this.halt(
-        visit,
-        "WAITING_USER",
-        `검증 전 소스 읽기가 차단됐습니다. 경로·권한을 확인하세요: ${messageOf(error)}`,
-        { pauseVisit: true, clearRecovery: false },
-      );
-    }
-  }
   private stage(
     node: AgentNode,
     visit: NodeVisit,
@@ -848,125 +770,6 @@ export class GraphRuntime implements GateHost {
     }
     return false;
   }
-  private sessionDeadline(): number {
-    return this.state.executionBudget
-      ? Date.parse(this.state.executionBudget.deadlineAt)
-      : Infinity;
-  }
-  private scopeRoots(): string[] {
-    return [this.state.targetProjectPath, ...this.state.additionalAllowedPaths];
-  }
-  private invocationOptions(
-    { node, visit, connection, policy, deadline }: Stage,
-    id: string,
-    recoveryMessage: string | undefined,
-    nextResume: string | undefined,
-  ): InvocationOptions {
-    const contract = this.state.verificationContract;
-    return {
-      prompt: buildNodePrompt(this.state, node, visit, recoveryMessage),
-      cwd: this.state.targetProjectPath,
-      fullAccess: this.state.accessMode === "full_access",
-      allowedPaths: this.state.additionalAllowedPaths,
-      nativeApprovalReview: policy.nativeApprovalReview,
-      localHttpAccess: policy.localHttpAccess,
-      testSourcesReadOnly: policy.testSourceGuard && node.type === "test",
-      guardOwnedProcesses: policy.guardOwnedProcesses,
-      ...(policy.claudeUnattended
-        ? {
-            claudeUnattended: {
-              browserVerification: policy.browserVerification,
-            },
-          }
-        : {}),
-      ...(policy.kiloScopeGuard ? { scopeRoots: this.scopeRoots() } : {}),
-      ...(policy.kiloProgramIo
-        ? {
-            programIoGuard: {
-              directory: path.join(
-                this.store.visitDir(this.state.id, visit.id),
-                `${id}-io`,
-              ),
-              providerHome: path.join(
-                this.store.sessionDir(this.state.id),
-                "provider-home",
-              ),
-              protectedFiles: [
-                ".agent-graph/verification.json",
-                ...(contract?.manifest?.protectedFiles ?? []),
-              ],
-              expiresAt: Math.min(deadline, this.sessionDeadline()),
-            },
-          }
-        : {}),
-      ...(contract?.manifest?.nodeTests
-        ? {
-            verificationAliases: {
-              [nodeTestScript(contract.manifest.nodeTests)]:
-                contract.manifest.checks.find(
-                  (c) => c.id === contract.manifest!.nodeTests!.suiteCheckId,
-                )!.command,
-            },
-          }
-        : {}),
-      ...(policy.verificationContract && contract?.status === "locked"
-        ? {
-            verificationCommands: contract.manifest!.checks.map(
-              (c) => c.command,
-            ),
-          }
-        : {}),
-      // A repeated write-schema failure on this CLI selects the bounded Kilo fallback.
-      disableWrite: this.state.visits.some(
-        (v) =>
-          this.state.bindings[v.nodeId]?.connectionId === connection.id &&
-          v.attempts.some(
-            (a) =>
-              a.failureKind === "tool_arguments" &&
-              /for the "write" tool/.test(a.message ?? ""),
-          ),
-      ),
-      ...(nextResume ? { resumeId: nextResume } : {}),
-    };
-  }
-  private newAttempt(
-    { node, visit, binding, deadline }: Stage,
-    id: string,
-    completionRecovery: boolean,
-    nextResume: string | undefined,
-  ): AttemptRecord {
-    return {
-      id,
-      number: visit.attempts.length + 1,
-      status: "running",
-      startedAt: new Date().toISOString(),
-      endedAt: null,
-      pid: null,
-      cliSessionId: null,
-      reconnectUsed: Boolean(nextResume),
-      mode: completionRecovery ? "completion_recovery" : "standard",
-      failureKind: null,
-      message: null,
-      logPath: path.join(
-        this.store.visitDir(this.state.id, visit.id),
-        `${id}.log`,
-      ),
-      lastProgressAt: null,
-      activity: "initial_transport",
-      deadlineAt: new Date(
-        Math.min(
-          Date.now() + this.state.settings.phaseTimeoutMs,
-          deadline,
-          this.sessionDeadline(),
-        ),
-      ).toISOString(),
-      requestedModelId: binding.modelId,
-      actualModelId: null,
-      pricing: this.pricing.get(node.id) ?? modelPricing(),
-      assistantTextBytes: 0,
-      maxTokens: 0,
-    };
-  }
   /** Run the CLI under the supervisor; guard callbacks report into the returned run. */
   private async supervise(
     { node, visit, policy, sourceInputs, deadline }: Stage,
@@ -1004,7 +807,7 @@ export class GraphRuntime implements GateHost {
         s.phaseTimeoutMs,
         Math.max(1, deadline - Date.now()),
       ),
-      absoluteDeadlineAtMs: Math.min(deadline, this.sessionDeadline()),
+      absoluteDeadlineAtMs: Math.min(deadline, sessionDeadline(this.state)),
       terminationGraceMs: s.terminationGraceMs,
       killTimeoutMs: s.killTimeoutMs,
       maxInMemoryOutputBytes: s.maxInMemoryOutputBytes,
@@ -1030,7 +833,14 @@ export class GraphRuntime implements GateHost {
             : [],
         ),
       pollControl: () => claimNextControlRequest(this.controls()),
-      ...(policy.kiloScopeGuard ? { scopeRoots: this.scopeRoots() } : {}),
+      ...(policy.kiloScopeGuard
+        ? {
+            scopeRoots: [
+              this.state.targetProjectPath,
+              ...this.state.additionalAllowedPaths,
+            ],
+          }
+        : {}),
       ...(policy.guardOwnedProcesses
         ? {
             reapDescendants: true,
