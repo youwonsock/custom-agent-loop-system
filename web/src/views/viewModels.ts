@@ -142,6 +142,8 @@ export type RunComposerModel = Pick<
   | "setSessionMinutes"
   | "toolMinutes"
   | "setToolMinutes"
+  | "maxCostUsd"
+  | "setMaxCostUsd"
   | "maxSessionAttempts"
   | "setMaxSessionAttempts"
   | "starting"

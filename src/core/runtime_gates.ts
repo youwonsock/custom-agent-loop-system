@@ -36,7 +36,6 @@ import {
   sourceDifference,
   testSources,
 } from "./test_source_guard";
-import { productionHashes } from "./verification_sources";
 import {
   currentNodeTestProof,
   currentTestProof,
@@ -136,7 +135,7 @@ const scopeEvidence: EvidenceGate = async ({ host, stage, run }) => {
   });
 };
 const isFrozenTest = ({ node, policy }: Stage) =>
-  policy.testSourceGuard && node.type === "test";
+  policy.automated && node.type === "test";
 /** Records what the frozen test role changed; the policy gate acts on it later. */
 const frozenTestChanges: EvidenceGate = async ({ host, stage, run }) => {
   const { sourceInputs, visit } = stage,
@@ -245,20 +244,13 @@ const stageBudget: EvidenceGate = async ({ host, stage }) => {
 };
 /** Hash comparison catches writes no event reported, such as node -e. */
 const hiddenChanges: EvidenceGate = async ({ host, stage, run }) => {
-  const { node, policy, sourceInputs } = stage,
-    { attempt, result } = run,
-    readOnly = isReadOnly(node.type);
-  if (
-    !sourceInputs ||
-    !(!policy.testSourceGuard || readOnly) ||
-    result.outcome !== "succeeded"
-  )
+  const { node, sourceInputs } = stage,
+    { attempt, result } = run;
+  if (!sourceInputs || !isReadOnly(node.type) || result.outcome !== "succeeded")
     return;
   let changed: string[];
   try {
-    const after = readOnly
-      ? await testSources(host.state.targetProjectPath)
-      : await productionHashes(host.state.targetProjectPath);
+    const after = await testSources(host.state.targetProjectPath);
     changed = [
       ...new Set([...Object.keys(sourceInputs), ...Object.keys(after)]),
     ].filter((file) => sourceInputs[file] !== after[file]);
@@ -275,7 +267,7 @@ const hiddenChanges: EvidenceGate = async ({ host, stage, run }) => {
 const auditedSources: EvidenceGate = async ({ host, stage, run }) => {
   const { node, policy, visit } = stage;
   if (
-    !policy.testSourceGuard ||
+    !policy.automated ||
     !isAuditRole(node.type) ||
     run.result.outcome !== "succeeded"
   )
@@ -393,7 +385,7 @@ function recordPassedTest(
   )
     return;
   if (proof) visit.nodeTestProof = proof;
-  if (policy.testSourceGuard && run.guardedInputs)
+  if (policy.automated && run.guardedInputs)
     visit.verificationSourceHashes = run.guardedInputs;
 }
 function planStaysInScope(

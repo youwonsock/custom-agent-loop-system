@@ -15,7 +15,6 @@ import {
   lockContract,
   verificationRunnerProblem,
 } from "./verification_contract";
-import { productionHashes } from "./verification_sources";
 
 /** What must hold before a node's CLI starts. Ready carries its source snapshot. */
 export async function preflight(
@@ -28,7 +27,7 @@ export async function preflight(
   | { step: "ready"; sourceInputs: Record<string, string> | null }
 > {
   const policy = runPolicy(host.state.graph),
-    sourceGuard = policy.testSourceGuard;
+    sourceGuard = policy.automated;
   if (sourceGuard && isAuditRole(node.type)) {
     const expected = currentVerificationSources(host.state, visit);
     if (!expected)
@@ -89,10 +88,7 @@ export async function preflight(
   try {
     return {
       step: "ready",
-      sourceInputs:
-        sourceGuard || watchReadOnly
-          ? await testSources(host.state.targetProjectPath)
-          : await productionHashes(host.state.targetProjectPath),
+      sourceInputs: await testSources(host.state.targetProjectPath),
     };
   } catch (error) {
     return host.halt(

@@ -1,3 +1,4 @@
+import { t } from "./i18n";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ReactFlow,
@@ -48,32 +49,36 @@ function AgentCard({ data, selected }: NodeProps<Node<CardData, "agent">>) {
         {data.status && (
           <span className={`node-status ${data.status}`}>
             {data.status === "waiting_approval"
-              ? "승인 대기"
+              ? t("승인 대기")
               : data.status === "running"
-                ? "실행 중"
+                ? t("실행 중")
                 : data.status === "succeeded"
-                  ? "완료"
+                  ? t("완료")
                   : data.status === "failed"
-                    ? "반려"
-                    : "일시정지"}
+                    ? t("반려")
+                    : t("일시정지")}
           </span>
         )}
       </div>
       <strong className="node-name">
-        {data.node.name || "이름 없는 노드"}
+        {data.node.name || t("이름 없는 노드")}
       </strong>
-      <span className="node-role">{data.node.roleName || "역할 미지정"}</span>
+      <span className="node-role">
+        {data.node.roleName || t("역할 미지정")}
+      </span>
       <div className="node-model">
         <span>◉</span>
         <span title={data.binding?.modelId}>
-          {data.binding?.modelId || "모델 미지정"}
+          {data.binding?.modelId || t("모델 미지정")}
         </span>
       </div>
       <div className="port-label success-label">
-        성공 <i />
+        {t("성공 ")}
+        <i />
       </div>
       <div className="port-label failure-label">
-        실패 <i />
+        {t("실패 ")}
+        <i />
       </div>
       <Handle
         className="success-port"
@@ -90,7 +95,10 @@ function AgentCard({ data, selected }: NodeProps<Node<CardData, "agent">>) {
         style={{ top: "91%" }}
       />
       {data.visitNumber && (
-        <div className="visit-number">방문 {data.visitNumber}</div>
+        <div className="visit-number">
+          {t("방문 ")}
+          {data.visitNumber}
+        </div>
       )}
     </div>
   );
@@ -100,10 +108,13 @@ function TerminalCard({
 }: NodeProps<Node<{ label: string }, "terminal">>) {
   return (
     <div
-      className={`terminal-node ${data.label === "완료" ? "success" : "paused"}`}
+      className={t(
+        "terminal-node {0}",
+        data.label === t("완료") ? "success" : "paused",
+      )}
     >
       <Handle type="target" position={Position.Top} id="in" />
-      <span>{data.label === "완료" ? "✓" : "Ⅱ"}</span>
+      <span>{data.label === t("완료") ? "✓" : "Ⅱ"}</span>
       {data.label}
     </div>
   );
@@ -228,8 +239,8 @@ export function Canvas({
     };
     return [
       ...agents,
-      terminal("SUCCESS", "완료", 380),
-      terminal("PAUSED", "일시정지", 720),
+      terminal("SUCCESS", t("완료"), 380),
+      terminal("PAUSED", t("일시정지"), 720),
     ];
   }, [graph, selected, run, connections]);
   const [nodes, setNodes] = useState<FlowNode[]>(makeNodes);
@@ -254,7 +265,7 @@ export function Canvas({
         stroke: e.outcome === "success" ? "#69bca6" : "#b48498",
         strokeWidth: 1.6,
       },
-      label: e.outcome === "success" ? "성공" : "실패",
+      label: e.outcome === "success" ? t("성공") : t("실패"),
       labelStyle: { fill: "#a7b5c5", fontSize: 10 },
       labelBgStyle: { fill: "#141e2a" },
       animated: run?.status === "RUNNING" && run.currentNodeId === e.source,
@@ -342,20 +353,22 @@ export function Canvas({
       {!graph.nodes.length && (
         <div className="canvas-empty">
           <span>◈</span>
-          <h2>첫 에이전트를 추가하세요</h2>
-          <p>역할을 정하고 성공·실패 경로를 연결해 실행 흐름을 만드세요.</p>
+          <h2>{t("첫 에이전트를 추가하세요")}</h2>
+          <p>
+            {t("역할을 정하고 성공·실패 경로를 연결해 실행 흐름을 만드세요.")}
+          </p>
         </div>
       )}
       <div className="canvas-legend">
         <span>
           <i className="dot green" />
-          성공 경로
+          {t("성공 경로")}
         </span>
         <span>
           <i className="dot rose" />
-          실패 경로
+          {t("실패 경로")}
         </span>
-        <span>드래그로 연결 · 휠로 확대</span>
+        <span>{t("드래그로 연결 · 휠로 확대")}</span>
       </div>
     </div>
   );

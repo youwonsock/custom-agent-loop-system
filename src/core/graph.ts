@@ -38,9 +38,6 @@ const AUTOMATION_FLAGS = [
   "browserVerification",
   "verificationContract",
   "authoredNodeTests",
-  "testSourceGuard",
-  "reserveFinalizationBudget",
-  "guardOwnedProcesses",
   "targetScopeGuard",
   "programIoGuard",
 ] as const;

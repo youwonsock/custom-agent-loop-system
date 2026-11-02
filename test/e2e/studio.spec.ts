@@ -1044,3 +1044,19 @@ test("installed CLIs are looked up only on request and registered one at a time"
   }, found);
   expect(saved).toBe(1);
 });
+
+test("the interface switches to English and back, and remembers the choice", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: "언어 변경" }).click();
+  await expect(
+    page.getByRole("button", { name: "Change language" }),
+  ).toBeVisible();
+  await expect(page.getByText("Connected to local server")).toBeVisible();
+  await expect(page.locator("html")).toHaveAttribute("lang", "en");
+  await page.reload();
+  await expect(page.getByText("Connected to local server")).toBeVisible();
+  await page.getByRole("button", { name: "Change language" }).click();
+  await expect(page.getByText("로컬 서버 연결됨")).toBeVisible();
+});

@@ -76,10 +76,7 @@ export function successBlockers(state: SessionState): string[] {
       "현재 구현의 모든 필수 요구사항을 검사한 실제 테스트 PASS 기록이 필요합니다.",
     );
   if (final) {
-    if (
-      state.graph.automation?.testSourceGuard &&
-      !currentVerificationSources(state, final)
-    )
+    if (state.graph.automation && !currentVerificationSources(state, final))
       blockers.push("현재 검증의 고정 소스 snapshot이 없습니다.");
     const ownProblem =
       nodeTestProofProblem(

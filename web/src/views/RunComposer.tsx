@@ -1,3 +1,4 @@
+import { t } from "../i18n";
 import type { RunComposerModel } from "./viewModels";
 
 export default function RunComposer({
@@ -21,6 +22,8 @@ export default function RunComposer({
     setSessionMinutes,
     toolMinutes,
     setToolMinutes,
+    maxCostUsd,
+    setMaxCostUsd,
     maxSessionAttempts,
     setMaxSessionAttempts,
     starting,
@@ -35,59 +38,64 @@ export default function RunComposer({
     <section className="run-composer">
       <div className="composer-main">
         {connections.length === 0 && (
-          <div className="first-run" aria-label="처음 실행 안내">
-            <strong>처음 실행하기</strong>
+          <div className="first-run" aria-label={t("처음 실행 안내")}>
+            <strong>{t("처음 실행하기")}</strong>
             <ol>
               <li>
-                CLI 연결에서 설치·인증한 Codex·Claude Code·OpenCode·Kilo 실행
-                파일을 등록합니다.
+                {t(
+                  "CLI 연결에서 설치·인증한 Codex·Claude Code·OpenCode·Kilo 실행 파일을 등록합니다.",
+                )}
               </li>
               <li>
-                대상 프로젝트로 모델을 조회합니다. 조회에 성공한 모델만 선택할
-                수 있습니다.
+                {t(
+                  "대상 프로젝트로 모델을 조회합니다. 조회에 성공한 모델만 선택할 수 있습니다.",
+                )}
               </li>
               <li>
-                그래프 설정에서 공통 연결과 모델을 고른 뒤 목표를 입력하고
-                실행합니다.
+                {t(
+                  "그래프 설정에서 공통 연결과 모델을 고른 뒤 목표를 입력하고 실행합니다.",
+                )}
               </li>
             </ol>
             <button
               className="button primary small"
               onClick={() => setView("connections")}
             >
-              연결 등록 화면 열기
+              {t("연결 등록 화면 열기")}
             </button>
           </div>
         )}
         <label>
-          실행 목표
+          {t("실행 목표")}
           <textarea
             ref={goalRef}
-            aria-label="실행 목표"
+            aria-label={t("실행 목표")}
             rows={2}
             value={goal}
             onChange={(e) => setGoal(e.target.value)}
-            placeholder="이 그래프로 달성할 목표를 입력하세요. 예: 검색 필터를 구현하고 테스트해줘"
+            placeholder={t(
+              "이 그래프로 달성할 목표를 입력하세요. 예: 검색 필터를 구현하고 테스트해줘",
+            )}
           />
         </label>
         <div className="target-row">
           <span>⌂</span>
           <input
-            aria-label="대상 프로젝트"
+            aria-label={t("대상 프로젝트")}
             value={target}
             onChange={(e) => setTarget(e.target.value)}
-            placeholder="대상 프로젝트의 절대경로"
+            placeholder={t("대상 프로젝트의 절대경로")}
           />
           <button
             className="button subtle small"
             onClick={() => void browse()}
             disabled={directoryBusy}
           >
-            폴더 선택
+            {t("폴더 선택")}
           </button>
         </div>
         {isolation.length > 0 && (
-          <ul className="isolation-notes" aria-label="격리 보장 범위">
+          <ul className="isolation-notes" aria-label={t("격리 보장 범위")}>
             {isolation.map((note) => (
               <li key={note}>{note}</li>
             ))}
@@ -96,22 +104,22 @@ export default function RunComposer({
       </div>
       <div className="composer-options">
         <label>
-          접근 모드
+          {t("접근 모드")}
           <select
-            aria-label="접근 모드"
+            aria-label={t("접근 모드")}
             value={accessMode}
             onChange={(e) =>
               setAccessMode(e.target.value as "ask" | "full_access")
             }
           >
-            <option value="ask">필요할 때 승인</option>
-            <option value="full_access">전체 접근 허용</option>
+            <option value="ask">{t("필요할 때 승인")}</option>
+            <option value="full_access">{t("전체 접근 허용")}</option>
           </select>
         </label>
         <label>
-          반복 한도
+          {t("반복 한도")}
           <input
-            aria-label="반복 한도"
+            aria-label={t("반복 한도")}
             type="number"
             min={1}
             max={1000}
@@ -120,9 +128,9 @@ export default function RunComposer({
           />
         </label>
         <label>
-          전체 시간 (분)
+          {t("전체 시간 (분)")}
           <input
-            aria-label="전체 시간 예산"
+            aria-label={t("전체 시간 예산")}
             type="number"
             min={1}
             max={10080}
@@ -131,23 +139,40 @@ export default function RunComposer({
           />
         </label>
         <label>
-          도구 실행 제한 (분)
+          {t("도구 실행 제한 (분)")}
           <input
-            aria-label="도구 실행 제한"
-            title="긴 테스트가 있는 프로젝트에서 늘립니다. 비우면 기본값을 씁니다"
+            aria-label={t("도구 실행 제한")}
+            title={t(
+              "긴 테스트가 있는 프로젝트에서 늘립니다. 비우면 기본값을 씁니다",
+            )}
             type="number"
             min={1}
             max={1440}
-            placeholder="기본값"
+            placeholder={t("기본값")}
             value={toolMinutes ?? ""}
             onChange={(e) => setToolMinutes(Number(e.target.value) || null)}
           />
         </label>
         <label>
-          전체 에이전트 시도
+          {t("금액 한도 (USD)")}
           <input
-            aria-label="전체 에이전트 시도 한도"
-            title="CLI 실행 단위이며 내부 모델 턴 수와 다릅니다"
+            aria-label={t("금액 한도")}
+            title={t(
+              "CLI가 보고한 비용 기준이며 시도 사이에 확인합니다. 구독 요금과 다를 수 있습니다",
+            )}
+            type="number"
+            min={0}
+            step={0.01}
+            placeholder={t("없음")}
+            value={maxCostUsd ?? ""}
+            onChange={(e) => setMaxCostUsd(Number(e.target.value) || null)}
+          />
+        </label>
+        <label>
+          {t("전체 에이전트 시도")}
+          <input
+            aria-label={t("전체 에이전트 시도 한도")}
+            title={t("CLI 실행 단위이며 내부 모델 턴 수와 다릅니다")}
             type="number"
             min={1}
             max={10000}
@@ -160,7 +185,7 @@ export default function RunComposer({
           disabled={starting || !goal.trim() || issues.length > 0 || conflict}
           onClick={() => void start()}
         >
-          {starting ? "실행 준비 중…" : "▷ 그래프 실행"}
+          {starting ? t("실행 준비 중…") : t("▷ 그래프 실행")}
         </button>
       </div>
     </section>

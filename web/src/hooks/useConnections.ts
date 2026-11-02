@@ -1,3 +1,4 @@
+import { t } from "../i18n";
 import { useState } from "react";
 import {
   type LocalConnection,
@@ -45,7 +46,10 @@ export function useConnections(
       if (value.error) setError(value.error);
       else
         setNotice(
-          `${value.models.length}개 모델을 조회했습니다. 사용할 모델을 선택하세요.`,
+          t(
+            "{0}개 모델을 조회했습니다. 사용할 모델을 선택하세요.",
+            value.models.length,
+          ),
         );
     } catch (e) {
       setError((e as Error).message);

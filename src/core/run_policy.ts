@@ -8,11 +8,8 @@ import { AgentGraphDocument, LocalConnection } from "../shared/domain";
 export interface RunPolicy {
   /** Any automation preset is enabled. */
   automated: boolean;
-  testSourceGuard: boolean;
   verificationContract: boolean;
-  reserveFinalizationBudget: boolean;
   nativeApprovalReview: boolean;
-  guardOwnedProcesses: boolean;
   /** Codex local HTTP for browser verification (proxy-restricted to loopback). */
   localHttpAccess: boolean;
   /** Claude in an automation preset: nobody is there to answer a permission prompt. */
@@ -32,11 +29,8 @@ export function runPolicy(
   const a = graph.automation;
   return {
     automated: !!a,
-    testSourceGuard: !!a?.testSourceGuard,
     verificationContract: !!a?.verificationContract,
-    reserveFinalizationBudget: !!a?.reserveFinalizationBudget,
     nativeApprovalReview: !!a?.nativeApprovalReview,
-    guardOwnedProcesses: !!a?.guardOwnedProcesses,
     localHttpAccess: connection?.type === "codex" && !!a?.browserVerification,
     claudeUnattended: connection?.type === "claude" && !!a,
     browserVerification: !!a?.browserVerification,

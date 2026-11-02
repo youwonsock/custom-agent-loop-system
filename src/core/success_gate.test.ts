@@ -65,6 +65,7 @@ function completed(): SessionState {
       startedAt: "2026-01-01T00:00:00.000Z",
       deadlineAt: "2999-01-01T00:00:00.000Z",
       maxAttempts: 1000,
+      maxCostUsd: null,
       exhaustedReason: null,
     },
     graph: createGraph(),
@@ -90,9 +91,6 @@ test("Kilo success requires positive scope proof for every attempt and retains p
     browserVerification: false,
     verificationContract: false,
     authoredNodeTests: false,
-    testSourceGuard: false,
-    reserveFinalizationBudget: false,
-    guardOwnedProcesses: false,
     programIoGuard: false,
   };
   s.connections = [{ id: "kilo", label: "Kilo", type: "kilo", binary: "kilo" }];
@@ -102,6 +100,8 @@ test("Kilo success requires positive scope proof for every attempt and retains p
       { connectionId: "kilo", modelId: "kilo/kilo-auto/free" },
     ]),
   );
+  for (const v of s.visits)
+    if (v.nodeId === "test") v.verificationSourceHashes = {};
   assert.ok(successBlockers(s).some((x) => x.includes("대상 경계")));
   for (const v of s.visits)
     for (const a of v.attempts)

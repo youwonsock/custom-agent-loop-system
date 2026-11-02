@@ -38,14 +38,10 @@ test("only Claude in an automation preset runs unattended", () => {
 
 test("graph-level decisions follow their flags independently of the CLI", () => {
   const graph = createAutonomousGraph();
-  graph.automation!.testSourceGuard = false;
   graph.automation!.browserVerification = false;
   const p = runPolicy(graph, { type: "codex" });
   assert.equal(p.automated, true);
-  assert.equal(p.testSourceGuard, false);
   assert.equal(p.localHttpAccess, false);
   assert.equal(p.verificationContract, true);
-  assert.equal(p.reserveFinalizationBudget, true);
-  assert.equal(p.guardOwnedProcesses, true);
   assert.equal(p.nativeApprovalReview, true);
 });

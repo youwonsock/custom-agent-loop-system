@@ -1,3 +1,4 @@
+import { t } from "../i18n";
 import type { LogPanelModel } from "./viewModels";
 
 export default function LogPanel({
@@ -13,12 +14,12 @@ export default function LogPanel({
       <section className="panel log-panel">
         <div className="log-heading">
           <h2>
-            실행 로그{" "}
-            <span>{visit ? `방문 ${visit.number}` : "실행 준비"}</span>
+            {t("실행 로그")}{" "}
+            <span>{visit ? t("방문 {0}", visit.number) : t("실행 준비")}</span>
           </h2>
           <span className="live-label">
             <i className="dot green" />
-            {run.status === "RUNNING" ? "LIVE" : "기록"}
+            {run.status === "RUNNING" ? "LIVE" : t("기록")}
           </span>
         </div>
         <pre
@@ -29,7 +30,7 @@ export default function LogPanel({
               el.scrollHeight - el.scrollTop - el.clientHeight < 40;
           }}
         >
-          {log || "CLI 출력이 도착하면 여기에 표시됩니다."}
+          {log || t("CLI 출력이 도착하면 여기에 표시됩니다.")}
         </pre>
       </section>
     </>

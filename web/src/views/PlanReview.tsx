@@ -1,3 +1,4 @@
+import { t } from "../i18n";
 import type { PlanReviewModel } from "./viewModels";
 import { lazy } from "react";
 const Markdown = lazy(() => import("../components/Markdown"));
@@ -28,13 +29,16 @@ export default function PlanReview({
           <div className="plan-review-head">
             <div>
               <span className="eyebrow">PLAN APPROVAL</span>
-              <h2>계획을 검토하고 승인하세요</h2>
+              <h2>{t("계획을 검토하고 승인하세요")}</h2>
               <p>
                 {
                   run.graph.nodes.find((n) => n.id === pendingVisit.nodeId)
                     ?.name
                 }{" "}
-                · 방문 {pendingVisit.number} · 문서 rev {plan.revision}
+                {t("· 방문 ")}
+                {pendingVisit.number}
+                {t(" · 문서 rev ")}
+                {plan.revision}
               </p>
             </div>
             <div>
@@ -45,7 +49,7 @@ export default function PlanReview({
                   setPlanText(plan.body);
                 }}
               >
-                {planEditing ? "편집 취소" : "문서 수정"}
+                {planEditing ? t("편집 취소") : t("문서 수정")}
               </button>
               {planEditing ? (
                 <button
@@ -62,7 +66,7 @@ export default function PlanReview({
                     })
                   }
                 >
-                  문서 저장
+                  {t("문서 저장")}
                 </button>
               ) : (
                 <button
@@ -78,7 +82,7 @@ export default function PlanReview({
                     })
                   }
                 >
-                  {actionBusy ? "처리 중…" : "이 계획 승인 후 계속"}
+                  {actionBusy ? t("처리 중…") : t("이 계획 승인 후 계속")}
                 </button>
               )}
             </div>
@@ -93,14 +97,15 @@ export default function PlanReview({
                   setPlanEditing(false);
                 }}
               >
-                선택지 {p.id} · {p.title}
+                {t("선택지 ")}
+                {p.id} · {p.title}
               </button>
             ))}
           </div>
           {planEditing ? (
             <textarea
               className="plan-editor"
-              aria-label="계획 문서"
+              aria-label={t("계획 문서")}
               value={planText}
               onChange={(e) => setPlanText(e.target.value)}
             />

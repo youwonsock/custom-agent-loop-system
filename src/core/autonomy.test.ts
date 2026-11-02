@@ -63,11 +63,6 @@ test("autonomous preset is opt-in, persisted, bounded and still requires tests/f
   assert.equal(createGraph().automation, undefined);
   assert.equal(createAutonomousGraph().automation!.verificationContract, true);
   assert.equal(createAutonomousGraph().automation!.authoredNodeTests, true);
-  assert.equal(createAutonomousGraph().automation!.testSourceGuard, true);
-  assert.equal(
-    createAutonomousGraph().automation!.reserveFinalizationBudget,
-    true,
-  );
   assert.equal(createAutonomousGraph().automation!.targetScopeGuard, true);
   assert.equal(createGraph().nodes[0]!.planning!.requiresApproval, true);
   const copy = validateGraphDocument(g);
@@ -546,8 +541,7 @@ test("autonomous browser instructions never direct read-only roles to create spe
     );
     assert.equal(
       prompt.includes("Create the spec only if absent"),
-      node.type === "implementation" ||
-        (node.type === "test" && !g.automation!.testSourceGuard),
+      node.type === "implementation",
     );
     if (!writable)
       assert.match(prompt, /never execute it or create\/edit the spec/);
@@ -573,9 +567,9 @@ test("automation settings report each bad value by name and save only known flag
   );
   assert.throws(
     bad((a) => {
-      (a as unknown as Record<string, unknown>).testSourceGuard = "yes";
+      (a as unknown as Record<string, unknown>).browserVerification = "yes";
     }),
-    /testSourceGuard/,
+    /browserVerification/,
   );
   assert.throws(
     bad((a) => {
@@ -593,9 +587,9 @@ test("automation settings report each bad value by name and save only known flag
     () =>
       validateGraphDocument({
         ...g,
-        automation: { ...g.automation, testSourceGuard: undefined },
+        automation: { ...g.automation, browserVerification: undefined },
       }),
-    /testSourceGuard/,
+    /browserVerification/,
   );
 });
 test("the server reports authored Node tests without a verification contract", () => {

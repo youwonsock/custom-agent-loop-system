@@ -6,7 +6,7 @@ export function stageDeadline(
   node: AgentNode,
   visit: NodeVisit,
 ): number | undefined {
-  if (!state.graph.automation?.reserveFinalizationBudget) return undefined;
+  if (!state.graph.automation) return undefined;
   const end = Date.parse(state.executionBudget.deadlineAt),
     total = end - Date.parse(state.executionBudget.startedAt);
   const reserve = {
@@ -37,7 +37,7 @@ export function stageBudgetReason(
   beforeCall = false,
   now = Date.now(),
 ): string | null {
-  if (!state.graph.automation?.reserveFinalizationBudget) return null;
+  if (!state.graph.automation) return null;
   const deadline = visit.stageDeadlineAt
     ? Date.parse(visit.stageDeadlineAt)
     : stageDeadline(state, node, visit);

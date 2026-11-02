@@ -1,3 +1,4 @@
+import { t } from "../i18n";
 import { api } from "../api";
 import { statusNames, pricingNames, stamp } from "../studioTypes";
 import type { RunsViewModel } from "./viewModels";
@@ -36,8 +37,10 @@ export default function RunsView({
           <div className="page-heading">
             <div>
               <span className="eyebrow">EXECUTION HISTORY</span>
-              <h1>실행 기록</h1>
-              <p>저장된 그래프 snapshot과 노드별 진행 상황을 확인하세요.</p>
+              <h1>{t("실행 기록")}</h1>
+              <p>
+                {t("저장된 그래프 snapshot과 노드별 진행 상황을 확인하세요.")}
+              </p>
             </div>
             {run && (
               <span className={`status-pill ${run.status}`}>
@@ -48,24 +51,24 @@ export default function RunsView({
           {sessions.length === 0 ? (
             <div className="empty-state">
               <span>▷</span>
-              <h2>실행한 그래프가 없습니다</h2>
-              <p>그래프에 모델을 지정하고 목표를 입력해 시작하세요.</p>
+              <h2>{t("실행한 그래프가 없습니다")}</h2>
+              <p>{t("그래프에 모델을 지정하고 목표를 입력해 시작하세요.")}</p>
               <button
                 className="button primary"
                 onClick={() => setView("graphs")}
               >
-                그래프 편집으로 이동
+                {t("그래프 편집으로 이동")}
               </button>
             </div>
           ) : (
             <>
               <div className="run-picker">
                 <select
-                  aria-label="실행 세션"
+                  aria-label={t("실행 세션")}
                   value={selectedRun ?? ""}
                   onChange={(e) => setSelectedRun(e.target.value || null)}
                 >
-                  <option value="">실행을 선택하세요</option>
+                  <option value="">{t("실행을 선택하세요")}</option>
                   {sessions.map((s) => (
                     <option key={s.id} value={s.id}>
                       {s.graph.name} · {statusNames[s.status]} ·{" "}
@@ -85,7 +88,7 @@ export default function RunsView({
                       }
                       onClick={() => void act({ type: "resume" })}
                     >
-                      재개
+                      {t("재개")}
                     </button>
                     <button
                       className="button subtle small"
@@ -95,13 +98,13 @@ export default function RunsView({
                       }
                       onClick={() => void act({ type: "stop" })}
                     >
-                      중지
+                      {t("중지")}
                     </button>
                     <button
                       className="text-button danger"
                       disabled={["RUNNING", "RECOVERING"].includes(run.status)}
                       onClick={() => {
-                        if (confirm("이 실행 기록을 삭제할까요?"))
+                        if (confirm(t("이 실행 기록을 삭제할까요?")))
                           void attempt(async () => {
                             await api(`/sessions/${run.id}`, "DELETE");
                             setSessions((values) =>
@@ -111,7 +114,7 @@ export default function RunsView({
                           });
                       }}
                     >
-                      기록 삭제
+                      {t("기록 삭제")}
                     </button>
                   </div>
                 )}
@@ -120,21 +123,24 @@ export default function RunsView({
                 <>
                   <div className="run-summary">
                     <div>
-                      <span>목표</span>
+                      <span>{t("목표")}</span>
                       <p>{run.goal}</p>
                     </div>
                     <div>
-                      <span>대상 프로젝트</span>
+                      <span>{t("대상 프로젝트")}</span>
                       <code>{run.targetProjectPath}</code>
                     </div>
                     <div>
-                      <span>진행</span>
+                      <span>{t("진행")}</span>
                       <strong>
-                        {run.visits.length}회 방문 <i>·</i>{" "}
-                        {run.completedIterations}회 사이클
+                        {run.visits.length}
+                        {t("회 방문 ")}
+                        <i>·</i> {run.completedIterations}
+                        {t("회 사이클")}
                       </strong>
                       <small>
-                        graph rev {run.graph.revision} · 모델 설정 고정
+                        graph rev {run.graph.revision}
+                        {t(" · 모델 설정 고정")}
                       </small>
                     </div>
                   </div>
@@ -143,14 +149,15 @@ export default function RunsView({
                       {run.statusReason}
                       {run.automaticRecovery && (
                         <small>
-                          재시도 예정 {stamp(run.automaticRecovery.resumeAt)}
+                          {t("재시도 예정 ")}
+                          {stamp(run.automaticRecovery.resumeAt)}
                         </small>
                       )}
                     </div>
                   )}
                   {run.pendingAccess && (
                     <section className="panel access-request">
-                      <h2>외부 경로 접근 승인</h2>
+                      <h2>{t("외부 경로 접근 승인")}</h2>
                       <ul>
                         {run.pendingAccess.paths.map((p) => (
                           <li key={p}>
@@ -170,7 +177,7 @@ export default function RunsView({
                           })
                         }
                       >
-                        요청한 경로만 승인
+                        {t("요청한 경로만 승인")}
                       </button>
                       <button
                         className="button subtle"
@@ -184,7 +191,7 @@ export default function RunsView({
                           })
                         }
                       >
-                        전체 접근 허용
+                        {t("전체 접근 허용")}
                       </button>
                     </section>
                   )}
@@ -202,10 +209,10 @@ export default function RunsView({
                       />
                     </section>
                     <aside className="panel visit-panel">
-                      <h2>노드 방문 기록</h2>
+                      <h2>{t("노드 방문 기록")}</h2>
                       {run.visits.length === 0 ? (
                         <p className="field-hint">
-                          모델 목록을 확인한 뒤 첫 노드를 시작합니다.
+                          {t("모델 목록을 확인한 뒤 첫 노드를 시작합니다.")}
                         </p>
                       ) : (
                         run.visits
@@ -223,32 +230,38 @@ export default function RunsView({
                                     (n) => n.id === v.nodeId,
                                   )?.name ?? v.nodeId}
                                   <small>
-                                    방문 {v.number} · {v.attempts.length}회 시도
+                                    {t("방문 ")}
+                                    {v.number} · {v.attempts.length}
+                                    {t("회 시도")}
                                   </small>
                                 </span>
                                 <b>
                                   {v.verdict ??
                                     (v.status === "waiting_approval"
-                                      ? "승인 대기"
+                                      ? t("승인 대기")
                                       : v.status === "running"
-                                        ? "실행 중"
+                                        ? t("실행 중")
                                         : v.status === "succeeded"
-                                          ? "완료"
+                                          ? t("완료")
                                           : v.status === "failed"
-                                            ? "반려"
-                                            : "정지")}
+                                            ? t("반려")
+                                            : t("정지"))}
                                 </b>
                               </summary>
                               {v.attempts.map((a) => (
                                 <div className="attempt-detail" key={a.id}>
                                   <span>
-                                    시도 {a.number} · {a.status}
+                                    {t("시도 ")}
+                                    {a.number} · {a.status}
                                   </span>
                                   <code title={a.requestedModelId}>
                                     {a.requestedModelId}
                                   </code>
                                   {a.actualModelId && (
-                                    <small>실제 모델: {a.actualModelId}</small>
+                                    <small>
+                                      {t("실제 모델: ")}
+                                      {a.actualModelId}
+                                    </small>
                                   )}
                                   <small title={a.pricing?.reason}>
                                     {
@@ -257,11 +270,15 @@ export default function RunsView({
                                       ]
                                     }
                                     {a.pricing &&
-                                      ` · 조회 ${stamp(a.pricing.checkedAt)}`}
+                                      t(
+                                        " · 조회 {0}",
+                                        stamp(a.pricing.checkedAt),
+                                      )}
                                   </small>
                                   {a.lastProgressAt && (
                                     <small>
-                                      최근 진행 {stamp(a.lastProgressAt)}
+                                      {t("최근 진행 ")}
+                                      {stamp(a.lastProgressAt)}
                                     </small>
                                   )}
                                   {a.message && <p>{a.message}</p>}
@@ -269,7 +286,7 @@ export default function RunsView({
                               ))}
                               {v.output && (
                                 <details className="output-details">
-                                  <summary>응답과 검증 근거</summary>
+                                  <summary>{t("응답과 검증 근거")}</summary>
                                   <div className="markdown">
                                     <Markdown>{v.output}</Markdown>
                                   </div>
@@ -283,12 +300,14 @@ export default function RunsView({
                   <LogPanel controller={controller} />
                   <section className="panel interrupt-panel">
                     <label>
-                      중단 분석 요청
+                      {t("중단 분석 요청")}
                       <input
-                        aria-label="중단 메시지"
+                        aria-label={t("중단 메시지")}
                         value={interruptText}
                         onChange={(e) => setInterruptText(e.target.value)}
-                        placeholder="현재 작업을 중단하고 분석할 내용을 입력하세요."
+                        placeholder={t(
+                          "현재 작업을 중단하고 분석할 내용을 입력하세요.",
+                        )}
                       />
                     </label>
                     <button
@@ -301,7 +320,7 @@ export default function RunsView({
                         })
                       }
                     >
-                      중단 노드로 전환
+                      {t("중단 노드로 전환")}
                     </button>
                   </section>
                 </>

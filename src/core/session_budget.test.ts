@@ -7,6 +7,7 @@ import {
 } from "./session_budget";
 import { executionSettings, autonomousExecutionSettings } from "./settings";
 import { SessionState } from "../shared/domain";
+import { observeCost } from "./event_evidence";
 import { prepareManualResume } from "./session_transitions";
 test("whole-session deadlines and native attempts include report retries without renewal", () => {
   const settings = executionSettings({
@@ -64,4 +65,48 @@ test("whole-session deadlines and native attempts include report retries without
   });
   assert.equal(explicit.phaseTimeoutMs, 1000, "limits that fit stay as given");
   assert.equal(explicit.phaseRecoveryBudgetMs, 1200);
+});
+test("a spending limit stops on reported cost, and on any attempt with no cost", () => {
+  const attempt = (costUsd?: number) => ({
+    endedAt: "2026-11-02T00:00:00.000Z",
+    ...(costUsd === undefined ? {} : { costUsd }),
+  });
+  const state = (attempts: unknown[], maxCostUsd: number | null) =>
+    ({
+      visits: [{ attempts }],
+      executionBudget: {
+        ...createSessionBudget(autonomousExecutionSettings()),
+        maxCostUsd,
+      },
+    }) as unknown as SessionState;
+  assert.equal(sessionBudgetReason(state([attempt(0.4)], 1)), null);
+  assert.match(
+    sessionBudgetReason(state([attempt(0.6), attempt(0.5)], 1))!,
+    /\$1/,
+  );
+  assert.match(sessionBudgetReason(state([attempt()], 1))!, /보고하지 않은/);
+  assert.equal(
+    sessionBudgetReason(state([attempt()], null)),
+    null,
+    "no limit, nothing to know",
+  );
+  assert.equal(
+    sessionBudgetReason(state([{ endedAt: null }], 1)),
+    null,
+    "a running attempt has nothing to report yet",
+  );
+});
+test("cost comes from Claude's run total and from Kilo's steps", () => {
+  assert.equal(observeCost({ type: "assistant" }, null), null);
+  assert.equal(
+    observeCost({ type: "result", total_cost_usd: 0.25 }, 0.1),
+    0.25,
+  );
+  const step = { type: "step_finish", part: { cost: 0.5 } };
+  assert.equal(observeCost(step, observeCost(step, null)), 1);
+  assert.equal(
+    observeCost({ type: "step_finish", part: {} }, null),
+    null,
+    "a step without a cost reports nothing",
+  );
 });

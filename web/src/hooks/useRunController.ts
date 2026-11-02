@@ -1,3 +1,4 @@
+import { t } from "../i18n";
 import {
   isNewerSession,
   mergeSessions,
@@ -43,6 +44,7 @@ export function useRunController(
     [starting, setStarting] = useState(false),
     [sessionMinutes, setSessionMinutes] = useState(60),
     [toolMinutes, setToolMinutes] = useState<number | null>(null),
+    [maxCostUsd, setMaxCostUsd] = useState<number | null>(null),
     [maxSessionAttempts, setMaxSessionAttempts] = useState(24),
     [selectedRun, setSelectedRun] = useState<string | null>(null);
   const [run, setRun] = useState<SessionState | undefined>();
@@ -69,6 +71,7 @@ export function useRunController(
         goal,
         targetProjectPath: target,
         accessMode,
+        ...(maxCostUsd ? { maxCostUsd } : {}),
         settings: {
           maxIterations,
           sessionTimeoutMs: sessionMinutes * 60000,
@@ -80,7 +83,7 @@ export function useRunController(
       setRun(state);
       setSelectedRun(state.id);
       setView("runs");
-      setNotice("저장된 그래프와 연결 설정으로 실행을 시작했습니다.");
+      setNotice(t("저장된 그래프와 연결 설정으로 실행을 시작했습니다."));
     });
     setStarting(false);
   };
@@ -198,7 +201,7 @@ export function useRunController(
       );
       if (action.type === "edit_plan") {
         setPlanEditing(false);
-        setNotice("계획 문서를 저장했습니다. 저장된 문서를 승인하세요.");
+        setNotice(t("계획 문서를 저장했습니다. 저장된 문서를 승인하세요."));
       }
     });
     setActionBusy(false);
@@ -213,6 +216,8 @@ export function useRunController(
     setSessionMinutes,
     toolMinutes,
     setToolMinutes,
+    maxCostUsd,
+    setMaxCostUsd,
     maxSessionAttempts,
     setMaxSessionAttempts,
     starting,

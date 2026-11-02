@@ -1,3 +1,4 @@
+import { t } from "../i18n";
 import type { Connection } from "@xyflow/react";
 import type { AgentNode } from "../../../src/shared/domain";
 import { defaultNode } from "../../../src/shared/graph_defaults";
@@ -31,7 +32,7 @@ export function graphNodeActions({
         defaultNode({
           id: nodeId,
           type,
-          name: `새 ${typeMeta[type].label} 노드`,
+          name: t("새 {0} 노드", typeMeta[type].label),
           roleName: typeMeta[type].label,
           index: g.nodes.length,
           left: 80,

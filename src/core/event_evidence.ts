@@ -21,6 +21,7 @@ export interface EventEvidence {
   reapedProcesses?: number[];
   completedSearches: number;
   maxTokens: number;
+  costUsd: number | null;
   assistantTextBytes: number;
   actualModelId: string | null;
 }
@@ -30,6 +31,7 @@ export const emptyEvidence = (): EventEvidence => ({
   fileMutation: false,
   completedSearches: 0,
   maxTokens: 0,
+  costUsd: null,
   assistantTextBytes: 0,
   actualModelId: null,
 });
@@ -376,6 +378,15 @@ export function observeTokens(event: Event, depth = 0): number {
       count = Math.max(count, observeTokens(value as Event, depth + 1));
   }
   return count;
+}
+/** Claude totals the run in its result; Kilo and OpenCode report each step. */
+export function observeCost(event: Event, spent: number | null): number | null {
+  if (event.type === "result" && typeof event.total_cost_usd === "number")
+    return event.total_cost_usd;
+  const cost = obj(event.part).cost;
+  return event.type === "step_finish" && typeof cost === "number"
+    ? (spent ?? 0) + cost
+    : spent;
 }
 export function observeModel(event: Event): string | null {
   const direct = event.model ?? obj(event.message).model;
