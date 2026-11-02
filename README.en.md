@@ -30,9 +30,11 @@ On macOS you can build a launcher with `npm run build:launcher:mac` and open **A
 
 Only **Claude Code** (Haiku 5.5) has been run through the whole flow with a real model. Codex, OpenCode and Kilo connections are available but have not been verified to the same level. See [the verification record](docs/VERIFICATION.md).
 
-**Claude runs have no OS isolation.** The VM only applies to Kilo. The tool allow list the app passes to Claude exists so runs can proceed unattended, and because it allows `node`, it cannot stop arbitrary code. Run it on projects you trust, and use Claude Code's Bash sandbox as well.
+**Claude runs have no OS isolation by default.** The tool allow list the app passes to Claude exists so runs can proceed unattended, and because it allows `node`, it cannot stop arbitrary code. Run it on projects you trust, and use Claude Code's Bash sandbox as well.
 
-Isolating Kilo's programs in a VM needs Apple Silicon macOS 26 and Apple container 1.6.0. After installing `container`, run `npm run sandbox:prepare`. It needs network access and at least 8 GiB free. Without it, Kilo nodes stop before any model call.
+Turn on **Run Claude commands in a VM** in graph settings to run Claude's Bash commands in the same VM as Kilo. A hook sees every tool call first, holds the file tools to the target project and refuses other tools. For now it is macOS only, the VM has no network and parallel tasks are not available. Dependencies cannot be installed inside the VM, and native modules built on the host do not work there.
+
+The VM needs Apple Silicon macOS 26 and Apple container 1.6.0. After installing `container`, run `npm run sandbox:prepare`. It needs network access and at least 8 GiB free. Without it, Kilo nodes stop before any model call.
 
 ## Build a graph
 
