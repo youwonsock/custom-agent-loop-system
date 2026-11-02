@@ -5,7 +5,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { randomUUID } from "node:crypto";
 import { AgentGraphDocument, SessionState } from "../shared/domain";
-import { delay } from "../core/resilience";
+import { delay } from "../core/session/resilience";
 import {
   sessionWaitMs,
   runManualRuntime,

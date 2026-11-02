@@ -5,7 +5,7 @@ import * as path from "node:path";
 import { randomUUID } from "node:crypto";
 import { createServer } from "./app";
 import { SessionState } from "../shared/domain";
-import { delay } from "../core/resilience";
+import { delay } from "../core/session/resilience";
 import {
   origin,
   setup,
@@ -524,7 +524,7 @@ test("a crashed worker pauses then manual resume cleans its old CLI child before
   }
   assert.equal(state.visits[0]?.attempts[0]?.activity, "model_generation");
   const { readJsonFile, checkProcessLiveness } =
-    await import("../core/resilience.js");
+    await import("../core/session/resilience.js");
   const lease = await readJsonFile<{ ownerPid: number; childPid: number }>(
     path.join(s.store.sessionDir(id), "lease.json"),
   );
@@ -535,7 +535,7 @@ test("a crashed worker pauses then manual resume cleans its old CLI child before
   await wait(() => s.store.readSession(id), "PAUSED");
   // Heartbeats can lag behind persisted activity when the worker dies. The
   // saved attempt PID must be checked even when the lease missed the child.
-  const { atomicWriteJsonFile } = await import("../core/resilience.js");
+  const { atomicWriteJsonFile } = await import("../core/session/resilience.js");
   await atomicWriteJsonFile(path.join(s.store.sessionDir(id), "lease.json"), {
     ...lease,
     childPid: null,
@@ -582,7 +582,8 @@ for (const type of ["stop", "interrupt"] as const)
       () => s.store.readSession(id),
       type === "stop" ? "STOPPED" : "PAUSED",
     );
-    const { checkProcessLiveness } = await import("../core/resilience.js");
+    const { checkProcessLiveness } =
+      await import("../core/session/resilience.js");
     // Windows can report a terminated process as alive briefly while its handle closes.
     const killedBy = Date.now() + 2000;
     while (checkProcessLiveness(pid) !== "dead" && Date.now() < killedBy)
@@ -668,7 +669,8 @@ test("normal server shutdown terminates its active CLI and persists STOPPED", as
   assert.ok(pid);
   await s.app.close();
   assert.equal((await s.store.readSession(id)).status, "STOPPED");
-  const { checkProcessLiveness } = await import("../core/resilience.js");
+  const { checkProcessLiveness } =
+    await import("../core/session/resilience.js");
   assert.equal(checkProcessLiveness(pid), "dead");
 });
 test("a saved RUNNING state without a lease is paused instead of remaining stuck or spending automatically", async (t) => {
@@ -681,7 +683,7 @@ test("a saved RUNNING state without a lease is paused instead of remaining stuck
   const state = await s.store.readSession(id);
   state.status = "RUNNING";
   state.updatedAt = new Date(Date.now() - 10000).toISOString();
-  const { atomicWriteJsonFile } = await import("../core/resilience.js");
+  const { atomicWriteJsonFile } = await import("../core/session/resilience.js");
   await atomicWriteJsonFile(
     path.join(s.store.sessionDir(id), "state.json"),
     state,

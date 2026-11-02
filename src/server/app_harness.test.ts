@@ -9,7 +9,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { createServer } from "./app";
 import { AgentGraphDocument, SessionState } from "../shared/domain";
-import { delay } from "../core/resilience";
+import { delay } from "../core/session/resilience";
 export const origin = "http://127.0.0.1:4317",
   host = "127.0.0.1:4317",
   binary = path.resolve(__dirname, "../../../test/fixture_cli.cjs");

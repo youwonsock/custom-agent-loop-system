@@ -15,9 +15,9 @@ const { execFileSync } = require("node:child_process");
 
 const repository = path.resolve(__dirname, "..");
 const dist = (file) => path.join(repository, "dist/src", file);
-const { StudioStore } = require(dist("core/store.js"));
-const { queryModels } = require(dist("core/catalog.js"));
-const { createAutonomousGraph } = require(dist("core/graph.js"));
+const { StudioStore } = require(dist("core/session/store.js"));
+const { queryModels } = require(dist("core/runtime/catalog.js"));
+const { createAutonomousGraph } = require(dist("core/runtime/graph.js"));
 const { SessionCoordinator } = require(dist("server/coordinator.js"));
 
 const webGoal = [
@@ -91,7 +91,8 @@ const PROFILES = {
   },
   opencode: {
     binary: "opencode",
-    pick: (m) => m.pricing?.status === "free",
+    // OpenCode reports no price, so this goes by the name of its free models.
+    pick: (m) => /^opencode\/.*-free$/.test(m.id),
     automation: {},
   },
   codex: {
@@ -151,7 +152,8 @@ function summarize(state) {
 }
 function passed(profile, scenario, summary) {
   if (!scenario.passed(summary)) return false;
-  if (profile === "claude") return summary.status === "SUCCESS";
+  // Only Kilo has VM evidence to check by default.
+  if (profile !== "kilo") return summary.status === "SUCCESS";
   const vm = summary.vm;
   return (
     !!vm &&

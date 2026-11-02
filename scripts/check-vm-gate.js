@@ -6,7 +6,7 @@ const fs = require("node:fs");
 const { execFileSync } = require("node:child_process");
 
 const GUARDED =
-  /^src\/core\/(?:program_io|invocation|kilo_|native_scope|process_|runtime)[^/]*\.ts$/;
+  /^src\/core\/(?:program_io|invocation|process|runtime)\/[^/]*\.ts$/;
 
 function guardedFiles(files) {
   return files.filter(

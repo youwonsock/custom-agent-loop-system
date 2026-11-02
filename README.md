@@ -127,11 +127,11 @@ agent-loop verify-node-tests --target /absolute/project
 
 | 영역 | 책임 |
 | --- | --- |
-| `src/core/runtime.ts` | 방문 실행 단계(사전 검사 → 시도 전 가드 → 호출 구성 → 감독 실행 → 증거 게이트 → 완료 판정 → 실패 분류); 정지 경로는 `halt()`에 부수효과를 명시 |
-| `src/core/run_policy.ts` | 그래프 자동화 플래그와 연결 CLI 조합으로 정해지는 실행 결정 (예: Codex 로컬 HTTP, Kilo 범위·VM 격리) |
-| `src/core/session_transitions.ts` | 승인·재개·방문 이동·중지의 상태 변경 규칙; 프로세스와 파일 I/O는 호출자 담당 |
-| `src/core/store.ts`, `session_schema.ts` | version 4 해석, 원자 저장·잠금·저장 순번 비교, 변경된 세션 요약 캐시 |
-| `src/core/provider_events.ts`, `process_output.ts`, `process_lifecycle.ts` | 네이티브 이벤트 해석, 출력 프레이밍·마스킹, 제한 시간 내 프로세스 종료 |
+| `src/core/runtime/runtime.ts` | 방문 실행 단계(사전 검사 → 시도 전 가드 → 호출 구성 → 감독 실행 → 증거 게이트 → 완료 판정 → 실패 분류); 정지 경로는 `halt()`에 부수효과를 명시 |
+| `src/core/runtime/run_policy.ts` | 그래프 자동화 플래그와 연결 CLI 조합으로 정해지는 실행 결정 (예: Codex 로컬 HTTP, Kilo 범위·VM 격리) |
+| `src/core/session/session_transitions.ts` | 승인·재개·방문 이동·중지의 상태 변경 규칙; 프로세스와 파일 I/O는 호출자 담당 |
+| `src/core/session/store.ts`, `session_schema.ts` | version 4 해석, 원자 저장·잠금·저장 순번 비교, 변경된 세션 요약 캐시 |
+| `src/core/process/provider_events.ts`, `process_output.ts`, `process_lifecycle.ts` | 네이티브 이벤트 해석, 출력 프레이밍·마스킹, 제한 시간 내 프로세스 종료 |
 | `src/shared/session_updates.ts`, `graph_validation.ts` | 세션 순서 비교·병합, 서버/화면 공통 실행 진단 |
 | `src/shared/isolation.ts` | 현재 호스트와 그래프 연결 기준의 프로그램 I/O 격리 범위 안내 (실행 화면에 표시) |
 | `web/src/hooks`, `views/viewModels.ts` | 앱 상위 상태 소유자와 화면별로 필요한 상태·동작 계약 |

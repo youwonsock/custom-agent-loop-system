@@ -2,7 +2,7 @@ import {
   beginResume,
   interruptSession,
   stopSession,
-} from "../core/session_transitions";
+} from "../core/session/session_transitions";
 import {
   isNewerSession,
   sessionSummary,
@@ -19,35 +19,42 @@ import {
   SessionState,
   StudioEvent,
 } from "../shared/domain";
-import { StudioStore } from "../core/store";
-import { graphDiagnostics, resolveBinding, safeId } from "../core/graph";
-import { AppError, messageOf } from "../core/errors";
+import { StudioStore } from "../core/session/store";
+import {
+  graphDiagnostics,
+  resolveBinding,
+  safeId,
+} from "../core/runtime/graph";
+import { AppError, messageOf } from "../core/session/errors";
 import {
   executionSettings,
   autonomousExecutionSettings,
   fitToolLimit,
-} from "../core/settings";
+} from "../core/session/settings";
 import {
   CONTRACT_FILE,
   lockContract,
   hasOwnTestScript,
-} from "../core/verification_contract";
+} from "../core/verification/verification_contract";
 import {
   createSessionBudget,
   sessionBudgetReason,
   pauseForBudget,
-} from "../core/session_budget";
-import { deriveRequirementLedger } from "../core/requirement_ledger";
+} from "../core/session/session_budget";
+import { deriveRequirementLedger } from "../core/verification/requirement_ledger";
 import {
   atomicWriteJsonFile,
   checkProcessLiveness,
   readJsonFile,
   SessionLease,
   delay,
-} from "../core/resilience";
-import { getControlQueuePaths, readControlAck } from "../core/control_queue";
-import { withShortFileLock } from "../core/file_lock";
-import { terminateProcessTreeBounded } from "../core/process_lifecycle";
+} from "../core/session/resilience";
+import {
+  getControlQueuePaths,
+  readControlAck,
+} from "../core/session/control_queue";
+import { withShortFileLock } from "../core/session/file_lock";
+import { terminateProcessTreeBounded } from "../core/process/process_lifecycle";
 
 export interface StartRequest {
   requestId: string;

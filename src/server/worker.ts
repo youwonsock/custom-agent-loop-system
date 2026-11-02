@@ -1,9 +1,9 @@
-import { StudioStore } from "../core/store";
-import { GraphRuntime } from "../core/runtime";
+import { StudioStore } from "../core/session/store";
+import { GraphRuntime } from "../core/runtime/runtime";
 import {
   enqueueControlRequest,
   getControlQueuePaths,
-} from "../core/control_queue";
+} from "../core/session/control_queue";
 const [root, sessionId, mode] = process.argv.slice(2);
 if (!root || !sessionId) throw new Error("worker 인자가 필요합니다.");
 const store = new StudioStore(root);

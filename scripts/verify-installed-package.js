@@ -68,16 +68,16 @@ async function main() {
     if (!help.includes("Agent Graph Studio 4.0.0"))
       throw new Error("Installed CLI failed.");
     const { queryModels } = require(
-      path.join(installed, "dist", "src", "core", "catalog.js"),
+      path.join(installed, "dist", "src", "core", "runtime", "catalog.js"),
     );
     const project = path.join(temporary, "project");
     await fs.mkdir(project);
     const core = path.join(installed, "dist", "src", "core");
     const { nodeTestVerificationCommand } = require(
-      path.join(core, "node_test_command.js"),
+      path.join(core, "verification", "node_test_command.js"),
     );
     const { readNodeTestProof } = require(
-      path.join(core, "node_test_verification.js"),
+      path.join(core, "verification", "node_test_verification.js"),
     );
     const qualityProject = path.join(temporary, "own-node-project");
     await fs.mkdir(path.join(qualityProject, ".agent-graph"), {
@@ -175,7 +175,9 @@ async function main() {
     process.stdout.write(
       "Installed own Node verifier verified: authored assertion, no-op control, production mutation, current proof and owned process cleanup.\n",
     );
-    const plugin = require(path.join(core, "kilo_protocol_plugin.js"));
+    const plugin = require(
+      path.join(core, "invocation", "kilo_protocol_plugin.js"),
+    );
     const previousProtocol = process.env.AGENT_GRAPH_KILO_CHECKS;
     try {
       process.env.AGENT_GRAPH_KILO_CHECKS = JSON.stringify({
@@ -292,8 +294,12 @@ async function main() {
         delete process.env.AGENT_GRAPH_KILO_CHECKS;
       else process.env.AGENT_GRAPH_KILO_CHECKS = previousProtocol;
     }
-    const { buildInvocation } = require(path.join(core, "invocation.js"));
-    const graph = require(path.join(core, "graph.js")).createAutonomousGraph();
+    const { buildInvocation } = require(
+      path.join(core, "invocation", "invocation.js"),
+    );
+    const graph = require(
+      path.join(core, "runtime", "graph.js"),
+    ).createAutonomousGraph();
     const invocation = await buildInvocation(
       {
         id: "kilo",
@@ -321,11 +327,11 @@ async function main() {
       "Installed Kilo protocol verified: native hook, invocation-local write fallback, no model calls.\n",
     );
     if (process.platform === "darwin") {
-      const io = require(path.join(core, "program_io.js"));
+      const io = require(path.join(core, "program_io", "program_io.js"));
       const outside = path.join(temporary, "io-outside.txt");
       await fs.writeFile(outside, "unchanged");
       const vmAvailable = require(
-        path.join(core, "program_io_vm.js"),
+        path.join(core, "program_io", "program_io_vm.js"),
       ).vmRuntimeAvailable();
       const policy = io.prepareProgramIo({
         cwd: project,
@@ -350,7 +356,7 @@ async function main() {
       )
         throw Error("Installed kernel I/O isolation failed: " + result.stderr);
       const tracker = new (require(
-        path.join(core, "program_io_tracker.js"),
+        path.join(core, "program_io", "program_io_tracker.js"),
       ).ProgramIoTracker)(policy);
       tracker.normalize({
         type: "tool_use",

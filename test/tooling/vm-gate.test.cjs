@@ -5,22 +5,22 @@ const { guardedFiles, hasResult } = require("../../scripts/check-vm-gate.js");
 test("only execution and isolation source files need a VM result", () => {
   assert.deepEqual(
     guardedFiles([
-      "src/core/program_io.ts",
-      "src/core/program_io_vm.ts",
-      "src/core/invocation_kilo.ts",
-      "src/core/runtime_gates.ts",
-      "src/core/process_supervisor.ts",
-      "src/core/program_io.test.ts",
-      "src/core/completion.ts",
+      "src/core/program_io/program_io.ts",
+      "src/core/program_io/program_io_vm.ts",
+      "src/core/invocation/invocation_kilo.ts",
+      "src/core/runtime/runtime_gates.ts",
+      "src/core/process/process_supervisor.ts",
+      "src/core/program_io/program_io.test.ts",
+      "src/core/verification/completion.ts",
       "docs/STATUS.md",
       "web/src/App.tsx",
     ]),
     [
-      "src/core/program_io.ts",
-      "src/core/program_io_vm.ts",
-      "src/core/invocation_kilo.ts",
-      "src/core/runtime_gates.ts",
-      "src/core/process_supervisor.ts",
+      "src/core/program_io/program_io.ts",
+      "src/core/program_io/program_io_vm.ts",
+      "src/core/invocation/invocation_kilo.ts",
+      "src/core/runtime/runtime_gates.ts",
+      "src/core/process/process_supervisor.ts",
     ],
   );
 });

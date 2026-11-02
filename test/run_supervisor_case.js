@@ -3,7 +3,9 @@
 const os = require("node:os");
 const path = require("node:path");
 const fs = require("node:fs/promises");
-const { ProcessSupervisor } = require("../dist/src/core/process_supervisor");
+const {
+  ProcessSupervisor,
+} = require("../dist/src/core/process/process_supervisor");
 
 const mode = process.argv[2];
 const transportTimeoutMs = Number(process.argv[3]);
