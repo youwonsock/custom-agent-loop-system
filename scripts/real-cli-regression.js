@@ -89,6 +89,16 @@ const PROFILES = {
     pick: (m) => /haiku/i.test(m.id),
     automation: {},
   },
+  opencode: {
+    binary: "opencode",
+    pick: (m) => m.pricing?.status === "free",
+    automation: {},
+  },
+  codex: {
+    binary: "codex",
+    pick: () => true,
+    automation: {},
+  },
   kilo: {
     binary: "kilo",
     pick: (m) => m.pricing?.status === "free",
@@ -161,7 +171,7 @@ async function main() {
     scenario = SCENARIOS[scenarioName];
   if (!config || !scenario)
     throw new Error(
-      "Usage: real-cli-regression.js claude|kilo [--scenario slugify|tiny-web|tiny-web-tests] [--claude-vm] [--model text]",
+      "Usage: real-cli-regression.js claude|kilo|opencode|codex [--scenario slugify|tiny-web|tiny-web-tests] [--claude-vm] [--model text]",
     );
   const stamp = new Date().toISOString().replace(/[:.]/g, "-"),
     output = path.join(
