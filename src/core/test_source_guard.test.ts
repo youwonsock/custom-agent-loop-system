@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { execFileSync } from "node:child_process";
 import {
   testCommandAllowed,
   testSources,
@@ -160,6 +161,36 @@ test("source guard includes authored tests/package and ignores verification outp
   ]);
 });
 
+test("a rebuild is no source change when git ignores the output, but a tracked dist stays guarded", async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "guard-build-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  await fs.mkdir(path.join(root, "dist"));
+  await fs.mkdir(path.join(root, "src"));
+  await fs.writeFile(path.join(root, "src/a.ts"), "a");
+  await fs.writeFile(path.join(root, "dist/a.js"), "one");
+  const changed = async () => {
+    const before = await testSources(root);
+    await fs.writeFile(path.join(root, "dist/a.js"), String(Math.random()));
+    return sourceDifference(before, await testSources(root));
+  };
+  assert.deepEqual(await changed(), ["dist/a.js"], "not a git repository");
+
+  execFileSync("git", ["init", "-q"], { cwd: root });
+  assert.deepEqual(await changed(), ["dist/a.js"], "tracked or unignored");
+
+  await fs.writeFile(path.join(root, ".gitignore"), "dist/\n");
+  assert.deepEqual(await changed(), [], "ignored build output");
+  const before = await testSources(root);
+  await fs.writeFile(path.join(root, "src/a.ts"), "b");
+  assert.deepEqual(sourceDifference(before, await testSources(root)), [
+    "src/a.ts",
+  ]);
+  await fs.writeFile(path.join(root, ".gitignore"), "src/\n");
+  assert.ok(
+    sourceDifference(before, await testSources(root)).includes(".gitignore"),
+    "hiding a folder from the guard is itself a change",
+  );
+});
 test("observed harmless diagnostics and owned absolute preparation are allowed without accepting repair or masking", async () => {
   const cwd = path.resolve("owned target"),
     command = "npm test > verification/model-tests.txt 2>&1",
