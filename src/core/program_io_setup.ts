@@ -6,16 +6,19 @@ import {
   vmRuntimeFile,
   imageDigest,
   containerHostEnvironment,
+  isolationSupported,
+  VM_BINARY,
 } from "./program_io_vm";
 import { sha } from "./values";
 
 /** Explicit developer/setup command. No model or user credentials enter its image. */
 export function prepareProgramIoRuntime(): void {
-  if (process.platform !== "darwin" || process.arch !== "arm64")
+  if (!isolationSupported())
     throw Error(
       "The verified VM runtime currently requires Apple Silicon macOS 26 and Apple container 1.6.",
     );
-  const binary = "/opt/homebrew/bin/container",
+  const binary = VM_BINARY,
+    podman = process.platform === "linux",
     dist = path.resolve(__dirname, "../.."),
     root = path.dirname(dist),
     descriptor = vmRuntimeFile(),
@@ -35,11 +38,11 @@ export function prepareProgramIoRuntime(): void {
     return p.stdout;
   };
   const version = execute(["--version"]);
-  if (!/\b1\.6\.0\b/.test(version))
+  if (!podman && !/\b1\.6\.0\b/.test(version))
     throw Error(
       "This runtime adapter has been verified with container 1.6.0; unsupported versions fail closed.",
     );
-  execute(["system", "start", "--enable-kernel-install"], true);
+  if (!podman) execute(["system", "start", "--enable-kernel-install"], true);
   const metadata = JSON.parse(
     fs.readFileSync(path.join(dist, "program_io_dependencies.json"), "utf8"),
   );
@@ -81,17 +84,14 @@ export function prepareProgramIoRuntime(): void {
     );
     fs.writeFileSync(
       path.join(context, "Dockerfile"),
-      `FROM node:24.21.0-bookworm-slim\nENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright\nWORKDIR /opt/agent-runtime\nCOPY package.json package-lock.json ./\nCOPY scripts/fix-pty-permissions.js ./scripts/\nRUN apt-get update && apt-get install -y --no-install-recommends python3 make g++ ca-certificates && npm ci --cache /tmp/npm-cache && npx playwright install --with-deps --only-shell chromium && apt-get purge -y --auto-remove make g++ && rm -rf /tmp/npm-cache /var/lib/apt/lists/* /root/.cache /tmp/*\nENV NODE_ENV=production\nCMD ["node"]\n`,
+      `FROM ${podman ? "docker.io/library/" : ""}node:24.21.0-bookworm-slim\nENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright\nWORKDIR /opt/agent-runtime\nCOPY package.json package-lock.json ./\nCOPY scripts/fix-pty-permissions.js ./scripts/\nRUN apt-get update && apt-get install -y --no-install-recommends python3 make g++ ca-certificates && npm ci --cache /tmp/npm-cache && npx playwright install --with-deps --only-shell chromium && apt-get purge -y --auto-remove make g++ && rm -rf /tmp/npm-cache /var/lib/apt/lists/* /root/.cache /tmp/*\nENV NODE_ENV=production\nCMD ["node"]\n`,
     );
     execute(
       [
         "build",
-        "--cpus",
-        "2",
-        "--memory",
-        "3G",
-        "--progress",
-        "plain",
+        ...(podman
+          ? []
+          : ["--cpus", "2", "--memory", "3G", "--progress", "plain"]),
         "-t",
         image,
         context,
@@ -112,8 +112,7 @@ export function prepareProgramIoRuntime(): void {
       "--read-only",
       "--cap-drop",
       "ALL",
-      "--progress",
-      "none",
+      ...(podman ? [] : ["--progress", "none"]),
       image,
       "node",
       "-e",
@@ -131,7 +130,7 @@ export function prepareProgramIoRuntime(): void {
   const value = {
     version: 1,
     binary,
-    containerVersion: "1.6.0",
+    containerVersion: podman ? version.trim() : "1.6.0",
     image,
     imageDigest: digest,
     lockDigest: metadata.lockDigest,

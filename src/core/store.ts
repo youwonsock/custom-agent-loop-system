@@ -61,19 +61,25 @@ export class StudioStore {
   sessionDir(id: string): string {
     return path.join(this.root, "sessions", this.id(id));
   }
+  /** A file this version cannot read is left out and left alone, like a session's. */
   async graphs(): Promise<AgentGraphDocument[]> {
     const files = (await fs.readdir(path.join(this.root, "graphs"))).filter(
       (f) => f.endsWith(".json"),
     );
     const docs = await Promise.all(
       files.map(async (f) => {
-        const data = await readJsonFile<unknown>(
-          path.join(this.root, "graphs", f),
-        );
-        return validateGraphDocument(data);
+        try {
+          return validateGraphDocument(
+            await readJsonFile<unknown>(path.join(this.root, "graphs", f)),
+          );
+        } catch {
+          return null;
+        }
       }),
     );
-    return docs.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+    return docs
+      .filter((doc): doc is AgentGraphDocument => !!doc)
+      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   }
   async graph(id: string): Promise<AgentGraphDocument> {
     const raw = await readJsonFile(this.graphPath(id));

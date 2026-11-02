@@ -49,7 +49,12 @@ test("Kilo nodes on a host without the VM runtime are reported before running", 
     platform: "win32",
     programIoVm: false,
   });
-  assert.match(windows!, /macOS 26에서만/);
+  assert.match(windows!, /macOS 26과 Linux/);
+  const [linux] = isolationNotes(bound(kilo), [kilo], {
+    platform: "linux",
+    programIoVm: false,
+  });
+  assert.match(linux!, /Podman/);
 });
 
 test("non-Kilo connections are named as covered only by their native sandbox", () => {

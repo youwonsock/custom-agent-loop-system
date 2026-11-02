@@ -40,4 +40,5 @@ export const autonomousDefaults = (
   authoredNodeTests: true,
   targetScopeGuard: true,
   programIoGuard: true,
+  claudeVm: false,
 });

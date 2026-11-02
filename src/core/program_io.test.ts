@@ -1,3 +1,6 @@
+import { VM_BINARY, isolationSupported, listVms } from "./program_io_vm";
+import { nativeVmBackend, ProgramIoBackend } from "./program_io";
+import { claudeVmDecision } from "./program_io_claude";
 import test from "node:test";
 import assert from "node:assert/strict";
 import * as fs from "node:fs";
@@ -42,8 +45,8 @@ import { sha } from "./values";
 const mac = process.platform === "darwin",
   sq = (s: string) => "'" + s.replace(/'/g, "'\\''") + "'";
 // verify:vm sets AGENT_GRAPH_REQUIRE_VM so a missing or stale runtime fails instead of skipping.
-const vmSkip = !mac
-  ? "macOS only"
+const vmSkip = !isolationSupported()
+  ? "not supported here"
   : process.env.AGENT_GRAPH_REQUIRE_VM === "1" || vmRuntimeStatus() === "ready"
     ? false
     : `VM runtime ${vmRuntimeStatus()}; run npm run sandbox:prepare`;
@@ -68,7 +71,7 @@ const seatbeltSkip = seatbeltSkipReason();
 async function workspace(
   t: { after(fn: () => Promise<unknown>): unknown },
   role: "implementation" | "test" | "review" = "implementation",
-  backend: "macos-seatbelt" | "apple-container-vm" = "macos-seatbelt",
+  backend: ProgramIoBackend = "macos-seatbelt",
 ) {
   const root = await fsp.mkdtemp(path.join(os.tmpdir(), "program io-")),
     target = path.join(root, "target"),
@@ -691,11 +694,7 @@ test(
   "isolated VM programs cannot use host loopback services as filesystem delegates",
   { skip: vmSkip },
   async (t) => {
-    const { policy } = await workspace(
-      t,
-      "implementation",
-      "apple-container-vm",
-    );
+    const { policy } = await workspace(t, "implementation", nativeVmBackend());
     const server = createServer();
     await new Promise<void>((resolve) =>
       server.listen(0, "127.0.0.1", resolve),
@@ -714,13 +713,99 @@ test(
   },
 );
 test(
+  "VM: Claude's Bash leaves for the VM through the hook, and its other tools stay in the target",
+  { skip: vmSkip },
+  async (t) => {
+    const { policy, outside } = await workspace(
+      t,
+      "implementation",
+      nativeVmBackend(),
+    );
+    const protocol = {
+      cwd: policy.cwd,
+      roots: [policy.cwd],
+      readOnly: false,
+      testRole: false,
+      commands: [],
+    };
+    const decide = (tool: string, input: Record<string, unknown>) =>
+      (
+        claudeVmDecision(
+          { tool_name: tool, tool_input: input, tool_use_id: "use-1" },
+          policy,
+          protocol,
+        ) as {
+          hookSpecificOutput: {
+            permissionDecision: string;
+            updatedInput?: { command: string };
+          };
+        }
+      ).hookSpecificOutput;
+    assert.equal(
+      decide("Read", { file_path: path.join(policy.cwd, "inside.txt") })
+        .permissionDecision,
+      "allow",
+    );
+    assert.equal(
+      decide("Read", { file_path: path.join(outside, "sentinel.txt") })
+        .permissionDecision,
+      "deny",
+    );
+    assert.equal(decide("WebFetch", {}).permissionDecision, "deny");
+    assert.equal(
+      decide("Bash", { command: wrapProgramCommand("true", policy) })
+        .permissionDecision,
+      "deny",
+    );
+    const hostile = `const f=require('node:fs');let d=0;try{f.readFileSync(${JSON.stringify(path.join(outside, "sentinel.txt"))})}catch{d++}console.log(d)`;
+    const native = "node -e " + sq(hostile);
+    const decision = decide("Bash", { command: native });
+    const child = spawnSync("/bin/sh", ["-c", decision.updatedInput!.command], {
+      cwd: policy.cwd,
+      env: { ...process.env, AGENT_GRAPH_PROGRAM_IO: JSON.stringify(policy) },
+      encoding: "utf8",
+      timeout: 20000,
+    });
+    assert.equal(child.status, 0, child.stderr);
+    assert.equal(
+      child.stdout.trim(),
+      "1",
+      "the VM cannot see the outside file",
+    );
+    const tracker = new ProgramIoTracker(policy);
+    const events = (id: string) => [
+      {
+        type: "assistant",
+        message: {
+          content: [
+            { type: "tool_use", id, name: "Bash", input: { command: native } },
+          ],
+        },
+      },
+      {
+        type: "user",
+        message: { content: [{ type: "tool_result", tool_use_id: id }] },
+      },
+    ];
+    for (const event of events("use-1")) tracker.normalize(event);
+    let audit = tracker.finish();
+    assert.equal(audit.completedCommands, 1);
+    assert.equal(audit.invalidReceipts, 0);
+    assert.equal(audit.unwrappedCommands, 0);
+    assert.equal(audit.commands[0]!.containerRemoved, true);
+    for (const event of events("no-hook-saw-this")) tracker.normalize(event);
+    audit = tracker.finish();
+    assert.equal(audit.unwrappedCommands, 1, "it ran on the host");
+  },
+);
+test(
   "VM boundary blocks host files, guest outside writes, and detached processes are destroyed before command acceptance",
   { skip: vmSkip },
   async (t) => {
     const { policy, outside, target } = await workspace(
       t,
       "implementation",
-      "apple-container-vm",
+      nativeVmBackend(),
     );
     const code = `const f=require('node:fs'),c=require('node:child_process'),p=${JSON.stringify(path.join(outside, "sentinel.txt"))};let denied=0;for(const fn of [()=>f.readFileSync(p),()=>f.writeFileSync(p,'bad'),()=>f.readdirSync(${JSON.stringify(outside)}),()=>f.statSync(p),()=>f.writeFileSync('/tmp/agent-outside.txt','bad'),()=>f.writeFileSync('frozen.txt','bad')])try{fn()}catch(e){if(['EPERM','EACCES','ENOENT','EROFS'].includes(e.code))denied++}const q=c.spawnSync(process.execPath,['-e',"try{require('node:fs').readFileSync(process.argv[1]);process.exit(9)}catch(e){process.exit(e.code==='ENOENT'?0:8)}",p]);const bg=c.spawn(process.execPath,['-e',"setTimeout(()=>require('node:fs').writeFileSync('late-write.txt','bad'),2000)"],{detached:true,stdio:'ignore'});bg.unref();console.log(JSON.stringify({denied,child:q.status,secret:!!process.env.AGENT_GRAPH_PROGRAM_IO}));`;
     const result = run("node -e " + sq(code), policy);
@@ -750,7 +835,7 @@ test(
   { skip: vmSkip },
   async (t) => {
     for (const role of ["test", "review"] as const) {
-      const { policy, target } = await workspace(t, role, "apple-container-vm");
+      const { policy, target } = await workspace(t, role, nativeVmBackend());
       const result = run(
         "node -e " +
           sq(
@@ -771,11 +856,7 @@ test(
   "controller cleans only an orphaned policy VM and retains invalid completion evidence",
   { skip: vmSkip },
   async (t) => {
-    const { policy } = await workspace(
-      t,
-      "implementation",
-      "apple-container-vm",
-    );
+    const { policy } = await workspace(t, "implementation", nativeVmBackend());
     const name = `agio-${policy.id.slice(0, 16)}-orphan-fixture`;
     const child = spawnSync(
       policy.vm!.binary,
@@ -787,8 +868,7 @@ test(
         "--network",
         "none",
         "--read-only",
-        "--progress",
-        "none",
+        ...(process.platform === "linux" ? [] : ["--progress", "none"]),
         policy.vm!.image,
         "sleep",
         "60",
@@ -798,18 +878,7 @@ test(
     assert.equal(child.status, 0, child.stderr);
     const tracker = new ProgramIoTracker(policy);
     assert.equal(tracker.finish().invalidReceipts, 1);
-    const list = spawnSync(
-      policy.vm!.binary,
-      ["list", "--all", "--format", "json"],
-      { encoding: "utf8" },
-    );
-    assert.equal(list.status, 0, list.stderr);
-    assert.ok(
-      !JSON.parse(list.stdout).some(
-        (item: { id?: string; configuration?: { id?: string } }) =>
-          (item.id ?? item.configuration?.id) === name,
-      ),
-    );
+    assert.ok(!listVms(policy.vm!).includes(name));
   },
 );
 test("VM runtime status separates missing, stale and corrupt descriptors without starting anything", async (t) => {
@@ -823,7 +892,7 @@ test("VM runtime status separates missing, stale and corrupt descriptors without
   });
   process.env.AGENT_GRAPH_IO_VM_RUNTIME = file;
   assert.equal(vmRuntimeStatus(), "missing");
-  if (!fs.existsSync("/opt/homebrew/bin/container")) return;
+  if (!fs.existsSync(VM_BINARY)) return;
   fs.writeFileSync(file, "{not json");
   assert.equal(vmRuntimeStatus(), "stale");
   fs.writeFileSync(file, JSON.stringify({ lockDigest: "other" }));
@@ -1370,20 +1439,10 @@ test(
     }
   },
 );
-const vmNames = (policy: ProgramIoPolicy): string[] => {
-  const list = spawnSync(
-    policy.vm!.binary,
-    ["list", "--all", "--format", "json"],
-    { encoding: "utf8", timeout: 15000 },
+const vmNames = (policy: ProgramIoPolicy): string[] =>
+  listVms(policy.vm!).filter((name) =>
+    name.startsWith(vmCommandName(policy.id, "")),
   );
-  assert.equal(list.status, 0, list.stderr);
-  return JSON.parse(list.stdout)
-    .map(
-      (item: { id?: string; configuration?: { id?: string } }) =>
-        item.id ?? item.configuration?.id,
-    )
-    .filter((name: string) => name.startsWith(vmCommandName(policy.id, "")));
-};
 async function untilStarted(policy: ProgramIoPolicy): Promise<void> {
   const file = path.join(policy.directory, "receipts.jsonl"),
     deadline = Date.now() + 30000;
@@ -1418,11 +1477,7 @@ for (const [when, vmUp] of [
     `VM: a broker killed ${when} leaves no VM and a signed start, and no broker starts another`,
     { skip: vmSkip },
     async (t) => {
-      const { policy, target } = await workspace(
-        t,
-        "test",
-        "apple-container-vm",
-      );
+      const { policy, target } = await workspace(t, "test", nativeVmBackend());
       fs.mkdirSync(path.join(target, "verification"), { recursive: true });
       const broker = startBroker(
         "sleep 2; echo late > verification/late.txt; sleep 60",
@@ -1471,7 +1526,7 @@ test(
   "VM: a signed broker that outlives the CLI ends its VM and still counts as interrupted",
   { skip: vmSkip },
   async (t) => {
-    const { policy } = await workspace(t, "test", "apple-container-vm");
+    const { policy } = await workspace(t, "test", nativeVmBackend());
     const broker = startBroker("sleep 60", policy);
     await untilStarted(policy);
     const closed = new Promise((resolve) => broker.once("close", resolve));
@@ -1489,7 +1544,7 @@ test(
   "VM: a VM left running without a platform stop stays invalid",
   { skip: vmSkip },
   async (t) => {
-    const { policy } = await workspace(t, "test", "apple-container-vm");
+    const { policy } = await workspace(t, "test", nativeVmBackend());
     const broker = startBroker("sleep 60", policy);
     await untilStarted(policy);
     await untilVmListed(policy);
@@ -1506,7 +1561,7 @@ test(
   "VM: parallel ls and a denied find end the test CLI without a false isolation violation",
   { skip: vmSkip },
   async (t) => {
-    const { policy, root } = await workspace(t, "test", "apple-container-vm");
+    const { policy, root } = await workspace(t, "test", nativeVmBackend());
     const cli = path.join(root, "parallel-fixture.cjs");
     fs.writeFileSync(
       cli,

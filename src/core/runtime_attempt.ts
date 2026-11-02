@@ -42,7 +42,7 @@ export function invocationOptionsFor(
           ],
         }
       : {}),
-    ...(policy.kiloProgramIo
+    ...(policy.kiloProgramIo || policy.claudeProgramIo
       ? {
           programIoGuard: {
             directory: path.join(

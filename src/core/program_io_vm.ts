@@ -23,6 +23,15 @@ export interface VmPolicy extends VmRuntime {
   uid: number;
   gid: number;
 }
+/** The runtime's CLI. Podman is a container on the host's kernel, not a VM of its own. */
+export const VM_BINARY =
+  process.platform === "linux"
+    ? "/usr/bin/podman"
+    : "/opt/homebrew/bin/container";
+export const isolationSupported = (): boolean =>
+  process.platform === "linux" ||
+  (process.platform === "darwin" && process.arch === "arm64");
+const usesPodman = (binary: string) => path.basename(binary) === "podman";
 export function containerHostEnvironment(
   vm: Pick<VmRuntime, "controlHome"> = {},
 ): Record<string, string> {
@@ -30,6 +39,10 @@ export function containerHostEnvironment(
     PATH: "/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin",
     HOME: vm.controlHome ?? os.homedir(),
     LANG: "en_US.UTF-8",
+    // Rootless Podman keeps its socket and storage state here.
+    ...(process.env.XDG_RUNTIME_DIR
+      ? { XDG_RUNTIME_DIR: process.env.XDG_RUNTIME_DIR }
+      : {}),
   };
 }
 export function vmRuntimeFile(): string {
@@ -40,10 +53,7 @@ export function vmRuntimeFile(): string {
 }
 /** A cheap check without starting anything; prepareVmPolicy still verifies the image. */
 export function vmRuntimeStatus(): "ready" | "missing" | "stale" {
-  if (
-    !fs.existsSync(vmRuntimeFile()) ||
-    !fs.existsSync("/opt/homebrew/bin/container")
-  )
+  if (!fs.existsSync(vmRuntimeFile()) || !fs.existsSync(VM_BINARY))
     return "missing";
   try {
     const prepared = JSON.parse(fs.readFileSync(vmRuntimeFile(), "utf8")),
@@ -83,10 +93,11 @@ export function imageDigest(
     cli(binary, ["image", "inspect", image], 15000, home),
   );
   const item = Array.isArray(data) ? data[0] : data;
-  const digest =
-    item?.configuration?.descriptor?.digest ??
-    item?.index?.digest ??
-    item?.descriptor?.digest;
+  const digest = usesPodman(binary)
+    ? `sha256:${String(item?.Id).replace(/^sha256:/, "")}`
+    : (item?.configuration?.descriptor?.digest ??
+      item?.index?.digest ??
+      item?.descriptor?.digest);
   if (typeof digest !== "string" || !/^sha256:[a-f0-9]{64}$/.test(digest))
     throw unavailable("Container image identity is unavailable.");
   return digest;
@@ -114,23 +125,25 @@ export function prepareVmPolicy(
     fs.readFileSync(vmRuntimeFile(), "utf8"),
   ) as VmRuntime;
   if (
-    value.binary !== "/opt/homebrew/bin/container" ||
+    value.binary !== VM_BINARY ||
     typeof value.image !== "string" ||
     !value.image ||
     !/^sha256:[a-f0-9]{64}$/.test(value.imageDigest)
   )
     throw unavailable("Invalid isolated runtime descriptor.");
-  if (!/\b1\.6\.0\b/.test(cli(value.binary, ["--version"])))
-    throw unavailable(
-      "Unsupported container CLI version; this adapter is verified with 1.6.0.",
-    );
-  const status = spawnSync(value.binary, ["system", "status"], {
-    encoding: "utf8",
-    timeout: 10000,
-    env: containerHostEnvironment(),
-  });
-  if (status.status !== 0)
-    cli(value.binary, ["system", "start", "--disable-kernel-install"], 30000);
+  if (!usesPodman(value.binary)) {
+    if (!/\b1\.6\.0\b/.test(cli(value.binary, ["--version"])))
+      throw unavailable(
+        "Unsupported container CLI version; this adapter is verified with 1.6.0.",
+      );
+    const status = spawnSync(value.binary, ["system", "status"], {
+      encoding: "utf8",
+      timeout: 10000,
+      env: containerHostEnvironment(),
+    });
+    if (status.status !== 0)
+      cli(value.binary, ["system", "start", "--disable-kernel-install"], 30000);
+  }
   const metadata = JSON.parse(
     fs.readFileSync(
       path.join(distRoot, "program_io_dependencies.json"),
@@ -200,6 +213,7 @@ export function vmCommandArguments(
   environment: Record<string, string>,
   policyId: string,
 ): string[] {
+  const podman = usesPodman(vm.binary);
   const args = [
     "run",
     "--name",
@@ -208,14 +222,22 @@ export function vmCommandArguments(
     `agent.graph.policy=${policyId}`,
     "--network",
     "none",
-    "--no-dns",
+    ...(podman ? [] : ["--no-dns"]),
     "--read-only",
     "--cap-drop",
     "ALL",
-    "--uid",
-    String(vm.uid),
-    "--gid",
-    String(vm.gid),
+    ...(podman
+      ? [
+          "--security-opt",
+          "no-new-privileges",
+          // Podman otherwise adds a writable /tmp, which the VM does not have.
+          "--read-only-tmpfs=false",
+          "--userns",
+          "keep-id",
+          "--user",
+          `${vm.uid}:${vm.gid}`,
+        ]
+      : ["--uid", String(vm.uid), "--gid", String(vm.gid)]),
     "--cpus",
     "2",
     "--memory",
@@ -224,8 +246,7 @@ export function vmCommandArguments(
     "256M",
     "--workdir",
     cwd,
-    "--progress",
-    "none",
+    ...(podman ? [] : ["--progress", "none"]),
   ];
   const mount = (source: string, target: string, readonly: boolean) =>
     args.push(
@@ -246,7 +267,9 @@ export function vmCommandArguments(
   if (vm.mode === "implementation")
     for (const file of vm.protectedFiles) {
       const p = path.resolve(cwd, file);
-      if (fs.existsSync(p)) args.push("--read-only-path", p);
+      if (!fs.existsSync(p)) continue;
+      if (podman) mount(p, p, true);
+      else args.push("--read-only-path", p);
     }
   for (const [k, v] of Object.entries(environment))
     args.push("--env", `${k}=${v}`);
@@ -259,36 +282,53 @@ export function vmCommandArguments(
   return args;
 }
 export function removeVm(vm: VmRuntime, name: string): boolean {
-  const removed = spawnSync(vm.binary, ["delete", "--force", name], {
-    encoding: "utf8",
-    timeout: 15000,
-    maxBuffer: 65536,
-    env: containerHostEnvironment(vm),
-  });
+  const removed = spawnSync(
+    vm.binary,
+    // Without --time 0 Podman waits ten seconds, and the command keeps running.
+    usesPodman(vm.binary)
+      ? ["rm", "--force", "--time", "0", name]
+      : ["delete", "--force", name],
+    {
+      encoding: "utf8",
+      timeout: 15000,
+      maxBuffer: 65536,
+      env: containerHostEnvironment(vm),
+    },
+  );
   if (
     removed.status !== 0 &&
-    !/notfound|not found|does not exist/i.test(removed.stderr)
+    !/notfound|not found|does not exist|no such container/i.test(removed.stderr)
   )
     return false;
   try {
-    const all = JSON.parse(
-      cli(
-        vm.binary,
-        ["list", "--all", "--format", "json"],
-        15000,
-        vm.controlHome,
-      ),
-    );
-    return (
-      Array.isArray(all) &&
-      !all.some(
-        (item: { id?: string; configuration?: { id?: string } }) =>
-          item.id === name || item.configuration?.id === name,
-      )
-    );
+    return !listVms(vm).includes(name);
   } catch {
     return false;
   }
+}
+/** Names of every VM the runtime knows, running or not. */
+export function listVms(vm: VmRuntime): string[] {
+  const podman = usesPodman(vm.binary);
+  const all = JSON.parse(
+    cli(
+      vm.binary,
+      podman
+        ? ["ps", "--all", "--format", "json"]
+        : ["list", "--all", "--format", "json"],
+      15000,
+      vm.controlHome,
+    ),
+  );
+  if (!Array.isArray(all))
+    throw unavailable("Cannot confirm owned VM cleanup.");
+  return all.flatMap(
+    (item: {
+      id?: string;
+      configuration?: { id?: string };
+      Names?: string[];
+    }) =>
+      podman ? (item.Names ?? []) : [item.id ?? item.configuration?.id ?? ""],
+  );
 }
 export const vmCommandName = (policyId: string, commandId: string): string =>
   `agio-${policyId.slice(0, 16)}-${commandId.slice(0, 16)}`;
@@ -297,26 +337,8 @@ export const vmCommandName = (policyId: string, commandId: string): string =>
  * Returns the names it removed.
  */
 export function cleanupPolicyVms(vm: VmRuntime, policyId: string): string[] {
-  const all = JSON.parse(
-    cli(
-      vm.binary,
-      ["list", "--all", "--format", "json"],
-      15000,
-      vm.controlHome,
-    ),
-  );
-  if (!Array.isArray(all))
-    throw unavailable("Cannot confirm owned VM cleanup.");
   const prefix = vmCommandName(policyId, "");
-  const names = all
-    .map(
-      (item: { id?: string; configuration?: { id?: string } }) =>
-        item.id ?? item.configuration?.id,
-    )
-    .filter(
-      (id: unknown): id is string =>
-        typeof id === "string" && id.startsWith(prefix),
-    );
+  const names = listVms(vm).filter((name) => name.startsWith(prefix));
   for (const name of names)
     if (!removeVm(vm, name)) throw unavailable("Owned VM cleanup failed.");
   return names;

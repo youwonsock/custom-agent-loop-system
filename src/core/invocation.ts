@@ -1,3 +1,4 @@
+import { prepareClaudeIsolation } from "./invocation_claude";
 import { AgentNode, ExecutionBinding, LocalConnection } from "../shared/domain";
 import { resolveExecutable } from "./catalog";
 import * as path from "node:path";
@@ -41,10 +42,13 @@ export async function buildInvocation(
   const executable = await resolveExecutable(c.binary),
     readonly = isReadOnly(node.type),
     env = inheritedEnvironment();
-  const programIo =
-    c.type === "kilo" && opts.programIoGuard
+  const programIo = !opts.programIoGuard
+    ? undefined
+    : c.type === "kilo"
       ? prepareKiloIsolation(node, opts, opts.programIoGuard, env, readonly)
-      : undefined;
+      : c.type === "claude"
+        ? prepareClaudeIsolation(node, opts, opts.programIoGuard, env, readonly)
+        : undefined;
   const context: InvocationContext = {
     binding: b,
     opts,

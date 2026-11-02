@@ -56,6 +56,8 @@ export interface AgentGraphDocument {
     authoredNodeTests: boolean;
     targetScopeGuard: boolean;
     programIoGuard: boolean;
+    /** Claude's Bash runs in the VM. Off by default: no network, and macOS only. */
+    claudeVm: boolean;
   };
   entrypoints: {
     start: string | null;
@@ -200,7 +202,7 @@ export interface NativeScopeAudit {
 }
 export interface ProgramIoAudit {
   version: 1;
-  backend: "macos-seatbelt" | "apple-container-vm";
+  backend: "macos-seatbelt" | "apple-container-vm" | "linux-podman-container";
   policyId: string;
   profileDigest: string;
   cwd: string;

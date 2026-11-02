@@ -359,6 +359,28 @@ test("recovered terminal snapshots fail closed without current test evidence and
   );
 });
 
+test("a saved graph this version cannot read does not stop the app, and stays on disk", async (t) => {
+  const s = await setup();
+  t.after(s.cleanup);
+  const stale = await s.store.createGraph({ template: "autonomous" });
+  const file = path.join(s.root, "graphs", `${stale.id}.json`);
+  const saved = JSON.parse(await fs.readFile(file, "utf8"));
+  delete saved.automation.claudeVm;
+  const text = JSON.stringify(saved);
+  await fs.writeFile(file, text);
+  const response = await s.app.inject({
+    url: "/api/bootstrap",
+    headers: { host },
+  });
+  assert.equal(response.statusCode, 200, response.body);
+  assert.ok(
+    !response
+      .json<{ graphs: { id: string }[] }>()
+      .graphs.some((g) => g.id === stale.id),
+  );
+  assert.equal(await fs.readFile(file, "utf8"), text);
+});
+
 test("a spending limit is refused for a CLI that reports no cost, or when it is not positive", async (t) => {
   const s = await setup();
   t.after(s.cleanup);

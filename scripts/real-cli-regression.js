@@ -54,6 +54,7 @@ const SCENARIOS = {
       authoredNodeTests: false,
       targetScopeGuard: false,
       programIoGuard: false,
+      claudeVm: false,
       ...profile.automation,
     }),
     passed: () => true,
@@ -160,7 +161,7 @@ async function main() {
     scenario = SCENARIOS[scenarioName];
   if (!config || !scenario)
     throw new Error(
-      "Usage: real-cli-regression.js claude|kilo [--scenario slugify|tiny-web|tiny-web-tests] [--model text]",
+      "Usage: real-cli-regression.js claude|kilo [--scenario slugify|tiny-web|tiny-web-tests] [--claude-vm] [--model text]",
     );
   const stamp = new Date().toISOString().replace(/[:.]/g, "-"),
     output = path.join(
@@ -202,6 +203,7 @@ async function main() {
   const document = createAutonomousGraph(`Regression ${profile}`);
   document.defaultBinding = { connectionId: profile, modelId: model.id };
   document.automation = scenario.automation(config) ?? document.automation;
+  if (process.argv.includes("--claude-vm")) document.automation.claudeVm = true;
   const graph = await store.createGraph({ document });
   const manager = new SessionCoordinator(store);
   // Resumes RECOVERING sessions, as the app's server does. Without it a run that

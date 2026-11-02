@@ -1,3 +1,4 @@
+import type { ProgramIoAudit } from "../shared/domain";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
@@ -11,12 +12,18 @@ import {
   vmCommandArguments,
   removeVm,
   containerHostEnvironment,
+  isolationSupported,
 } from "./program_io_vm";
 import { obj } from "./values";
 import { sha } from "./values";
 import { isWithin } from "./access_paths";
 import { IoUnavailable } from "./program_io_errors";
 
+export type ProgramIoBackend = ProgramIoAudit["backend"];
+export const nativeVmBackend = (): ProgramIoBackend =>
+  process.platform === "linux"
+    ? "linux-podman-container"
+    : "apple-container-vm";
 export const IO_VIOLATION = "[AGENT_GRAPH_IO_VIOLATION]";
 export const IO_DENIED = "[AGENT_GRAPH_IO_DENIED]";
 /** In the broker directory, outside every VM mount. Brokers start no VM once it exists. */
@@ -39,7 +46,7 @@ export interface ProgramIoPolicy {
   scratch: string;
   preflightPassed: boolean;
   browserPath: string;
-  backend: "macos-seatbelt" | "apple-container-vm";
+  backend: ProgramIoBackend;
   vm?: VmPolicy;
 }
 export type ProgramIoCommandPolicy = Pick<
@@ -311,9 +318,14 @@ export function prepareProgramIo(options: {
   readOnly: boolean;
   protectedFiles?: string[];
   expiresAt?: number;
-  backend?: "macos-seatbelt" | "apple-container-vm";
+  backend?: ProgramIoBackend;
 }): ProgramIoPolicy {
-  if (process.platform !== "darwin" || !fs.existsSync("/usr/bin/sandbox-exec"))
+  const backend = options.backend ?? nativeVmBackend();
+  if (
+    backend === "macos-seatbelt"
+      ? process.platform !== "darwin" || !fs.existsSync("/usr/bin/sandbox-exec")
+      : !isolationSupported()
+  )
     throw new IoUnavailable(
       `Kernel program I/O isolation is not supported on this host; refusing unsandboxed execution.`,
     );
@@ -362,7 +374,6 @@ export function prepareProgramIo(options: {
       path.join(cwd, "verification/.agent-io"),
     ])
       profile += `(allow file-write-create (require-all (literal ${JSON.stringify(dir)}) (vnode-type DIRECTORY)))\n`;
-  const backend = options.backend ?? "apple-container-vm";
   const keys = generateKeyPairSync("ed25519"),
     policy: ProgramIoPolicy = {
       version: 1,
@@ -390,7 +401,7 @@ export function prepareProgramIo(options: {
         path.join(os.homedir(), "Library/Caches/ms-playwright"),
       backend,
     };
-  if (backend === "apple-container-vm") {
+  if (backend !== "macos-seatbelt") {
     try {
       policy.vm = prepareVmPolicy(
         directory,
@@ -428,7 +439,7 @@ export function prepareProgramIo(options: {
   const canary = path.join(directory, "outside-canary.txt");
   fs.writeFileSync(canary, "protected-broker-canary");
   const denied =
-    backend === "apple-container-vm"
+    backend !== "macos-seatbelt"
       ? "['EPERM','EACCES','ENOENT'].includes(e.code)"
       : "['EPERM','EACCES'].includes(e.code)";
   const code = `const f=require('node:fs'),c=require('node:child_process'),p=${JSON.stringify(canary)};let n=0;for(const fn of [()=>f.readFileSync(p),()=>f.writeFileSync(p,'escape'),()=>f.readdirSync(${JSON.stringify(directory)}),()=>f.statSync(p)]){try{fn()}catch(e){if(${denied})n++}}const child=c.spawnSync(process.execPath,['-e',"try{require('node:fs').readFileSync(process.argv[1]);process.exit(9)}catch(e){process.exit(${denied}?0:8)}",p],{stdio:'pipe'});if(n!==4||child.status!==0)process.exit(7);${backend === "apple-container-vm" ? "if(Object.keys(require('node:os').networkInterfaces()).some(n=>n!=='lo'))process.exit(6);" : ""}console.log('AGENT_GRAPH_KERNEL_PREFLIGHT_OK');`;
