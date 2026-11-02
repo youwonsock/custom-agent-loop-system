@@ -54,4 +54,14 @@ test("whole-session deadlines and native attempts include report retries without
     600000,
     "a shorter limit leaves the window alone",
   );
+  const explicit = autonomousExecutionSettings({
+    phaseTimeoutMs: 1000,
+    phaseRecoveryBudgetMs: 1200,
+    transportTimeoutMs: 600,
+    idleTimeoutMs: 600,
+    toolTimeoutMs: 600,
+    maxAgentAttempts: 1,
+  });
+  assert.equal(explicit.phaseTimeoutMs, 1000, "limits that fit stay as given");
+  assert.equal(explicit.phaseRecoveryBudgetMs, 1200);
 });

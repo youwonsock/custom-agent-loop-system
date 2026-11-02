@@ -67,9 +67,9 @@ export function fitToolLimit(
   overrides?: Partial<ExecutionSettings>,
   base?: Partial<ExecutionSettings>,
 ): Partial<ExecutionSettings> | undefined {
-  if (overrides?.toolTimeoutMs === undefined) return overrides;
   const s = { ...defaults, ...base, ...overrides };
-  const phaseTimeoutMs = Math.max(s.phaseTimeoutMs, s.toolTimeoutMs + 300000);
+  if (s.toolTimeoutMs <= s.phaseTimeoutMs) return overrides;
+  const phaseTimeoutMs = s.toolTimeoutMs + 300000;
   const waits = s.retryBackoffMs
     .slice(0, s.maxAgentAttempts - 1)
     .reduce((a, b) => a + b, 0);
