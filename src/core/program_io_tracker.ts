@@ -13,12 +13,14 @@ import {
   unwrapProgramCommand,
   programProofAuthorization,
 } from "./program_io";
+import { CLAUDE_CALLS_FILE } from "./program_io_claude";
 
 const BROKER_SETTLE_MS = 15000;
 
 export class ProgramIoTracker {
   private readonly calls = new Map<string, { id: string; command: string }>();
   private unwrapped = 0;
+  private readonly claudeCalls = new Set<string>();
   private stoppedAt: number | null = null;
   constructor(
     readonly policy: ProgramIoPolicy,
@@ -39,7 +41,48 @@ export class ProgramIoTracker {
       /* Without the record every start-only receipt stays invalid. */
     }
   }
+  /**
+   * Claude reports the command it asked for, not what the hook rewrote it to, so its
+   * calls are matched through the hook's own record. A Bash result with no record ran
+   * without the hook.
+   */
+  private observeClaude(event: Obj): void {
+    const blocks = obj(event.message).content;
+    if (!Array.isArray(blocks)) return;
+    for (const block of blocks.map(obj)) {
+      if (
+        event.type === "assistant" &&
+        block.type === "tool_use" &&
+        block.name === "Bash"
+      )
+        this.claudeCalls.add(String(block.id));
+      if (
+        event.type !== "user" ||
+        block.type !== "tool_result" ||
+        !this.claudeCalls.delete(String(block.tool_use_id))
+      )
+        continue;
+      const record = this.claudeRecords().get(String(block.tool_use_id));
+      if (record) this.calls.set(record.id, record);
+      // The hook also records nothing when it refuses a call, and that call never ran.
+      else if (block.is_error !== true) this.unwrapped++;
+    }
+  }
+  private claudeRecords(): Map<string, { id: string; command: string }> {
+    const file = path.join(this.policy.directory, CLAUDE_CALLS_FILE),
+      records = new Map<string, { id: string; command: string }>();
+    if (!fs.existsSync(file)) return records;
+    for (const line of fs
+      .readFileSync(file, "utf8")
+      .split("\n")
+      .filter(Boolean)) {
+      const { toolUseId, id, command } = JSON.parse(line);
+      records.set(String(toolUseId), { id, command });
+    }
+    return records;
+  }
   normalize(event: Obj): Obj {
+    this.observeClaude(event);
     const part = obj(event.part),
       state = obj(part.state),
       args = obj(state.input);
@@ -285,15 +328,19 @@ export class ProgramIoTracker {
   }
 }
 export function programIoEvidenceProblem(state: SessionState): string | null {
-  if (!state.graph.automation?.programIoGuard) return null;
+  const automation = state.graph.automation;
+  if (!automation?.programIoGuard && !automation?.claudeVm) return null;
   for (const visit of state.visits)
     for (const attempt of visit.attempts) {
       const binding = state.bindings[visit.nodeId],
-        kilo =
-          state.connections.find((c) => c.id === binding?.connectionId)
-            ?.type === "kilo",
+        type = state.connections.find(
+          (c) => c.id === binding?.connectionId,
+        )?.type,
+        required =
+          (type === "kilo" && automation.programIoGuard) ||
+          (type === "claude" && automation.claudeVm),
         a = attempt.programIoAudit;
-      if (!kilo && !a) continue;
+      if (!required && !a) continue;
       let root = state.targetProjectPath;
       try {
         root = fs.realpathSync(root);

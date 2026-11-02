@@ -20,6 +20,8 @@ export interface RunPolicy {
   kiloScopeGuard: boolean;
   /** Kilo tool programs confined to an isolated VM. */
   kiloProgramIo: boolean;
+  /** Claude's Bash confined to the same VM. */
+  claudeProgramIo: boolean;
 }
 
 export function runPolicy(
@@ -36,5 +38,6 @@ export function runPolicy(
     browserVerification: !!a?.browserVerification,
     kiloScopeGuard: connection?.type === "kilo" && !!a?.targetScopeGuard,
     kiloProgramIo: connection?.type === "kilo" && !!a?.programIoGuard,
+    claudeProgramIo: connection?.type === "claude" && !!a?.claudeVm,
   };
 }

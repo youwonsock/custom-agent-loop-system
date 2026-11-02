@@ -103,6 +103,21 @@ export default function GraphSettings({
                 "Kilo 프로그램·자식 프로세스의 파일 I/O 격리 (미지원 환경은 실행 중단)",
               )}
             </label>
+            <label className="checkbox">
+              <input
+                type="checkbox"
+                aria-label={t("Claude 명령 VM 실행")}
+                checked={Boolean(draft.automation.claudeVm)}
+                onChange={(e) =>
+                  change((g) => {
+                    g.automation!.claudeVm = e.target.checked;
+                  })
+                }
+              />
+              {t(
+                "Claude의 Bash 명령을 VM에서 실행 (macOS 전용, 네트워크 없음)",
+              )}
+            </label>
             <label>
               {t("자동 수정 횟수")}
               <input

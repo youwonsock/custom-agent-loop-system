@@ -1,3 +1,4 @@
+import { claudeVmDecision } from "./program_io_claude";
 import test from "node:test";
 import assert from "node:assert/strict";
 import * as fs from "node:fs";
@@ -711,6 +712,92 @@ test(
     const tracker = new ProgramIoTracker(policy);
     tracker.normalize(result.event);
     assert.equal(tracker.finish().commands[0]!.containerRemoved, true);
+  },
+);
+test(
+  "VM: Claude's Bash leaves for the VM through the hook, and its other tools stay in the target",
+  { skip: vmSkip },
+  async (t) => {
+    const { policy, outside } = await workspace(
+      t,
+      "implementation",
+      "apple-container-vm",
+    );
+    const protocol = {
+      cwd: policy.cwd,
+      roots: [policy.cwd],
+      readOnly: false,
+      testRole: false,
+      commands: [],
+    };
+    const decide = (tool: string, input: Record<string, unknown>) =>
+      (
+        claudeVmDecision(
+          { tool_name: tool, tool_input: input, tool_use_id: "use-1" },
+          policy,
+          protocol,
+        ) as {
+          hookSpecificOutput: {
+            permissionDecision: string;
+            updatedInput?: { command: string };
+          };
+        }
+      ).hookSpecificOutput;
+    assert.equal(
+      decide("Read", { file_path: path.join(policy.cwd, "inside.txt") })
+        .permissionDecision,
+      "allow",
+    );
+    assert.equal(
+      decide("Read", { file_path: path.join(outside, "sentinel.txt") })
+        .permissionDecision,
+      "deny",
+    );
+    assert.equal(decide("WebFetch", {}).permissionDecision, "deny");
+    assert.equal(
+      decide("Bash", { command: wrapProgramCommand("true", policy) })
+        .permissionDecision,
+      "deny",
+    );
+    const hostile = `const f=require('node:fs');let d=0;try{f.readFileSync(${JSON.stringify(path.join(outside, "sentinel.txt"))})}catch{d++}console.log(d)`;
+    const native = "node -e " + sq(hostile);
+    const decision = decide("Bash", { command: native });
+    const child = spawnSync("/bin/sh", ["-c", decision.updatedInput!.command], {
+      cwd: policy.cwd,
+      env: { ...process.env, AGENT_GRAPH_PROGRAM_IO: JSON.stringify(policy) },
+      encoding: "utf8",
+      timeout: 20000,
+    });
+    assert.equal(child.status, 0, child.stderr);
+    assert.equal(
+      child.stdout.trim(),
+      "1",
+      "the VM cannot see the outside file",
+    );
+    const tracker = new ProgramIoTracker(policy);
+    const events = (id: string) => [
+      {
+        type: "assistant",
+        message: {
+          content: [
+            { type: "tool_use", id, name: "Bash", input: { command: native } },
+          ],
+        },
+      },
+      {
+        type: "user",
+        message: { content: [{ type: "tool_result", tool_use_id: id }] },
+      },
+    ];
+    for (const event of events("use-1")) tracker.normalize(event);
+    let audit = tracker.finish();
+    assert.equal(audit.completedCommands, 1);
+    assert.equal(audit.invalidReceipts, 0);
+    assert.equal(audit.unwrappedCommands, 0);
+    assert.equal(audit.commands[0]!.containerRemoved, true);
+    for (const event of events("no-hook-saw-this")) tracker.normalize(event);
+    audit = tracker.finish();
+    assert.equal(audit.unwrappedCommands, 1, "it ran on the host");
   },
 );
 test(

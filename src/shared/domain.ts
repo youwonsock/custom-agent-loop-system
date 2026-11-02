@@ -56,6 +56,8 @@ export interface AgentGraphDocument {
     authoredNodeTests: boolean;
     targetScopeGuard: boolean;
     programIoGuard: boolean;
+    /** Claude's Bash runs in the VM. Off by default: no network, and macOS only. */
+    claudeVm: boolean;
   };
   entrypoints: {
     start: string | null;

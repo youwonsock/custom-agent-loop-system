@@ -40,6 +40,7 @@ const AUTOMATION_FLAGS = [
   "authoredNodeTests",
   "targetScopeGuard",
   "programIoGuard",
+  "claudeVm",
 ] as const;
 function checkAutomation(a: NonNullable<AgentGraphDocument["automation"]>) {
   if (

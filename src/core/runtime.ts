@@ -627,6 +627,7 @@ export class GraphRuntime implements GateHost {
     if (
       node.parallelTasks &&
       !stage.policy.kiloScopeGuard &&
+      !stage.policy.claudeProgramIo &&
       this.state.visits.filter((v) => v.nodeId === node.id).length === 1 &&
       visit.attempts.every((a) => a.mode === "parallel_part")
     ) {

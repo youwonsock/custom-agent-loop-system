@@ -54,6 +54,7 @@ const SCENARIOS = {
       authoredNodeTests: false,
       targetScopeGuard: false,
       programIoGuard: false,
+      claudeVm: false,
       ...profile.automation,
     }),
     passed: () => true,
