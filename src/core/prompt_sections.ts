@@ -209,7 +209,7 @@ function contractSections({ state }: PromptContext): string[] {
     !state.graph.automation.authoredNodeTests
   )
     lines.push(
-      "Existing tests: if this project already has an npm test script, keep it unchanged and register it, or a narrower existing test command, as a check. Add new tests in the project's existing test layout. Never rewrite the script or add wrapper files to satisfy this contract.",
+      "Existing tests: if this project already has an npm test script, keep it unchanged and register it, or a narrower existing test command, as a check. Add new tests in the project's existing test layout. Never rewrite the script or add wrapper files inside the project to satisfy this contract. One check must directly run a protected file: if the project builds before testing, write .agent-graph/verify-acceptance.mjs to run the build and the relevant tests, protect it, and register node .agent-graph/verify-acceptance.mjs.",
     );
   if (state.graph.automation?.verificationContract)
     lines.push(

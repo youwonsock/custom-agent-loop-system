@@ -89,6 +89,42 @@ test("contracts require bounded safe paths, unique actual checks and complete re
   };
   assert.equal(validateManifest(web, ["REQ-001"], true).checks.length, 2);
 });
+test("a compiled project can satisfy the direct check from the platform's own folder", () => {
+  const compiled = {
+    version: 1,
+    protectedFiles: ["src/value.test.ts"],
+    checks: [
+      {
+        id: "unit",
+        command: "node --test dist/value.test.js",
+        requirements: ["REQ-001"],
+      },
+    ],
+  };
+  assert.throws(
+    () => validateManifest(compiled, ["REQ-001"], false),
+    /\.agent-graph\/verify-acceptance\.mjs/,
+  );
+  const runner = ".agent-graph/verify-acceptance.mjs";
+  assert.equal(
+    validateManifest(
+      {
+        ...compiled,
+        protectedFiles: [runner],
+        checks: [
+          {
+            id: "unit",
+            command: `node ${runner}`,
+            requirements: ["REQ-001"],
+          },
+        ],
+      },
+      ["REQ-001"],
+      false,
+    ).checks.length,
+    1,
+  );
+});
 test("a broken browser spec is refused before it can be frozen", async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "contract-browser-"));
   t.after(() => fs.rm(root, { recursive: true, force: true }));

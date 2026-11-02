@@ -114,7 +114,7 @@ export function validateManifest(
     )
   )
     throw Error(
-      "보호된 인수 검사 파일을 직접 실행하는 검사가 필요합니다. npm script 이름만으로 검사 충분성을 보장하지 않습니다.",
+      "보호된 인수 검사 파일을 직접 실행하는 검사가 필요합니다. npm script 이름만으로 검사 충분성을 보장하지 않습니다. 소스를 빌드해 실행하는 프로젝트는 빌드와 테스트를 실행하는 .agent-graph/verify-acceptance.mjs를 작성해 protectedFiles에 넣고 node .agent-graph/verify-acceptance.mjs를 검사로 등록하세요.",
     );
   const manifest: VerificationManifest = {
     version: 1,
