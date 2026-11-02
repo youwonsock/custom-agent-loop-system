@@ -132,17 +132,20 @@ export async function removeParts(
   root: string,
   prefix: string,
 ): Promise<void> {
-  // Git lists real paths, and a temporary folder can sit behind a symlink.
-  const real = await fs.realpath(root).catch(() => root);
-  await git(target, "worktree", "list", "--porcelain")
-    .then(async (list) => {
-      for (const [, directory] of list.matchAll(/^worktree (.+)$/gm))
-        if (directory!.startsWith(real))
-          await git(target, "worktree", "remove", "--force", directory!).catch(
-            () => {},
-          );
-    })
-    .catch(() => {});
+  // By branch: git writes paths its own way, with other separators on Windows.
+  const list = await git(target, "worktree", "list", "--porcelain").catch(
+    () => "",
+  );
+  for (const entry of list.split(/
+
++/)) {
+    const directory = /^worktree (.+)$/m.exec(entry)?.[1],
+      branch = /^branch refs\/heads\/(.+)$/m.exec(entry)?.[1];
+    if (directory && branch?.startsWith(`${prefix}/`))
+      await git(target, "worktree", "remove", "--force", directory).catch(
+        () => {},
+      );
+  }
   await git(target, "worktree", "prune").catch(() => {});
   const branches = await git(
     target,
