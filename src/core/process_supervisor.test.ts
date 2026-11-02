@@ -81,9 +81,14 @@ test("pipe transport retains streaming credential redaction and bounded terminat
 // The runtime uses ConPTY on Windows. winpty can lose the split record (1 of 60
 // runs measured, against 0 of 120 on ConPTY), so these cases test the real transport.
 const productionConpty = process.platform === "win32";
+// A loaded Windows runner can stall a helper for seconds. Scaling every limit
+// together keeps the order each case depends on.
+const slow = process.platform === "win32" ? 3 : 1;
 function runFake(
   mode: string,
   timeouts?: {
+    /** The limits already suit this platform: they are tied to a fixed workload. */
+    exact?: boolean;
     transport?: number;
     idle?: number;
     tool?: number;
@@ -103,23 +108,24 @@ function runFake(
     "test",
     "run_supervisor_case.js",
   );
+  const limit = (ms: number) => String(timeouts?.exact ? ms : ms * slow);
   return new Promise((resolve, reject) => {
     execFile(
       process.execPath,
       [
         helper,
         mode,
-        String(timeouts?.transport ?? 1_000),
-        String(timeouts?.idle ?? 1_000),
-        String(timeouts?.tool ?? 1_500),
-        String(timeouts?.phase ?? 2_000),
+        limit(timeouts?.transport ?? 1_000),
+        limit(timeouts?.idle ?? 1_000),
+        limit(timeouts?.tool ?? 1_500),
+        limit(timeouts?.phase ?? 2_000),
         String(timeouts?.cols ?? 1_000),
         String(timeouts?.maxBytes ?? 1024 * 1024),
-        String(timeouts?.absolute ?? timeouts?.phase ?? 2_000),
+        limit(timeouts?.absolute ?? timeouts?.phase ?? 2_000),
         String(timeouts?.conpty ?? false),
         timeouts?.transportMode ?? "pty",
       ],
-      { timeout: 10_000, windowsHide: true },
+      { timeout: 30_000, windowsHide: true },
       (err, stdout, stderr) => {
         if (err) {
           reject(
@@ -264,6 +270,7 @@ test("Kilo bootstrap logs establish transport but repeated capacity logs cannot 
 test("meaningful progress renews the phase window up to the absolute recovery deadline", async () => {
   const windows = process.platform === "win32";
   const result = await runFake("continuous-progress", {
+    exact: true,
     transport: windows ? 2_000 : 750,
     // WinPTY may batch progress while starting the helper or draining output.
     idle: windows ? 1_000 : 250,

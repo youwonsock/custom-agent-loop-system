@@ -284,12 +284,19 @@ export class StudioStore {
             "더 새로운 세션 상태가 저장되어 이전 상태를 덮어쓸 수 없습니다.",
             "stale_session",
           );
-        state.revision = (current?.revision ?? 0) + 1;
-        state.updatedAt = new Date().toISOString();
+        // The caller's copy changes only once the write holds. A failed write that
+        // still advanced it would refuse the very save that reports the failure.
+        const next = {
+          ...state,
+          revision: (current?.revision ?? 0) + 1,
+          updatedAt: new Date().toISOString(),
+        };
         await atomicWriteJsonFile(
           path.join(this.sessionDir(state.id), "state.json"),
-          state,
+          next,
         );
+        state.revision = next.revision;
+        state.updatedAt = next.updatedAt;
       },
     );
   }
