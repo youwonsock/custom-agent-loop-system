@@ -32,7 +32,7 @@ test("no screen shows Korean text outside the translation call", () => {
   for (const file of sources(root)) {
     if (file.includes(`${path.sep}i18n${path.sep}`)) continue;
     fs.readFileSync(file, "utf8")
-      .split("\n")
+      .split(/\r?\n/)
       .forEach((line, i) => {
         const outside = line
           .replace(/\bt\(\s*"(?:[^"\\]|\\.)*"/g, "")
