@@ -12,10 +12,12 @@ import {
   prepareProgramIo,
   wrapProgramCommand,
   unwrapProgramCommand,
-  ProgramIoTracker,
   ProgramIoPolicy,
-  programIoEvidenceProblem,
 } from "./program_io";
+import {
+  ProgramIoTracker,
+  programIoEvidenceProblem,
+} from "./program_io_tracker";
 import { kiloCheckHooks } from "./kilo_protocol";
 import { InspectionTracker } from "./inspection_evidence";
 import { CommandTracker } from "./verification_evidence";

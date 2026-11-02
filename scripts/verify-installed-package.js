@@ -349,7 +349,9 @@ async function main() {
         (await fs.readFile(outside, "utf8")) !== "unchanged"
       )
         throw Error("Installed kernel I/O isolation failed: " + result.stderr);
-      const tracker = new io.ProgramIoTracker(policy);
+      const tracker = new (require(
+        path.join(core, "program_io_tracker.js"),
+      ).ProgramIoTracker)(policy);
       tracker.normalize({
         type: "tool_use",
         part: {
