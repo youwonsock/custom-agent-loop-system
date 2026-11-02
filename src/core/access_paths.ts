@@ -1,3 +1,4 @@
+import * as fs from "node:fs";
 import * as path from "node:path";
 
 // A plan quoting code: `/[^a-z0-9]+/g`, `/slugify\(/`. A character class may hold `/`.
@@ -19,6 +20,17 @@ export function isWithin(
       !relative.startsWith(".." + api.sep) &&
       !api.isAbsolute(relative))
   );
+}
+
+/**
+ * Whether a scanned path could name something on this machine. Text about routes,
+ * regex flags or examples reads like paths in endless wordings, but `/no-such-page`
+ * cannot reach a file when nothing at the top level has that name.
+ */
+export function reachableOnThisMachine(file: string): boolean {
+  const resolved = path.resolve(file),
+    { root } = path.parse(resolved);
+  return fs.existsSync(root + resolved.slice(root.length).split(path.sep)[0]);
 }
 
 /** Advisory prompt scan. Native CLI permissions remain the enforcement boundary. */

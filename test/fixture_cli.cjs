@@ -391,6 +391,9 @@ if (args[0] === "debug" && args[1] === "config") {
           prompt.includes("fixture:plan-external-always"))
       )
         text += "\nRead /tmp/unrequested-reference.txt before implementation.";
+      if (prompt.includes("fixture:plan-prose-paths"))
+        text +=
+          "\nThe test requests /no-such-page-e2b1 and matches with the regex flag /i-e2b1.";
       if (prompt.includes("fixture:plan-http-root"))
         text +=
           "\nHandle `/` -> index.html, static assets with correct MIME types.";

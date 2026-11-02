@@ -625,6 +625,13 @@ test("autonomous plans repair unrequested external paths before asking an operat
     /목표가 요청하지 않은 외부 경로/,
   );
 });
+test("plan text that reads like a path but names nothing on this machine is not rejected", async (t) => {
+  const s = await setup();
+  t.after(s.cleanup);
+  const id = await launch(s, await contracted(s), "fixture:plan-prose-paths");
+  const state = await wait(() => s.store.readSession(id), "SUCCESS");
+  assert.equal(state.visits[0]!.attempts.length, 1);
+});
 test("unrequested external plans exhaust bounded recovery without granting access or starting implementation", async (t) => {
   const s = await setup();
   t.after(s.cleanup);
