@@ -20,7 +20,7 @@
     "verify:platform": "node scripts/run-verification.js platform",
     "verify:browser": "node scripts/run-verification.js browser",
     "verify:vm": "node scripts/run-verification.js vm",
-    "sandbox:prepare": "npm run build && node dist/src/core/program_io_setup.js",
+    "sandbox:prepare": "npm run build && node dist/src/core/program_io/program_io_setup.js",
     "coverage": "npm run build && node --test --test-concurrency=1 --experimental-test-coverage --test-coverage-include=dist/src/core/**/*.js --test-coverage-exclude=dist/src/core/**/*.test.js dist/src/core/**/*.test.js dist/src/server/*.test.js",
     "prestart": "npm run build",
     "start": "node dist/src/server/cli.js ui",

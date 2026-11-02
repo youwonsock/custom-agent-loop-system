@@ -28,7 +28,7 @@ node dist/src/server/cli.js ui --port 4320 --root /absolute/path/to/workspace
 
 npm 패키지 설치 후에는 `agent-loop ui`로 실행합니다. 기본 저장 영역은 `~/.agent-loop/graph-workspace`입니다. 이전 버전의 설정과 세션은 읽거나 자동 변환하지 않습니다.
 
-새 **자율 웹 제작·검증 프리셋**의 Kilo 실행은 별도 격리 런타임 준비가 필요합니다. 지원 환경은 Apple Silicon macOS 26과 Apple container 1.6.0, 그리고 Linux와 rootless Podman입니다. Linux는 VM이 아니라 호스트 커널을 공유하는 컨테이너이므로 경계가 더 약합니다. `container` 또는 `podman` 설치 후 소스에서 `npm run sandbox:prepare`를 실행합니다(설치 패키지는 `node dist/src/core/program_io_setup.js`). 최초 이미지 생성에는 네트워크와 8GiB 이상의 여유 공간이 필요합니다. 준비되지 않은 환경은 모델 호출 전에 BLOCKED로 정지합니다. 실행 화면은 실행 전에 이 조건과, Kilo가 아닌 연결에는 각 CLI의 네이티브 샌드박스만 적용된다는 점을 안내합니다. 명령과 자식 프로그램은 네트워크·호스트 홈·소켓을 공유하지 않는 VM에서 실행하며, 공급자 CLI의 인증·통신은 호스트 제어 영역에 남습니다. [설정과 지원 범위](docs/AUTONOMOUS_WORKFLOW.md#kilo-프로그램-내부-io-격리)를 확인하세요.
+새 **자율 웹 제작·검증 프리셋**의 Kilo 실행은 별도 격리 런타임 준비가 필요합니다. 지원 환경은 Apple Silicon macOS 26과 Apple container 1.6.0, 그리고 Linux와 rootless Podman입니다. Linux는 VM이 아니라 호스트 커널을 공유하는 컨테이너이므로 경계가 더 약합니다. `container` 또는 `podman` 설치 후 소스에서 `npm run sandbox:prepare`를 실행합니다(설치 패키지는 `node dist/src/core/program_io/program_io_setup.js`). 최초 이미지 생성에는 네트워크와 8GiB 이상의 여유 공간이 필요합니다. 준비되지 않은 환경은 모델 호출 전에 BLOCKED로 정지합니다. 실행 화면은 실행 전에 이 조건과, Kilo가 아닌 연결에는 각 CLI의 네이티브 샌드박스만 적용된다는 점을 안내합니다. 명령과 자식 프로그램은 네트워크·호스트 홈·소켓을 공유하지 않는 VM에서 실행하며, 공급자 CLI의 인증·통신은 호스트 제어 영역에 남습니다. [설정과 지원 범위](docs/AUTONOMOUS_WORKFLOW.md#kilo-프로그램-내부-io-격리)를 확인하세요.
 
 ## 지원 범위
 
