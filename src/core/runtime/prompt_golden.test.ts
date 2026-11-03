@@ -235,11 +235,11 @@ function lockedSession(): SessionState {
   return state;
 }
 
-test("prompt goldens: legacy graph roles", (t) => {
+test("prompt goldens: manual graph roles", (t) => {
   t.mock.timers.enable({ apis: ["Date"], now });
   for (const type of NODE_TYPES)
     matchGolden(
-      `legacy-${type}.txt`,
+      `manual-${type}.txt`,
       prompt(session(createGraph(), "Build a todo app"), type),
     );
 });
@@ -284,7 +284,7 @@ test("prompt goldens: access, research, operator message and recovery variants",
   const full = session(createGraph(), "Build a todo app");
   full.accessMode = "full_access";
   matchGolden(
-    "legacy-full-access-implementation.txt",
+    "manual-full-access-implementation.txt",
     prompt(
       full,
       "implementation",
@@ -295,16 +295,16 @@ test("prompt goldens: access, research, operator message and recovery variants",
   const scoped = session(createGraph(), "Build a todo app");
   scoped.additionalAllowedPaths = [extra];
   scoped.interruptMessage = "Stop after the current check";
-  matchGolden("legacy-extra-roots-interrupt.txt", prompt(scoped, "interrupt"));
-  // Must satisfy requiresResearch(), or these goldens only differ from legacy-* by the goal text.
+  matchGolden("manual-extra-roots-interrupt.txt", prompt(scoped, "interrupt"));
+  // Must satisfy requiresResearch(), or these goldens only differ from manual-* by the goal text.
   const research = session(
     createGraph(),
     "Search the web for current React routing options and build a demo",
   );
   assert.match(prompt(research, "planning"), /Complete actual web research/);
   for (const type of ["planning", "review", "approval"] as const)
-    matchGolden(`legacy-research-${type}.txt`, prompt(research, type));
-  // Legacy test recovery chooses among four receipt states.
+    matchGolden(`manual-research-${type}.txt`, prompt(research, type));
+  // Manual test recovery chooses among four receipt states.
   const evidence =
     "[REQUIREMENT_EVIDENCE]\nREQ_ID: REQ-001\nSTATUS: SATISFIED\nEVIDENCE: ran\nCHECK_COMMAND: npm test\n[/REQUIREMENT_EVIDENCE]\nVERDICT: PASS";
   const variants: Record<string, Partial<NodeVisit>> = {
@@ -327,7 +327,7 @@ test("prompt goldens: access, research, operator message and recovery variants",
   };
   for (const [name, fields] of Object.entries(variants))
     matchGolden(
-      `legacy-test-recovery-${name}.txt`,
+      `manual-test-recovery-${name}.txt`,
       prompt(
         session(createGraph(), "Build a todo app"),
         "test",

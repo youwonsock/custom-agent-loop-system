@@ -71,7 +71,6 @@ const forbidden = [...files].filter(
     // Release records name maintainers' machines; only user docs ship.
     file === "docs/VERIFICATION.md" ||
     file.startsWith("docs/verification/") ||
-    file === "docs/IMPLEMENTATION_PLAN.md" ||
     file === "docs/STATUS.md",
 );
 if (forbidden.length > 0) {

@@ -1,12 +1,13 @@
 #!/usr/bin/env node
 // Runs the fixed scenario in test/real-cli through a real CLI and a real model.
 // This costs model usage, so it is never part of npm test or CI.
-//   node scripts/real-cli-regression.js claude [--model <text in the model ID>]
-//   node scripts/real-cli-regression.js kilo   [--model <text in the model ID>]
+//   node scripts/real-cli-regression.js claude|kilo|opencode|codex [--model <text in the model ID>]
+// --claude-vm runs Claude's Bash in the isolation VM.
 // --scenario tiny-web runs the autonomous preset unchanged, including browser
 // verification. --scenario tiny-web-tests also asks for npm test, which brings in the
 // authored node test checks. The default scenario turns those off.
-// Results stay in artifacts/real-cli/. Pass criteria are in docs/STATUS.md (G4).
+// Results stay in artifacts/real-cli/. A run passes on SUCCESS; a Kilo run passes on
+// complete VM evidence without it (passed() below).
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
@@ -50,7 +51,6 @@ const SCENARIOS = {
       maxRepairCycles: 3,
       nativeApprovalReview: false,
       browserVerification: false,
-      verificationContract: true,
       authoredNodeTests: false,
       targetScopeGuard: false,
       programIoGuard: false,

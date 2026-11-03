@@ -203,7 +203,7 @@ export async function contracted(
   second = false,
 ) {
   let graph = await s.store.createGraph({ template: "autonomous" });
-  graph.automation!.authoredNodeTests = false; // Legacy frozen-check profile; own-suite cases have dedicated coverage.
+  graph.automation!.authoredNodeTests = false; // A project with its own test script; own-suite cases have dedicated coverage.
   graph.automation!.browserVerification = false;
   graph.automation!.maxRepairCycles = 1;
   graph.defaultBinding = s.graph.defaultBinding;

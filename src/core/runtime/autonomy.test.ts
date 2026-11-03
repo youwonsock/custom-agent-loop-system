@@ -47,8 +47,7 @@ const result = (text: string): SupervisorResult => ({
   diagnostics: emptyCliDiagnostics(),
 });
 const g = createAutonomousGraph();
-// Existing policy cases exercise the backwards-compatible legacy report profile.
-g.automation!.verificationContract = false;
+// Policy cases run without the authored-test policy, as a project with its own tests does.
 g.automation!.authoredNodeTests = false;
 const requirements = deriveRequirementLedger("Build the complete app").items;
 const report = (status = "SATISFIED", verdict = "PASS", extra = "") =>
@@ -61,7 +60,6 @@ const receipt = {
 };
 test("autonomous preset is opt-in, persisted, bounded and still requires tests/final approval", () => {
   assert.equal(createGraph().automation, undefined);
-  assert.equal(createAutonomousGraph().automation!.verificationContract, true);
   assert.equal(createAutonomousGraph().automation!.authoredNodeTests, true);
   assert.equal(createAutonomousGraph().automation!.targetScopeGuard, true);
   assert.equal(createGraph().nodes[0]!.planning!.requiresApproval, true);
@@ -100,7 +98,7 @@ test("repairable BLOCKED follows FAIL while permission and explicit external evi
   assert.equal(
     validateCompletion(node, r, { goal: "goal", requirements }).verdict,
     "BLOCKED",
-    "legacy manual behavior remains",
+    "manual behavior remains",
   );
   const permission = {
     ...receipt,
@@ -590,24 +588,5 @@ test("automation settings report each bad value by name and save only known flag
         automation: { ...g.automation, browserVerification: undefined },
       }),
     /browserVerification/,
-  );
-});
-test("the server reports authored Node tests without a verification contract", () => {
-  const codes = (change: (a: NonNullable<typeof g.automation>) => void) => {
-    const graph = structuredClone(g);
-    change(graph.automation!);
-    return graphDiagnostics(graph, false).map((d) => d.code);
-  };
-  assert.ok(
-    codes((a) => {
-      a.authoredNodeTests = true;
-      a.verificationContract = false;
-    }).includes("authored_node_tests"),
-  );
-  assert.ok(
-    !codes((a) => {
-      a.authoredNodeTests = true;
-      a.verificationContract = true;
-    }).includes("authored_node_tests"),
   );
 });

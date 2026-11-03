@@ -89,7 +89,6 @@ test("Kilo success requires positive scope proof for every attempt and retains p
     ...autonomousDefaults(true),
     maxRepairCycles: 1,
     browserVerification: false,
-    verificationContract: false,
     authoredNodeTests: false,
     programIoGuard: false,
   };
@@ -108,7 +107,10 @@ test("Kilo success requires positive scope proof for every attempt and retains p
       a.scopeAudit = new NativeScopeTracker(s.targetProjectPath, [
         s.targetProjectPath,
       ]).audit;
-  assert.deepEqual(successBlockers(s), []);
+  // Scope proof clears its blocker; this fixture has no frozen contract, which stays.
+  const noContract =
+    "검증 계약의 성공 기록이 없습니다: locked verification contract";
+  assert.deepEqual(successBlockers(s), [noContract]);
   const first = s.visits[0]!.attempts[0]!.scopeAudit!;
   first.inspectedCalls = 1;
   first.outsideCalls = 1;

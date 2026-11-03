@@ -198,7 +198,7 @@ export class SessionCoordinator extends EventEmitter {
           (await hasOwnTestScript(target))
         )
           state.graph.automation.authoredNodeTests = false;
-        if (graph.automation?.verificationContract) {
+        if (graph.automation) {
           state.verificationContract = { version: 1, status: "pending" };
           if (
             await fs.stat(path.join(target, CONTRACT_FILE)).then(

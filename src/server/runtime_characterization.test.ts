@@ -3,7 +3,11 @@ import assert from "node:assert/strict";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { randomUUID } from "node:crypto";
-import { sessionWaitMs, setup as startStudio } from "./app_harness.test";
+import {
+  contracted,
+  sessionWaitMs,
+  setup as startStudio,
+} from "./app_harness.test";
 import { AgentGraphDocument, SessionState } from "../shared/domain";
 import { autonomousDefaults } from "../shared/graph_defaults";
 import { delay } from "../core/session/resilience";
@@ -115,7 +119,6 @@ test("an unavailable invocation adapter blocks the session before any attempt is
   graph.automation = {
     ...autonomousDefaults(false),
     maxRepairCycles: 1,
-    verificationContract: false,
     authoredNodeTests: false,
     targetScopeGuard: false,
     programIoGuard: false,
@@ -146,10 +149,11 @@ test("an unavailable invocation adapter blocks the session before any attempt is
   );
 });
 
-function lightAutonomous(graph: AgentGraphDocument) {
-  graph.automation!.verificationContract = false;
-  graph.automation!.authoredNodeTests = false;
-  graph.automation!.browserVerification = false;
+// Autonomous with a supplied contract, so roles report in the frozen JSON format.
+async function lightAutonomous(s: Server) {
+  const graph = await contracted(s);
+  graph.automation!.maxRepairCycles = 5;
+  return graph;
 }
 const attemptsOf = (state: SessionState, node: string) =>
   state.visits
@@ -162,8 +166,7 @@ const attemptsOf = (state: SessionState, node: string) =>
 
 test("planning is rejected for a file change no event shows", async (t) => {
   const s = await setup(t);
-  const graph = await s.store.createGraph({ template: "autonomous" });
-  lightAutonomous(graph);
+  const graph = await lightAutonomous(s);
   const state = await settle(
     s,
     await start(s, graph, "fixture:planning-hidden-edit build the app"),
@@ -176,8 +179,7 @@ test("planning is rejected for a file change no event shows", async (t) => {
 
 test("a read-only role without a hidden change is not flagged", async (t) => {
   const s = await setup(t);
-  const graph = await s.store.createGraph({ template: "autonomous" });
-  lightAutonomous(graph);
+  const graph = await lightAutonomous(s);
   const state = await settle(s, await start(s, graph, "build the app"));
   assert.equal(state.status, "SUCCESS", state.statusReason ?? "");
   for (const role of ["planning", "review", "approval"])
@@ -192,8 +194,7 @@ test(
   { skip: process.platform === "win32" ? "symlinks need a privilege" : false },
   async (t) => {
     const s = await setup(t);
-    const graph = await s.store.createGraph({ template: "autonomous" });
-    lightAutonomous(graph);
+    const graph = await lightAutonomous(s);
     const state = await settle(
       s,
       await start(s, graph, "fixture:review-symlink build the app"),

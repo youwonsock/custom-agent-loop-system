@@ -14,46 +14,10 @@ import {
   binary,
 } from "./app_harness.test";
 
-test("autonomous preset repairs a product BLOCKED and reaches final approval without any operator action", async (t) => {
-  const s = await setup();
-  t.after(s.cleanup);
-  let graph = await s.store.createGraph({ template: "autonomous" });
-  graph.automation!.verificationContract = false; // legacy-policy coverage; contract cases are separate below
-  graph.automation!.authoredNodeTests = false;
-  graph.automation!.browserVerification = false;
-  graph.defaultBinding = s.graph.defaultBinding;
-  graph = await s.store.saveGraph(graph.id, graph, graph.revision);
-  const started = await s.coordinator.start({
-    requestId: randomUUID(),
-    graphId: graph.id,
-    expectedRevision: graph.revision,
-    goal: "fixture:auto-product-blocked build the app",
-    targetProjectPath: s.target,
-    settings: quickSettings,
-  });
-  const done = await wait(() => s.store.readSession(started.id), "SUCCESS");
-  assert.equal(done.pendingApproval, null);
-  assert.equal(done.processedRequests.length, 0, "no approval/resume actions");
-  assert.deepEqual(
-    done.visits.map((v) => v.nodeId),
-    [
-      "planning",
-      "implementation",
-      "test",
-      "implementation",
-      "test",
-      "review",
-      "approval",
-    ],
-  );
-  assert.equal(done.visits[2]!.verdict, "FAIL");
-  assert.equal(done.visits.at(-1)!.verdict, "APPROVED");
-});
 test("autonomous failures stop at repair budget instead of requesting endless interventions", async (t) => {
   const s = await setup();
   t.after(s.cleanup);
   let graph = await s.store.createGraph({ template: "autonomous" });
-  graph.automation!.verificationContract = false; // legacy-policy coverage; contract cases are separate below
   graph.automation!.authoredNodeTests = false;
   graph.automation!.browserVerification = false;
   graph.automation!.maxRepairCycles = 1;
@@ -83,7 +47,6 @@ test("autonomous policy never bypasses an explicitly enabled planning approval",
   const s = await setup();
   t.after(s.cleanup);
   let graph = await s.store.createGraph({ template: "autonomous" });
-  graph.automation!.verificationContract = false; // legacy-policy coverage; contract cases are separate below
   graph.automation!.authoredNodeTests = false;
   graph.nodes.find((n) => n.type === "planning")!.planning!.requiresApproval =
     true;
@@ -103,35 +66,6 @@ test("autonomous policy never bypasses an explicitly enabled planning approval",
   );
   assert.equal(held.pendingApproval!.nodeId, "planning");
   assert.equal(held.visits.length, 1);
-});
-
-test("autonomous runtime detects hidden production writes even without native file-change events", async (t) => {
-  const s = await setup();
-  t.after(s.cleanup);
-  let graph = await s.store.createGraph({ template: "autonomous" });
-  graph.automation!.verificationContract = false; // legacy-policy coverage; contract cases are separate below
-  graph.automation!.authoredNodeTests = false;
-  graph.automation!.browserVerification = false;
-  graph.defaultBinding = s.graph.defaultBinding;
-  graph = await s.store.saveGraph(graph.id, graph, graph.revision);
-  const started = await s.coordinator.start({
-    requestId: randomUUID(),
-    graphId: graph.id,
-    expectedRevision: graph.revision,
-    goal: "fixture:auto-source-edit build the app",
-    targetProjectPath: s.target,
-    settings: quickSettings,
-  });
-  const done = await wait(() => s.store.readSession(started.id), "SUCCESS");
-  const tests = done.visits.filter((v) => v.nodeId === "test");
-  assert.equal(tests.length, 2);
-  assert.equal(tests[0]!.verdict, "FAIL");
-  assert.match(tests[0]!.output, /(?:제품|소스).*변경/);
-  assert.ok(
-    tests[0]!.attempts.some((a) => a.fileMutation),
-    "the actual source mutation must be retained as evidence",
-  );
-  assert.equal(tests[1]!.verdict, "PASS");
 });
 
 for (const mode of [

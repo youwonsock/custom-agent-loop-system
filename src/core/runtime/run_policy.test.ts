@@ -42,6 +42,5 @@ test("graph-level decisions follow their flags independently of the CLI", () => 
   const p = runPolicy(graph, { type: "codex" });
   assert.equal(p.automated, true);
   assert.equal(p.localHttpAccess, false);
-  assert.equal(p.verificationContract, true);
   assert.equal(p.nativeApprovalReview, true);
 });
