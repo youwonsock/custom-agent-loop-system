@@ -71,7 +71,7 @@ export function invocationOptionsFor(
           },
         }
       : {}),
-    ...(policy.verificationContract && contract?.status === "locked"
+    ...(policy.automated && contract?.status === "locked"
       ? {
           verificationCommands: contract.manifest!.checks.map((c) => c.command),
         }

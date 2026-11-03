@@ -401,7 +401,7 @@ test("a spending limit is refused for a CLI that reports no cost, or when it is 
   }
 });
 
-test("legacy failure edges cannot turn test FAIL or approval REJECTED into SUCCESS", async (t) => {
+test("failure edges cannot turn test FAIL or approval REJECTED into SUCCESS", async (t) => {
   const s = await setup();
   t.after(s.cleanup);
   const id = await launch(s, await minimal(s), "failure edge recovery");

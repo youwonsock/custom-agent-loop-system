@@ -28,8 +28,7 @@ export function successBlockers(state: SessionState): string[] {
   const ioProblem = programIoEvidenceProblem(state);
   if (ioProblem) blockers.push(ioProblem);
   if (
-    state.graph.automation?.verificationContract &&
-    state.graph.automation.authoredNodeTests &&
+    state.graph.automation?.authoredNodeTests &&
     state.verificationContract?.manifest?.checks.some((c) =>
       /^npm test(?:\s|$)/.test(c.command),
     ) &&

@@ -355,11 +355,7 @@ if (args[0] === "debug" && args[1] === "config") {
     setInterval(() => {}, 1000);
   } else {
     const productBlocked =
-      type === "test" &&
-      (prompt.includes("fixture:auto-product-blocked") ||
-        prompt.includes("fixture:auto-product-always-blocked")) &&
-      (calls[type] === 1 ||
-        prompt.includes("fixture:auto-product-always-blocked"));
+      type === "test" && prompt.includes("fixture:auto-product-always-blocked");
     let rejected =
       type === "review" &&
       prompt.includes("fixture:reject-once") &&
@@ -503,15 +499,6 @@ if (args[0] === "debug" && args[1] === "config") {
     else
       text =
         "Failure evidence reviewed. Inspect the last attempt and fix the cause before resuming.";
-    if (
-      type === "test" &&
-      prompt.includes("fixture:auto-source-edit") &&
-      calls[type] === 1
-    )
-      fs.writeFileSync(
-        "styles.css",
-        "/* unexpected test-role production edit */",
-      );
     if (prompt.includes(`fixture:${type}-hidden-edit`) && calls[type] === 1)
       fs.writeFileSync("hidden-edit.txt", "written by a read-only role");
     if (prompt.includes(`fixture:${type}-symlink`) && calls[type] === 1)

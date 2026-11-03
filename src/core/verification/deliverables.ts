@@ -23,7 +23,7 @@ export function deliverableInspectionProblem(
 export async function deliverableProblem(
   state: SessionState,
 ): Promise<string | null> {
-  if (!state.graph.automation?.verificationContract) return null;
+  if (!state.graph.automation) return null;
   try {
     const root = await fs.realpath(state.targetProjectPath);
     let manifest = state.verificationContract?.manifest;

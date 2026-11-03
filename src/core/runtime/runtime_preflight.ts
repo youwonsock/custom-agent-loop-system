@@ -54,7 +54,7 @@ export async function preflight(
       );
   }
   if (
-    policy.verificationContract &&
+    policy.automated &&
     node.type === "test" &&
     host.state.verificationContract?.status !== "locked"
   ) {

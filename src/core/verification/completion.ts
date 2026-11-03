@@ -201,7 +201,7 @@ const structuredReport: Gate = (j): Judged => {
       j.cwd,
     );
     if (
-      j.automation?.verificationContract &&
+      j.automation &&
       contract?.status === "locked" &&
       isVerifierRole(node.type) &&
       rendered === null
@@ -407,7 +407,7 @@ const contractReceipts: Gate = (j): Judged => {
   const missing = missingContractReceipts(
     j.contract,
     node.type === "test" ? j.commands : j.priorTestProof,
-    !!j.automation?.verificationContract,
+    !!j.automation,
     j.cwd,
   );
   if (!missing.length) return;

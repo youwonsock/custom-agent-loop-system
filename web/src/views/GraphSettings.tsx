@@ -51,10 +51,7 @@ export default function GraphSettings({
         {draft.automation && (
           <>
             <p className="muted">
-              {t("검증 계약:")}{" "}
-              {draft.automation.verificationContract
-                ? t("보호 파일·필수 검사 고정")
-                : t("고정하지 않음")}
+              {t("검증 계약:")} {t("보호 파일·필수 검사 고정")}
             </p>
             <label className="checkbox">
               <input
@@ -64,8 +61,6 @@ export default function GraphSettings({
                 onChange={(e) =>
                   change((g) => {
                     g.automation!.authoredNodeTests = e.target.checked;
-                    if (e.target.checked)
-                      g.automation!.verificationContract = true;
                   })
                 }
               />

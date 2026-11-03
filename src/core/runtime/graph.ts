@@ -39,7 +39,6 @@ const cleanBinding = (b: ExecutionBinding): ExecutionBinding => ({
 /** Every automated graph sets all of these. Saved in this order. */
 const AUTOMATION_FLAGS = [
   "browserVerification",
-  "verificationContract",
   "authoredNodeTests",
   "targetScopeGuard",
   "programIoGuard",

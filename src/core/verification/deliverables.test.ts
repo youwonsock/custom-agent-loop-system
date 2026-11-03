@@ -141,7 +141,7 @@ test("missing pending contracts keep their preparation path, malformed contracts
   assert.equal(await deliverableProblem(state), null);
   await fs.writeFile(path.join(root, ".agent-graph/verification.json"), "{bad");
   assert.match((await deliverableProblem(state))!, /cannot be checked/);
-  state.graph.automation!.verificationContract = false;
+  state.graph.automation = undefined;
   assert.equal(await deliverableProblem(state), null);
 });
 test("frozen test prompts and argument recovery never authorize documentation repair; implementation receives the current failure", async (t) => {

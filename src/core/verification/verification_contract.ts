@@ -289,7 +289,7 @@ async function adapterProblem(
 }
 /** A mandatory requirement that a contract must run as npm test. */
 export function requirementNamingNpmTest(state: SessionState) {
-  if (!state.graph.automation?.verificationContract) return undefined;
+  if (!state.graph.automation) return undefined;
   return state.requirements.items.find(
     (r) => r.mandatory && /\bnpm test\b/.test(r.text),
   );
@@ -411,7 +411,7 @@ export function contractProofMissing(
   return missingContractReceipts(
     state.verificationContract,
     commands,
-    !!state.graph.automation?.verificationContract,
+    !!state.graph.automation,
     state.targetProjectPath,
   );
 }
@@ -422,8 +422,7 @@ export async function verificationRunnerProblem(
 ): Promise<string | null> {
   if (state.verificationContract?.status !== "locked") return null;
   if (
-    state.graph?.automation?.verificationContract &&
-    state.graph.automation.authoredNodeTests &&
+    state.graph?.automation?.authoredNodeTests &&
     state.verificationContract.manifest!.checks.some((c) =>
       /^npm test(?:\s|$)/.test(c.command),
     ) &&

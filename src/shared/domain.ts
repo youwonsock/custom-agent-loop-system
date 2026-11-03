@@ -52,7 +52,6 @@ export interface AgentGraphDocument {
     maxRepairCycles: number;
     nativeApprovalReview: boolean;
     browserVerification: boolean;
-    verificationContract: boolean;
     authoredNodeTests: boolean;
     targetScopeGuard: boolean;
     programIoGuard: boolean;

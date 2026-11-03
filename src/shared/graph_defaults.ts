@@ -36,7 +36,6 @@ export const autonomousDefaults = (
   maxRepairCycles: 5,
   nativeApprovalReview,
   browserVerification: true,
-  verificationContract: true,
   authoredNodeTests: true,
   targetScopeGuard: true,
   programIoGuard: true,

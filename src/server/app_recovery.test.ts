@@ -711,7 +711,7 @@ for (const role of ["review", "approval"] as const)
     assert.equal(state.visits.filter((v) => v.nodeId === "test").length, 2);
   });
 
-test("summary API preserves full API compatibility and unchanged completed records are not reread each tick", async (t) => {
+test("the summary list leaves out visits the full list keeps, and unchanged completed records are not reread each tick", async (t) => {
   const s = await setup();
   t.after(s.cleanup);
   const id = await launch(s, await minimal(s), "summary acceptance");

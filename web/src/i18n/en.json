@@ -58,7 +58,6 @@
   "계획 승인은 계획 노드 설정을 따릅니다. 인증·권한·명시적 사람 승인은 대기하며, 실패한 검사를 성공으로 바꾸지 않습니다.": "Plan approval follows the plan node's setting. Sign-in, permissions and explicit human approvals wait, and a failed check never becomes a success.",
   "계획부터 승인까지, 원하는 에이전트 흐름을 구성하세요.": "Build the agent flow you want, from planning to approval.",
   "계획을 검토하고 승인하세요": "Review and approve the plan",
-  "고정하지 않음": "Not frozen",
   "구현": "Implementation",
   "그 외": "and",
   "그래프": "Graphs",
