@@ -9,7 +9,7 @@
 | 기준 코드 | `main` `2ffa860` 이후 (레거시 정리) |
 | 지원 범위 | 전 과정은 Claude 기준으로 검증했다. Claude 실행의 격리는 선택이다. 다른 CLI는 [VERIFICATION.md](VERIFICATION.md)의 기록 수준까지만 확인했다 |
 | 원격 CI | `main`은 3개 OS, 브라우저, Linux 격리, `vm-result` 통과 없이는 병합되지 않는다(관리자 포함) |
-| 로컬 검사 \(macOS 26 arm64, 공식 Node 24.22.2\) | PLATFORM_RESULT |
+| 로컬 검사 \(macOS 26 arm64, 공식 Node 24.22.2\) | `verify:platform` 통과: 단위 433개 중 431 통과·0 실패·Windows 전용 2 건너뜀. `verify:vm` 46/46. `verify:browser` 28/28 (`be69b0b`) |
 | 실제 모델 호출 | Claude Haiku 5.5의 `tiny-web`·`tiny-web-tests` 각 5회, 중간 규모 과제 1회, VM 모드 1회 모두 `SUCCESS`(`8f2b4cd`). Codex·Kilo는 작은 시나리오만 `SUCCESS`, OpenCode는 미검증 |
 
 ## 정책
