@@ -230,3 +230,35 @@ Haiku 5.5로 `nodeTests`를 포함한 자율 프리셋을 VM 모드로 1회 실�
 
 실제 모델로 Linux에서 돌리지는 않았다. Windows는 시작하지 않았다.
 
+## 다른 CLI — 2026-11-02
+
+실제 실행은 각 1회다.
+
+| CLI, 모델 | 시나리오 | 결과 |
+| --- | --- | --- |
+| Codex `gpt-6.1-sol` | `slugify` | `SUCCESS`, 275초 |
+| Kilo 무료 모델 | `slugify` | `SUCCESS`, 120초. VM 명령 기록 정상 |
+| Kilo 무료 모델 | `tiny-web-tests` | 최종 승인까지 간 뒤 공급자 한도로 `PAUSED`, 1,236초 |
+| OpenCode `nemotron-3.5-lightning-free` | `slugify` | 계획 단계 시간 소진으로 `PAUSED`, 275초 |
+| OpenCode `opencode-go/beam-free` | `slugify` | 구독 필요로 `WAITING_USER` |
+| OpenCode `opencode/beam-free` | `slugify` | 모델 접근 불가로 `WAITING_USER` |
+
+OpenCode는 앱 경로까지는 동작하지만 무료 모델로 끝까지 간 적이 없어 검증했다고 할 수 없다. 공급자 거부는 앱이 사유와 함께 `WAITING_USER`로 멈췄다. Codex는 ChatGPT 로그인으로 실행했다.
+
+## 최종 표본
+
+코드 `8f2b4cd`, 모델 `claude-haiku-5-5`, 이 Mac의 샌드박스를 켠 설정이다.
+
+| 시나리오 | 결과 |
+| --- | --- |
+| `tiny-web` 5회 | **모두 `SUCCESS`**, 287~338초 |
+| `tiny-web-tests` 5회 | **모두 `SUCCESS`**, 238~295초 |
+| 중간 규모 과제 1회 | `SUCCESS`, 210초, 모든 역할 첫 시도 통과. 변경은 요청한 2개 파일과 `.agent-graph/`뿐 |
+| `tiny-web-tests` VM 모드 1회 | `SUCCESS`, 295초. 명령 10개 모두 서명, 우회 0건 |
+
+10회 모두 복구 없이 끝났다. 앞선 표본은 6회 중 5회가 복구를 거쳤다. 그 사이 구현 역할에 약한 테스트 두 종류를 알렸지만, 표본이 작아 이 변경 덕분이라고 단정할 수는 없다.
+
+작은 시나리오 1회의 보고 비용은 약 $5~6이다. 구독 요금과 다를 수 있다. 계획의 시나리오별 10회를 비용 때문에 5회로 줄였다.
+
+로컬 검사: `verify:platform` 436개 중 434 통과·0 실패·Windows 전용 2 건너뜀, `verify:vm` 46/46, `verify:browser` 28/28.
+
